@@ -43,8 +43,8 @@ Needs **herdr ≥ 0.7.0**, **Node ≥ 22**, **jq**, the `e2b` CLI on PATH, and a
 in the plugin config (`~/.config/herdr/plugins/config/e2b-dev.herdr-e2b/config.toml`), or
 in `E2B_API_KEY`, which wins if both are set.
 
-Bind the two verbs you press (`prefix+e` is herdr's own `edit_scrollback` — stay
-off it):
+Bind the three verbs you press (`prefix+e` is herdr's own `edit_scrollback` —
+stay off it):
 
 ```toml
 [[keys.command]]
@@ -54,7 +54,15 @@ command = "herdr plugin action invoke open --plugin e2b-dev.herdr-e2b"
 [[keys.command]]
 key = "prefix+shift+f"                                          # a fleet, off this checkout
 command = "herdr plugin action invoke fleet --plugin e2b-dev.herdr-e2b"
+
+[[keys.command]]
+key = "prefix+shift+d"                                          # the board, every box
+command = "herdr plugin action invoke dashboard-toggle --plugin e2b-dev.herdr-e2b"
 ```
+
+`prefix+shift+d` is herdr's own `close_workspace` out of the box — this takes it
+over. Keep that verb by moving it first (`close_workspace = "prefix+shift+x"` in
+the `[keys]` table), or give the board a different key.
 
 > Local dev: `herdr plugin link /path/to/herdr-e2b-sandbox && ./install.sh`.
 
@@ -245,7 +253,7 @@ whenever `cargo` is on PATH.
 ### `e2b-dash` — the board
 
 A live TUI of every tracked box. Run `e2b-dash`, open the **dashboard** pane, or
-bind `prefix+shift+d`.
+press `prefix+shift+d` (bound in [Install](#install)).
 
 ```
 ↑/↓ move · ↵/o open · w worktree · s sync · p pull · z pause/resume
