@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# e2b-fleet-open — the `fleet` keybinding/action: put the fleet pickers (task
+# slug, then roster) in the pane you pressed it in, rather than taking over the
+# tab.
+#
+# Why not just run e2b-fleet here: a herdr ACTION has no terminal at all — its
+# output goes to the plugin command log — so it can neither draw the two picker
+# screens nor read a keypress. It is exactly the problem e2b-box-open solves for
+# `open`, so this is the same shape and the same pane logic: run in the focused
+# pane when that pane is an idle shell, else open beside it so whatever you were
+# watching stays visible.
+#
+# The launching pane becomes the board once the members are away, because that is
+# what answering the pickers means — no flag says so. A caller that wants the
+# summary and an exit code instead types `e2b-box fleet create <slug> -t …`.
+set -uo pipefail
+# Resolve through the ~/.local/bin symlink to the real script dir so we can find
+# lib/*.sh (BSD readlink has no -f, so walk the links manually).
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  ldir="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [ "${SOURCE#/}" = "$SOURCE" ] && SOURCE="$ldir/$SOURCE"
+done
+DIR="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+source "$DIR/lib/paths.sh"
+source "$DIR/lib/pane.sh"
+
+PANE_TITLE="e2b fleet"   # matches the `fleet` [[panes]] title in herdr-plugin.toml
+
+HERDR=$(pane_herdr) || { echo "e2b-fleet-open: can't find the herdr binary" >&2; exit 1; }
+NODE=$(pane_node) || { echo "e2b-fleet-open: can't find node — set HERDR_E2B_NODE=/path/to/node" >&2; exit 1; }
+
+read -r focus_pane _titled_pane _tab_list <<EOF
+$(pane_query "$HERDR" "$NODE" "$PANE_TITLE")
+EOF
+[ "${focus_pane:--}" != "-" ] || { echo "e2b-fleet-open: no focused pane" >&2; exit 1; }
+
+# Idle shell? Then the pane is ours: the pickers fill it, and the dashboard takes
+# it over as soon as they're answered — the members provision behind the board.
+if pane_is_idle "$HERDR" "$NODE" "$focus_pane"; then
+  # Typed as `e2b-box fleet`, the one CLI, so the pane shows the command a user
+  # would type and only ONE name has to be on the pane's PATH.
+  "$HERDR" pane run "$focus_pane" "e2b-box fleet" >/dev/null 2>&1 && exit 0
+  echo "e2b-fleet-open: couldn't start the fleet picker in this pane" >&2
+fi
+
+# Busy pane (agent, dev server, an attached sandbox shell): never type into it.
+# Open beside it instead. The pane entrypoint carries its own cwd context, so the
+# fleet still branches off the checkout you pressed the key in.
+"$HERDR" plugin pane open --plugin herdr-e2b --entrypoint fleet \
+  --placement split --target-pane "$focus_pane" --direction right --focus >/dev/null 2>&1 \
+  || { echo "e2b-fleet-open: couldn't open the fleet pane" >&2; exit 1; }

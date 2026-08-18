@@ -1,0 +1,236 @@
+# herdr-e2b config
+# Copy to:  $HERDR_PLUGIN_CONFIG_DIR/config.toml — herdr's own config dir for a
+#           plugin, and the documented home for user-editable config. Today that
+#           resolves to ~/.config/herdr/plugins/config/herdr-e2b/config.toml (or
+#           under $XDG_CONFIG_HOME), which is the fallback when the var is unset.
+#           `chmod 600` it: this file holds secrets, and every installed herdr
+#           plugin runs as you with your environment.
+# Every key is optional; the defaults shown here are used when absent.
+
+[secrets]
+# Your E2B API key. Env E2B_API_KEY (if set) always wins over this; use this to
+# keep the key here — herdr-native, out of ~/.zshrc and out of the repo, and
+# picked up by the running herdr server with no restart. https://e2b.dev/dashboard
+# e2b_api_key = "e2b_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+[sandbox]
+# E2B cluster to provision on. Leave unset and the plugin resolves it in this
+# order: $E2B_DOMAIN → this key → the cluster your `e2b auth login` is on
+# (read from ~/.e2b/config.json) → the SDK default.
+#
+# Set it only to PIN a cluster. The reason not to leave this to the ambient
+# environment: herdr runs plugin commands as `bash -lc`, which never reads
+# ~/.zshrc, so a region exported by a shell hook is invisible to a keybind — the
+# same verb would provision on a different cluster depending on how you invoked
+# it. Whatever resolves here is stored on the box record, so a box always stays
+# on the cluster that created it, even if you switch regions afterwards.
+# domain = "e2b.dev"
+
+# E2B template. "base" (default) is minimal and always available — fine to try
+# the flow, but tight on disk/tools for real work.
+# RECOMMENDED: build a bigger CUSTOM template (more disk + CPU, your toolchain
+# baked in) and set it here — see the README and install.sh. Public agent
+# templates (claude, codex, opencode, … https://e2b.dev/docs/agents) also
+# work but can run out of space. (Claude Code's template is named `claude`;
+# Devin has no prebuilt template — install it into a base sandbox yourself.)
+template     = "base"
+
+# The menu `e2b-box open` offers when it has to BUILD a sandbox and nothing else
+# decided which template (no --template, no matching rule below). The plugin
+# ships with E2B's public agent templates already listed —
+# claude, codex, opencode, amp, grok, droid, prime and base — so you only need
+# this key to REPLACE that menu with your own. Templates named in template_rules
+# are added automatically, and `t` in the picker takes any name you type.
+# Verify names with `e2b template list`: they are per-cluster, so a template on
+# prod may not exist on your EU cluster (provisioning then falls back to base
+# and says so).
+# templates = ["base", "my-custom-template", "opencode"]
+
+# Per-branch template overrides — first matching rule (JS regex on the branch)
+# wins over `template`. Route a branch to the right agent by naming it, e.g.
+# `e2b/cc/*` gets Claude Code, `e2b/cx/*` gets Codex, everything else opencode.
+# Use the exact template name (`e2b template list`, or E2B's public names:
+# claude / codex / opencode / amp / grok).
+# [[sandbox.template_rules]]
+# pattern  = "^e2b/cc/"          # Claude Code branches
+# template = "claude"
+# [[sandbox.template_rules]]
+# pattern  = "^e2b/cx/"          # Codex branches
+# template = "codex"
+# [[sandbox.template_rules]]
+# pattern  = "^e2b/"             # default agent for e2b/* branches
+# template = "opencode"
+
+# Idle window before E2B stops the sandbox (ms). Default 1h — which is also the cap
+# on E2B's free tier (a longer value there just fails). On a paid plan,
+# bump it for longer-lived sandboxes; 3h is a sane minimum:
+#   timeout_ms = 10800000   # 3h  (needs a paid E2B plan)
+timeout_ms   = 3600000
+
+# Pause the sandbox on idle-timeout instead of killing it (SDK lifecycle
+# onTimeout=pause), so its state is preserved. Works on the free tier and is the
+# best way to not lose work at the 1h timeout. Default false; set true to enable.
+auto_pause   = false
+# Only when auto_pause: wake the sandbox (restore its memory) automatically on the
+# next connect. Default true. Set false to keep a filesystem-only snapshot that
+# cold-boots on reconnect (loses running processes, but cheaper to keep paused).
+auto_resume  = true
+
+# Where the worktree is uploaded inside the sandbox. Defaults to /home/user/project.
+# Uncomment to point it elsewhere.
+# project_path = "/home/user/project"
+
+# Port used to construct the preview URL (`e2b-box url`) — set it to whatever
+# your dev server listens on inside the sandbox.
+server_port  = 3000
+
+# Environment injected into EVERY box at create time. Per-sandbox, never baked
+# into a template: the image stays shareable and nothing here survives in it.
+# [sandbox.env]
+# HTTPS_PROXY = "http://proxy.internal:3128"
+# TZ          = "Europe/Prague"
+
+# Per-template environment, merged OVER [sandbox.env] for boxes that boot from
+# that template. This is where a coding agent's credential goes: the `claude`
+# template ships Claude Code, so a box booted from it needs an Anthropic key and
+# a box booted from `base` does not. Keyed by template name (`e2b template list`,
+# or E2B's public names), so it lines up with `[sandbox] templates` and with the
+# roster a fleet is built from.
+#
+# Applied at CREATE only — `Sandbox.create`, not `connect`. Rotating a key here
+# does not reach a box that already exists: `e2b-box kill` it and open a new one.
+#
+# Anything in this file is a secret in a plaintext file. `chmod 600` it, and
+# remember every plugin herdr runs executes as you — this file is the reason to
+# keep tokens out of your shell profile, not an excuse to treat them casually.
+#
+# Every shipped agent template and the variable it authenticates with. An agent
+# with no key here still BOOTS — it just opens on its own sign-in screen, which is
+# the one thing a fleet member cannot answer for itself.
+#
+# [templates.claude.env]
+# ANTHROPIC_API_KEY = "sk-ant-…"
+# [templates.codex.env]
+# OPENAI_API_KEY = "sk-…"
+# [templates.grok.env]
+# XAI_API_KEY = "xai-…"
+# [templates.amp.env]
+# AMP_API_KEY = "…"
+#
+# Droid is Factory's CLI. Its key is verified against Factory's `whoami` with a
+# bearer token, and the keys are shaped `fk-…` (read out of the binary's own env
+# registry in a live box). Without it, droid opens on "Please login with your
+# Factory account". Get one at app.factory.ai.
+# [templates.droid.env]
+# FACTORY_API_KEY = "fk-…"
+#
+# Prime Agent takes ANY ONE of three, and the choice decides who serves the
+# model: PRIME_API_KEY routes to Prime Inference (app.primeintellect.ai), while
+# the other two point it at a provider you already pay for. With none of them it
+# opens on a browser sign-in challenge that a box cannot complete. Verified live:
+# with a key present, `prime-agent -p …` answers and no login screen appears.
+# [templates.prime.env]
+# PRIME_API_KEY = "…"
+# # …or reuse a provider you already have:
+# # ANTHROPIC_API_KEY = "sk-ant-…"
+# # OPENAI_API_KEY = "sk-…"
+
+[dashboard]
+# Default theme for the `e2b-dash` TUI. Omit (or "terminal"/"auto") to inherit
+# your terminal's own palette. Cycle live with `T` (that choice is remembered and
+# overrides this). Presets: terminal · solarized-light · tokyo-night · dracula ·
+# nord · gruvbox.
+# theme = "terminal"
+
+[upload]
+# Files uploaded per batch (peak memory scales with this, not repo size).
+batch_size = 40
+
+# File selection primarily follows git: tracked files (incl. your uncommitted
+# edits) + new untracked files, honoring .gitignore. So build output, caches,
+# node_modules, etc. are NOT uploaded. This `ignore` list is an extra safety
+# filter applied on top — mainly to keep secrets like .env out even if a repo
+# happens to track them. (For non-git folders it's the only filter.)
+ignore = [".git", "node_modules", ".next", "dist", "build", ".turbo", ".cache",
+          "target", ".venv", "__pycache__", ".DS_Store", ".env", ".env.local"]
+
+[fleet]
+# `e2b-fleet` fans one base ref out into several worktrees — one per template —
+# each with its own branch, its own herdr workspace, and its own box. Everything
+# here is optional; the defaults are what a user with no config gets.
+
+# What members branch off. Unset means the HEAD of whatever checkout you launch
+# the fleet from, which is usually what you want ("fleet from here"). Set it to
+# pin every fleet to trunk instead.
+# base = "main"
+
+# Branch namespace for members: <prefix>/<task-slug>-<template>-<rand4>. This is
+# also the fleet's only identity — there is no fleet record on disk (see
+# docs/adr/0001) — so `e2b-fleet down <slug>` finds its members by globbing it.
+# prefix = "e2b"
+
+# Templates pre-ticked in the roster picker. NOT a second template list: the menu
+# itself is `[sandbox] templates`, shared with `open`. This only decides what is
+# already selected when the picker opens.
+# default_roster = ["claude", "codex", "grok"]
+
+# Which command starts a member's agent once its box is ready, per template.
+#
+# The shipped defaults start each agent UNATTENDED — with that vendor's own
+# skip-approvals flag — because that is what a fleet member is: an agent working
+# in a disposable cloud sandbox with nobody watching the pane to approve an edit.
+# A member that stops on its first permission prompt has produced nothing to
+# compare against the others.
+#
+#   claude    claude --dangerously-skip-permissions
+#   codex     codex --dangerously-bypass-approvals-and-sandbox
+#   grok      grok --always-approve
+#   amp       amp --dangerously-allow-all
+#   opencode  opencode --auto --prompt
+#   prime     prime-agent            (the binary is not named after the template)
+#
+# Anything else (droid, your own template) runs its own name, bare — the plugin
+# will not invent a flag it has not verified.
+#
+# Know what this does and does not buy you. The box is isolated from your machine
+# and disposable, which is what makes these flags reasonable here and reckless on
+# a laptop. It is NOT a cage: the box has network egress and holds the key from
+# `[templates.<name>.env]`, so an agent talked into something by the repo it is
+# reading can still spend that key. The protection is a short-lived box and a
+# scoped key, not a constrained agent.
+#
+# Set any template to override it — `claude = "claude --permission-mode plan"` to
+# put one member on a leash, or "" for "plain shell, start nothing", the right
+# setting for a control arm. Config merges over the defaults per template, so
+# overriding one leaves the rest shipped.
+# [fleet.agents]
+# claude = "claude --permission-mode acceptEdits"
+# base = ""
+
+# What a member's box runs to seed its agent's first-run state, per template, just
+# before the agent command is typed. This is what makes a member arrive at a prompt
+# instead of a welcome wizard: the credential above reaches the box as an
+# environment variable, but a fresh sandbox has no `~/.claude.json` and no
+# `~/.codex/auth.json`, so the agent asks its questions anyway.
+#
+# For `codex` this also answers the SECOND prompt — "Do you trust the contents of
+# this directory?" — which it asks per working directory and which no credential
+# and no launch flag removes; the seed appends `projects."<dir>".trust_level` to
+# `~/.codex/config.toml` inside the box.
+#
+# `claude`, `codex`, `droid` and `opencode` ship with a default and need nothing
+# here. Templates whose first-run format has not been verified (`grok`, `amp`,
+# `prime`) seed nothing until you say what to run — the plugin will not guess at a
+# file in your home dir.
+#
+# THE RULE, if you write your own: the command runs INSIDE the box, so it must name
+# the credential's VARIABLE and let the box's shell expand it. A value pasted in
+# here would be typed into the pane and live in the scrollback and herdr's session
+# files forever. It must also be ONE line (it is typed into a shell) and must leave
+# an existing file alone (a resumed member's state is the user's).
+#
+# An empty string switches a shipped default off. A template with no agent
+# (`[fleet.agents]` = "") is never seeded at all.
+# [fleet.seed]
+# mine = 'test -f "$HOME/.mine.json" || printf "{\"key\":\"%s\"}" "$MY_API_KEY" > "$HOME/.mine.json"'
+# claude = ""

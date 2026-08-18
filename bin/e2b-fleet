@@ -1,0 +1,1592 @@
+#!/usr/bin/env bash
+# e2b-fleet — fan one base ref out into a fleet: several worktrees created off it
+# in one go, each on its own branch, in its own herdr workspace, with its own box
+# booted from its own template.
+#
+#   e2b-fleet                                     ask, then become the board
+#   e2b-fleet create <task-slug> [-t <template>]… [--task <text>] [--dry-run]
+#   e2b-fleet kill <task-slug> [--prune-branches] [--force] [--dry-run]
+#
+#   Two ways in, and a TERMINAL is the difference — never the verb. Bare
+#   `e2b-fleet` asks (slug, then roster); `create <slug> -t …` and the short
+#   `<slug> --agents all` name it all up front. Either way, a human at a tty gets
+#   the board: provisioning is minutes of work and the board is where the whole
+#   roster is visible at once. Without a tty — an agent, a script, CI — the same
+#   line runs in the foreground and hands back the summary and the exit code.
+#
+#   --slug, -s      the task slug: the short name that says what this fleet is
+#                   for. Sanitized into a legal git ref component.
+#   --template, -t  a template one member's box boots from. Repeat it for a
+#                   roster; the same template twice is one member, not two.
+#   --task          the fleet task: one instruction, handed to every member's
+#                   agent as that member comes up. Optional — a fleet with no
+#                   task is just several ready boxes.
+#   --dry-run, -n   print every herdr and box command this would run, create
+#                   nothing, exit 0.
+#   --dashboard     legacy and unadvertised: force the board on. The pickers now
+#                   imply it, so nobody needs to type it; it stays parsed because
+#                   an installed herdr-plugin.toml still passes it.
+#
+# Behind the board the per-member report can't go to the pane (the board is the
+# pane), so it goes to $STATE_DIR/fleets/<slug>.log instead. `create` prints it.
+#
+# `kill` is the reverse verb: kill every member's box, remove every member's
+# worktree, and KEEP every member's branch — the branches are the only thing the
+# run produced. `--prune-branches` opts into deleting them and still refuses any
+# branch whose commits exist nowhere else; `--force` overrides that refusal (and
+# lets a dirty checkout be removed).
+#
+# With a terminal attached, a missing slug or an empty roster is ASKED for (two
+# picker screens) rather than refused; without one — a script, CI, the dashboard —
+# the refusal is the same exit 2 it has always been, now naming `create`.
+#
+# Batch semantics throughout: members are provisioned concurrently, a member
+# that fails leaves the others alone, and nothing is ever rolled back — a failed
+# member keeps its branch and its worktree, because a provisioning error must
+# never destroy work or a name you might reuse.
+#
+# Why a separate script and not `e2b-box fleet`: the two clients talk to
+# different things. e2b-box drives ONE box through the E2B data plane; fleet
+# drives herdr through its socket API and never touches the SDK. What they do
+# share (path resolution, pane helpers) lives in lib/.
+#
+# Members are created through herdr's own worktree command with NO explicit path,
+# so the user's `[worktrees] directory` decides layout and each member is an
+# ordinary herdr workspace — which is also what wires the existing
+# `worktree.removed` teardown to fleet members for free.
+#
+# Nothing about a fleet is persisted (docs/adr/0001): the branch prefix
+# `<prefix>/<slug>-` IS the fleet's identity.
+set -uo pipefail
+# Resolve through the ~/.local/bin symlink to the real script dir so we can find
+# lib/*.sh (BSD readlink has no -f, so walk the links manually).
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  ldir="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [ "${SOURCE#/}" = "$SOURCE" ] && SOURCE="$ldir/$SOURCE"
+done
+DIR="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+source "$DIR/lib/paths.sh"
+source "$DIR/lib/pane.sh"     # pane_herdr / pane_node — the herdr binary and a node
+source "$DIR/lib/chooser.sh"  # ask_slug_tty / ask_roster_tty — the two picker screens
+
+# The herdr release that added `herdr worktree list/create/open/remove` and the
+# matching socket API. The plugin's own min_herdr_version deliberately does NOT
+# move for this: fleet is a verb you can not use, and raising the floor would
+# break `open` for people who never asked for a fleet. So the check is a runtime
+# probe and this number only ever appears in the refusal message.
+# herdr's worktree API actually landed in 0.6.2, but the plugin's own manifest
+# already refuses to install below 0.7.0 — naming 0.6.2 here would point people
+# at a herdr this plugin does not run on. The probe below is what really gates.
+FLEET_MIN_HERDR="0.7.0"
+
+# The box CLI, by absolute path: this command is handed to a brand-new pane whose
+# PATH we don't control (a GUI-launched herdr can hand a pane a bare /usr/bin:/bin).
+# Overridable for the same reason DASH_CLI is: the spawn now CALLS this directly
+# (to write a member's brief in over the SDK), not only hands its path to a pane,
+# so the offline suite needs somewhere to point it that does not talk to E2B.
+BOX_CLI="${HERDR_E2B_BOX:-$DIR/e2b-box}"
+
+# How this script is being SPOKEN TO, for every message it prints. It is reached two
+# ways — as `e2b-box fleet` (the one CLI, which exports this) and directly as
+# `e2b-fleet` (herdr's pane entrypoints, the bench TUI, anyone's script) — and a tool
+# that tells you to run a command you did not type is a tool you stop trusting.
+# Set before the first `need`, which already quotes it in its failure.
+FLEET_CLI="${HERDR_E2B_FLEET_CLI:-e2b-fleet}"
+
+need() { command -v "$1" >/dev/null 2>&1 || { echo "$FLEET_CLI: '$1' not found on PATH" >&2; exit 1; }; }
+need jq
+need git
+
+# Help is scoped to what you were doing. `fleet kill --nope` is a question about
+# kill, and answering it with the whole manual — the roster flags, the task flag,
+# the dashboard flag — buries the four lines that would have helped. So each
+# section can be printed on its own, and the misuse paths ask for theirs.
+#   usage          everything (bare `--help`)
+#   usage create   the create half
+#   usage kill     the kill half
+usage() {
+  local section="${1:-all}"
+
+  if [ "$section" != kill ]; then
+    cat <<USAGE
+$FLEET_CLI — fan this checkout out into a fleet of boxes
+
+  $FLEET_CLI                              name it, pick the roster, watch the board
+  $FLEET_CLI <slug> [options]             say it outright, then watch the board
+  $FLEET_CLI create <slug> [options]      the same, said longhand
+  $FLEET_CLI kill <slug> [options]        take one down
+
+create
+  $FLEET_CLI t-21 --agents claude,codex --task "fix the login redirect loop"
+  $FLEET_CLI t-21 --all --task "…"        every agent your config knows
+
+  -a, --agents LIST           the roster: comma-separated, or 'all'
+      --all                   the whole roster; same as --agents all
+  -t, --template NAME         one member; repeat the flag for more
+  -s, --slug NAME             the slug, as a flag instead of the first word
+      --task TEXT             one instruction, handed to every member's agent
+  -n, --dry-run               print every call this would make, create nothing
+  -f, --force                 allow a roster name your config never mentions
+      --no-dashboard          stay here with an exit code instead of becoming
+                              the board (what a script gets regardless)
+USAGE
+  fi
+
+  [ "$section" = all ] && echo
+
+  if [ "$section" != create ]; then
+    # On its own it is the whole answer, so it introduces itself. Inside the full
+    # manual it is one section of two, and a second title would just be noise.
+    if [ "$section" = kill ]; then
+      printf '%s kill — take a fleet down\n\n' "$FLEET_CLI"
+    else
+      printf 'kill\n'
+    fi
+    cat <<USAGE
+  $FLEET_CLI kill <slug>                  every member's box gone, every worktree gone
+
+      --prune-branches        delete the branches too; refuses unmerged work
+  -f, --force                 override that refusal, and allow a dirty checkout
+  -n, --dry-run               print what it would remove, remove nothing
+USAGE
+  fi
+}
+
+# Flags that belong to the other half. A flag is not "unknown" when the tool
+# knows it perfectly well and you aimed it at the wrong subcommand — saying
+# where it lives is the whole answer, and saves reading anything else.
+fleet_flag_home() {
+  case "$1" in
+    --agents|-a|--all|--task|--slug|-s|--template|--no-dashboard) echo create ;;
+    --prune-branches) echo kill ;;
+    *) echo "" ;;
+  esac
+}
+
+# The dashboard, by absolute path, for the same reason as BOX_CLI above. The
+# override exists so the offline suite can assert the handoff — the real board is
+# a TUI that never exits, which no test can wait on.
+DASH_CLI="${HERDR_E2B_DASH:-$DIR/e2b-dash}"
+
+# When herdr runs this as a plugin action, our cwd is the invoking pane's dir
+# only by accident — herdr passes the real one in HERDR_PLUGIN_CONTEXT_JSON. The
+# base ref is "the checkout you launched from", so this has to be right.
+if [ -n "${HERDR_PLUGIN_CONTEXT_JSON:-}" ]; then
+  ctx_cwd=$(printf '%s' "$HERDR_PLUGIN_CONTEXT_JSON" \
+    | jq -r '.focused_pane_cwd // .focusedPaneCwd // .workspace_cwd // .workspaceCwd // empty' 2>/dev/null)
+  # No `set -e`, so this is checked by hand: a cd that quietly fails would
+  # branch the whole fleet off whatever repo the pane happened to start in.
+  if [ -n "$ctx_cwd" ]; then
+    cd "$ctx_cwd" 2>/dev/null || {
+      echo "$FLEET_CLI: herdr says the invoking pane is in '$ctx_cwd', but that can't be entered." >&2
+      echo "  nothing was created." >&2; exit 1
+    }
+  fi
+fi
+
+# --- down: undo a fleet ------------------------------------------------------
+# The reverse of everything below: kill each member's box, remove each member's
+# worktree, keep each member's branch.
+#
+# There is nothing to look up (docs/adr/0001 — a fleet is a batch, not an
+# entity), so members are found by globbing `<prefix>/<slug>-*` over the local
+# branches. That makes this the one verb in the plugin that deletes on a
+# pattern, so it is conservative by construction: a match must still LOOK like a
+# member before it is touched, the cheap-to-redo thing (the box) goes before the
+# expensive one (the worktree) and the branch goes last, and a branch is only
+# ever deleted once its commits are shown to exist somewhere else too.
+#
+# Handled here, ahead of the spawn flag parsing, because it is a different
+# grammar (a positional slug, no roster) and it must NOT inherit the spawn
+# path's herdr preflight — a fleet has to stay teardownable from a plain shell,
+# or a member whose workspace was closed by hand becomes unremovable.
+#
+# The verb is `kill`, matching `e2b-box kill`: this ENDS the boxes, and `down` read
+# like something you could bring back up. `down` still works and is deliberately not
+# advertised — it is what shipped, and breaking a verb somebody has in a script to
+# win a naming argument is not worth it.
+if [ "${1:-}" = kill ] || [ "${1:-}" = down ]; then
+  shift
+  dn_slug=""; dn_prune=0; dn_force=0; dn_dry=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --prune-branches) dn_prune=1; shift ;;
+      --force|-f)       dn_force=1; shift ;;
+      --dry-run|-n)     dn_dry=1; shift ;;
+      -h|--help)        usage kill; exit 0 ;;
+      -*)
+        dn_home=$(fleet_flag_home "$1")
+        if [ "$dn_home" = create ]; then
+          echo "$FLEET_CLI kill: '$1' belongs to $FLEET_CLI create — kill takes a slug and nothing to configure." >&2
+        else
+          echo "$FLEET_CLI kill: unknown argument '$1'" >&2
+        fi
+        usage kill >&2; exit 2 ;;
+      *)  [ -z "$dn_slug" ] || {
+            echo "$FLEET_CLI kill: one fleet at a time — got '$dn_slug' and '$1'" >&2; exit 2; }
+          dn_slug="$1"; shift ;;
+    esac
+  done
+  [ -n "$dn_slug" ] || {
+    echo "$FLEET_CLI kill: which fleet? give it the task slug you launched with." >&2; usage kill >&2; exit 2
+  }
+
+  git rev-parse --git-dir >/dev/null 2>&1 || {
+    echo "$FLEET_CLI kill: $PWD is not a git repo — a fleet's members are branches in the checkout you fanned out from" >&2
+    exit 1
+  }
+  NODE=$(pane_node) || { echo "$FLEET_CLI kill: can't find node — set HERDR_E2B_NODE=/path/to/node" >&2; exit 1; }
+
+  # The glob is ASKED FOR, never re-derived. src/fleet-name.js owns slug and
+  # prefix sanitizing and the branch shape, and with no fleet state the branch
+  # name is the fleet's whole identity — a second sanitizer here would sooner or
+  # later glob for names the spawn never created. So have it name one probe
+  # member with a pinned template and a pinned random suffix, then cut those two
+  # known trailing components back off to recover `<prefix>/<slug>`.
+  dn_probe=$(HERDR_E2B_FLEET_RAND=probe "$NODE" "$PLUGIN_DIR/src/fleet-name.js" "$dn_slug" probe 2>/dev/null) || {
+    echo "$FLEET_CLI kill: '$dn_slug' can't become a git branch, so no fleet was ever named that." >&2
+    exit 2
+  }
+  dn_header=$(printf '%s\n' "$dn_probe" | head -1)
+  dn_cfg_base="${dn_header%%$'\t'*}"      # `[fleet] base`, "" when unconfigured
+  dn_fleet_slug="${dn_header#*$'\t'}"
+  dn_row=$(printf '%s\n' "$dn_probe" | sed -n '2p')
+  dn_row="${dn_row#*$'\t'}"; dn_probe_branch="${dn_row%%$'\t'*}"
+  dn_stem="${dn_probe_branch%-probe-probe}"
+  [ "$dn_stem" != "$dn_probe_branch" ] || {
+    echo "$FLEET_CLI kill: could not derive a fleet prefix from '$dn_probe_branch' — refusing to glob for branches." >&2
+    exit 1
+  }
+  dn_glob="$dn_stem-*"
+
+  # `refs/heads/<prefix>/<slug>-*` — git's own ref matching, where `*` does not
+  # cross a `/`, so a namespaced prefix and a nested branch can't be swept in by
+  # accident. The shape check behind it is the second half of that guarantee: a
+  # member's branch always ends in `-<rand4>`, so anything else a human parked
+  # under the same namespace is listed and left completely alone.
+  dn_members=(); dn_strays=()
+  while IFS= read -r dn_b; do
+    [ -n "$dn_b" ] || continue
+    case "${dn_b#"$dn_stem"-}" in
+      *-[a-z0-9][a-z0-9][a-z0-9][a-z0-9]) dn_members+=("$dn_b") ;;
+      *) dn_strays+=("$dn_b") ;;
+    esac
+  done <<EOF
+$(git for-each-ref --format='%(refname:short)' "refs/heads/$dn_glob" 2>/dev/null)
+EOF
+
+  if [ ${#dn_strays[@]} -gt 0 ]; then
+    printf "$FLEET_CLI kill: %s branch(es) match %s but are not shaped like fleet members — left untouched:\n" \
+      "${#dn_strays[@]}" "$dn_glob" >&2
+    for dn_b in "${dn_strays[@]}"; do printf '  · %s\n' "$dn_b" >&2; done
+  fi
+
+  # A slug that matches nothing is an ordinary outcome — you already tore this
+  # fleet down, or you typo'd — not a failure worth a non-zero exit.
+  if [ ${#dn_members[@]} -eq 0 ]; then
+    printf "no members match %s — nothing to tear down.\n" "$dn_glob"
+    exit 0
+  fi
+
+  # The ref a member's commits must already be reachable from before its branch
+  # counts as safe to delete. Resolved exactly the way the spawn resolves it:
+  # `[fleet] base` if configured, else this checkout's HEAD.
+  if [ -n "$dn_cfg_base" ]; then dn_base="$dn_cfg_base"; dn_base_label="$dn_cfg_base"
+  else dn_base=$(git rev-parse HEAD 2>/dev/null) || dn_base=""; dn_base_label="HEAD"; fi
+
+  # herdr owns worktree removal for a member that is still an open workspace —
+  # that is what closes the sidebar row and fires the `worktree.removed` hook.
+  # Optional on purpose: without it, plain git removes the checkout instead.
+  dn_herdr=$(pane_herdr 2>/dev/null || true)
+  if [ -n "$dn_herdr" ]; then
+    "$dn_herdr" worktree list --cwd "$PWD" 2>/dev/null \
+      | jq -e '.result.type == "worktree_list"' >/dev/null 2>&1 || dn_herdr=""
+  fi
+
+  dn_oneline() { printf '%s' "$1" | tr '\n' ' ' | sed 's/  */ /g; s/ *$//'; }
+
+  dn_wt_path() { # $1 = branch → the checkout it is on right now, "" if none
+    git worktree list --porcelain 2>/dev/null \
+      | awk -v want="branch refs/heads/$1" '/^worktree /{p=substr($0,10)} $0==want{print p; exit}'
+  }
+
+  dn_ws_id() { # $1 = checkout path → the herdr workspace showing it, "" if none
+    [ -n "$dn_herdr" ] && [ -n "$1" ] || return 0
+    "$dn_herdr" worktree list --cwd "$PWD" 2>/dev/null \
+      | jq -r --arg p "$1" '[.result.worktrees[]? | select(.path == $p) | .open_workspace_id // empty][0] // empty' 2>/dev/null
+  }
+
+  # Which box record belongs to this member. Same rule teardown-worktree uses —
+  # the stored worktreePath first, because it survives the directory being gone —
+  # plus the record's branch, which is the only handle left for a member whose
+  # checkout was already removed by hand.
+  dn_box_key() { # $1 = checkout path ("" if gone), $2 = branch → record key, "" if untracked
+    local f k wp br by_path="" by_branch=""
+    for f in "$BOXES_DIR"/*.json; do
+      [ -e "$f" ] || continue
+      k=$(basename "$f" .json)
+      wp=$(jq -r '.worktreePath // empty' "$f" 2>/dev/null)
+      br=$(jq -r '.branch // empty' "$f" 2>/dev/null)
+      if [ -n "$1" ] && [ "$wp" = "$1" ]; then by_path="$k"; break; fi
+      if [ -z "$by_branch" ] && [ -n "$2" ] && [ "$br" = "$2" ]; then by_branch="$k"; fi
+    done
+    if [ -n "$by_path" ]; then printf '%s' "$by_path"
+    elif [ -n "$by_branch" ]; then printf '%s' "$by_branch"
+    elif [ -n "$1" ] && [ -f "$BOXES_DIR/$(box_key "$1").json" ]; then box_key "$1"
+    fi
+  }
+
+  # "Holds commits that exist nowhere else" — the one judgement this verb must
+  # not get wrong. A branch is safe to delete only when its tip is already
+  # reachable from something that outlives the fleet:
+  #   merged — every commit on it is an ancestor of the base ref, so dropping the
+  #            name drops no commit;
+  #   pushed — a remote-tracking ref contains the tip, so the commits are on a
+  #            remote too.
+  # Anything else is unique work. Deliberately stricter than `git branch -d`,
+  # which is happy to delete a branch merged into an unrelated HEAD.
+  dn_safe() { # $1 = branch → why it is safe to delete, "" when it is not
+    local r
+    if [ -n "$dn_base" ] && git merge-base --is-ancestor "$1" "$dn_base" 2>/dev/null; then
+      printf 'merged into %s' "$dn_base_label"; return 0
+    fi
+    r=$(git for-each-ref --format='%(refname:short)' --contains "$1" refs/remotes/ 2>/dev/null | head -1)
+    [ -n "$r" ] && printf 'pushed to %s' "$r"
+    return 0
+  }
+
+  if [ "$dn_force" -eq 1 ]; then dn_fflag=" --force"; else dn_fflag=""; fi
+  printf "fleet '%s' — %s member(s) match %s\n" "$dn_fleet_slug" "${#dn_members[@]}" "$dn_glob"
+
+  # The dry run answers "what would this delete?" in the same shape the spawn's
+  # dry run answers "what would this create?": the real commands, nothing run.
+  if [ "$dn_dry" -eq 1 ]; then
+    for dn_b in "${dn_members[@]}"; do
+      dn_p=$(dn_wt_path "$dn_b"); dn_w=$(dn_ws_id "$dn_p"); dn_k=$(dn_box_key "$dn_p" "$dn_b")
+      printf '  member %s\n' "$dn_b"
+      if [ -n "$dn_k" ]; then printf '    KEY=%s %s kill\n' "$dn_k" "$BOX_CLI"
+      else printf '    no box record — nothing to kill\n'; fi
+      if [ -n "$dn_w" ]; then printf '    herdr worktree remove --workspace %s%s   (%s)\n' "$dn_w" "$dn_fflag" "$dn_p"
+      elif [ -n "$dn_p" ]; then printf '    git worktree remove%s %s\n' "$dn_fflag" "$dn_p"
+      else printf '    no checkout — nothing to remove\n'; fi
+      if [ "$dn_prune" -eq 0 ]; then
+        printf '    branch %s kept\n' "$dn_b"
+      else
+        dn_why=$(dn_safe "$dn_b")
+        if [ -n "$dn_why" ]; then printf '    git branch -D %s   (%s)\n' "$dn_b" "$dn_why"
+        elif [ "$dn_force" -eq 1 ]; then printf '    git branch -D %s   (forced — holds commits that exist nowhere else)\n' "$dn_b"
+        else printf '    branch %s kept — holds commits that exist nowhere else\n' "$dn_b"; fi
+      fi
+    done
+    echo "dry run — nothing was removed."
+    exit 0
+  fi
+
+  dn_ok=0; dn_bad=0; dn_kept=(); dn_deleted=(); dn_refused=()
+  for dn_b in "${dn_members[@]}"; do
+    dn_p=$(dn_wt_path "$dn_b"); dn_w=$(dn_ws_id "$dn_p"); dn_k=$(dn_box_key "$dn_p" "$dn_b")
+    dn_note=""; dn_failed=0; dn_ref=0
+
+    # The box first. Killing one costs nothing to redo, and doing it here rather
+    # than leaving it to the `worktree.removed` hook is what makes a member with
+    # no open workspace — or no herdr at all — still get cleaned up.
+    if [ -z "$dn_k" ]; then
+      dn_note="box already gone"
+    elif dn_out=$(KEY="$dn_k" "$BOX_CLI" kill 2>&1); then
+      dn_note="box killed"
+    else
+      dn_note="box NOT killed: $(dn_oneline "$dn_out")"; dn_failed=1
+    fi
+
+    # Then the worktree.
+    if [ -z "$dn_p" ]; then
+      dn_note="$dn_note, worktree already gone"
+    elif [ ! -d "$dn_p" ]; then
+      # Registered but not on disk: `git worktree remove` refuses that, and the
+      # thing actually left to clean up is the stale registration.
+      git worktree prune >/dev/null 2>&1
+      dn_note="$dn_note, worktree already gone (stale registration pruned)"
+    elif [ -n "$dn_w" ]; then
+      if [ "$dn_force" -eq 1 ]; then dn_out=$("$dn_herdr" worktree remove --workspace "$dn_w" --force 2>&1); dn_rc=$?
+      else dn_out=$("$dn_herdr" worktree remove --workspace "$dn_w" 2>&1); dn_rc=$?; fi
+      # herdr can report a refusal in the response while still exiting 0, so the
+      # response is read as well as the exit code.
+      dn_err=$(printf '%s' "$dn_out" | jq -r '.error.message // empty' 2>/dev/null)
+      if [ "$dn_rc" -eq 0 ] && [ -z "$dn_err" ]; then dn_note="$dn_note, worktree removed"
+      else dn_note="$dn_note, worktree NOT removed: $(dn_oneline "${dn_err:-$dn_out}")"; dn_failed=1; fi
+    else
+      if [ "$dn_force" -eq 1 ]; then dn_out=$(git worktree remove --force "$dn_p" 2>&1); dn_rc=$?
+      else dn_out=$(git worktree remove "$dn_p" 2>&1); dn_rc=$?; fi
+      if [ "$dn_rc" -eq 0 ]; then dn_note="$dn_note, worktree removed"
+      else dn_note="$dn_note, worktree NOT removed: $(dn_oneline "$dn_out")"; dn_failed=1; fi
+    fi
+
+    # The branch last, and only when asked: it is the only thing the run
+    # produced, so keeping it is the default and deleting it has to be earned.
+    if [ "$dn_prune" -eq 0 ]; then
+      dn_note="$dn_note, branch kept"; dn_kept+=("$dn_b")
+    else
+      dn_why=$(dn_safe "$dn_b")
+      [ -n "$dn_why" ] || { [ "$dn_force" -eq 1 ] && dn_why="forced"; }
+      if [ -z "$dn_why" ]; then
+        dn_note="$dn_note, branch KEPT: it holds commits that exist nowhere else (not merged into $dn_base_label, not pushed)"
+        dn_refused+=("$dn_b"); dn_ref=1
+      elif [ "$dn_failed" -eq 1 ]; then
+        # Its checkout is still there, so git would refuse anyway — and a branch
+        # deleted out from under a live worktree is not a tidy-up, it's a mess.
+        dn_note="$dn_note, branch kept: its checkout is still there"
+        dn_kept+=("$dn_b")
+      elif dn_out=$(git branch -D "$dn_b" 2>&1); then
+        dn_note="$dn_note, branch deleted ($dn_why)"; dn_deleted+=("$dn_b")
+      else
+        dn_note="$dn_note, branch NOT deleted: $(dn_oneline "$dn_out")"; dn_kept+=("$dn_b"); dn_failed=1
+      fi
+    fi
+
+    if [ "$dn_failed" -eq 1 ]; then
+      dn_bad=$((dn_bad + 1)); printf '  ✗ %s — %s\n' "$dn_b" "$dn_note" >&2
+    elif [ "$dn_ref" -eq 1 ]; then
+      dn_ok=$((dn_ok + 1)); printf '  ! %s — %s\n' "$dn_b" "$dn_note"
+    else
+      dn_ok=$((dn_ok + 1)); printf '  ✓ %s — %s\n' "$dn_b" "$dn_note"
+    fi
+  done
+
+  printf '%s/%s torn down\n' "$dn_ok" "${#dn_members[@]}"
+  # What survived is stated, never left implicit — a fleet's branches are the
+  # output of the run, and leftovers must not be a surprise tomorrow morning.
+  if [ ${#dn_kept[@]} -gt 0 ]; then
+    printf 'branches kept — the only thing the run produced:\n'
+    for dn_b in "${dn_kept[@]}"; do printf '  %s\n' "$dn_b"; done
+    [ "$dn_prune" -eq 1 ] || \
+      printf "  delete them too when you're done: $FLEET_CLI kill %s --prune-branches\n" "$dn_fleet_slug"
+  fi
+  if [ ${#dn_refused[@]} -gt 0 ]; then
+    printf 'branches kept because they hold commits that exist nowhere else:\n'
+    for dn_b in "${dn_refused[@]}"; do printf '  %s\n' "$dn_b"; done
+    printf "  merge or push them, or insist: $FLEET_CLI kill %s --prune-branches --force\n" "$dn_fleet_slug"
+  fi
+  [ ${#dn_deleted[@]} -eq 0 ] || printf '%s branch(es) deleted\n' "${#dn_deleted[@]}"
+  [ "$dn_bad" -eq 0 ] || \
+    printf '  %s member(s) did not fully clean up — nothing of theirs was deleted beyond what is listed above.\n' "$dn_bad" >&2
+  [ "$dn_bad" -eq 0 ] || exit 1
+  exit 0
+fi
+
+# --- create: the explicit spawn verb -----------------------------------------
+# `create` is what `kill` is the other half of, and the two read the same:
+# `create <slug> -t …` / `kill <slug>`. It exists so a caller who KNOWS what it
+# wants — an agent, a script, CI — has one unambiguous line to type that always
+# runs the members in the foreground and always comes back with an exit code.
+#
+# Bare `e2b-fleet` (no verb) keeps working exactly as before and stays the human
+# entry: it asks, and hands the pane to the board afterwards. The verb is a
+# spelling, not a mode — a TERMINAL is what decides foreground-vs-board (below),
+# so `create` with a tty watches the board and without one hands back a summary.
+# `up` alongside `create`, for symmetry with `kill`/`down` and with `e2b-box up`:
+# the pair someone reaches for is boot-and-teardown, and having only one half
+# spelled the familiar way is what sends people to --help for a verb they had
+# already guessed correctly.
+if [ "${1:-}" = create ] || [ "${1:-}" = up ]; then fleet_verb=create; shift; fi
+# Bare `fleet --help` was not asked about a subcommand, so it gets both halves;
+# `fleet create --help` gets the half it named.
+: "${fleet_verb:=all}"
+
+# --- flags -------------------------------------------------------------------
+slug=""
+templates=()
+fleet_task=""
+dry=0
+dash=0
+no_dash=0
+want_all=0
+force=0
+
+# `--agents a,b,c` → one roster entry per name. A fleet IS a set of agents, and
+# saying so by repeating a flag seven times is the shape of the flag fighting the
+# shape of the thing. Whitespace after a comma is forgiven, because
+# `--agents "claude, codex"` is what a person actually types.
+#
+# `all` means the whole configured roster and is expanded further down, once node
+# can be asked what that is. It wins over a template literally named `all` — a
+# trade made knowingly: nothing has ever been called that, and `--agents all` is
+# worth more than reserving the name.
+add_agents() {
+  # Globbing off while the list is split: an entry is a template name, and
+  # `--agents '*'` must never become the contents of the current directory.
+  #
+  # Restored by hand rather than with `local -`, which is bash 4.4+ and this
+  # script runs on macOS's /bin/bash 3.2 — where it is not merely unavailable but
+  # actively harmful: `local: '-': not a valid identifier`, and then `set -f`
+  # leaks out of the function and every later glob in the run is off.
+  local item IFS=, had_noglob=0
+  case $- in *f*) had_noglob=1 ;; esac
+  set -f
+  for item in $1; do
+    item="${item#"${item%%[![:space:]]*}"}"   # trim leading space
+    item="${item%"${item##*[![:space:]]}"}"   # trim trailing space
+    [ -n "$item" ] || continue
+    if [ "$item" = all ]; then want_all=1; continue; fi
+    templates+=("$item")
+  done
+  [ "$had_noglob" -eq 1 ] || set +f
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --slug|-s)
+      [ $# -ge 2 ] || { echo "$FLEET_CLI: $1 needs a task slug" >&2; exit 2; }
+      slug="$2"; shift 2 ;;
+    --slug=*) slug="${1#*=}"; shift ;;
+    # The whole task is ONE argv element, so quotes, newlines and backticks in
+    # it are the shell's problem at the call site and nobody's after that.
+    --task)
+      [ $# -ge 2 ] || { echo "$FLEET_CLI: $1 needs the task text" >&2; exit 2; }
+      fleet_task="$2"; shift 2 ;;
+    --task=*) fleet_task="${1#*=}"; shift ;;
+    --agents|-a)
+      [ $# -ge 2 ] || { echo "$FLEET_CLI: $1 needs a comma-separated list of agents, or 'all'" >&2; exit 2; }
+      # A flag where the list should be means the list was left out — and getopt
+      # would take it as an agent NAMED `--all`, planning a member no template can
+      # ever match. `-a --all` is unmistakable, so it is simply honoured; anything
+      # else is called out here rather than at boot time.
+      case "$2" in
+        --all|-A) want_all=1; shift 2; continue ;;
+        -*) echo "$FLEET_CLI: $1 wants the roster (a,b,c or 'all'), but got the flag '$2'" >&2; exit 2 ;;
+      esac
+      add_agents "$2"; shift 2 ;;
+    --agents=*) add_agents "${1#*=}"; shift ;;
+    # The spelling everybody reaches for. Exactly `--agents all`.
+    --all) want_all=1; shift ;;
+    # The original spelling of the same thing, one at a time. `--agents` is the
+    # documented way in now — a fleet's roster is agents — but `-t` is what every
+    # existing script, the bench hint and this repo's own tests type, and it is
+    # still the honest word for a control arm that runs no agent at all.
+    --template|-t)
+      [ $# -ge 2 ] || { echo "$FLEET_CLI: $1 needs a template name" >&2; exit 2; }
+      templates+=("$2"); shift 2 ;;
+    --template=*) templates+=("${1#*=}"); shift ;;
+    # Roster names this config has never heard of are refused (below). This is the
+    # way past that, for a template that exists on E2B but in no config of yours.
+    --force|-f) force=1; shift ;;
+    --dry-run|-n) dry=1; shift ;;
+    # Legacy, deliberately unadvertised: the board is now what asking implies,
+    # and `create` is what not-asking implies. Still parsed because an installed
+    # herdr-plugin.toml passes it, and breaking someone's pane entrypoint to win
+    # a naming argument is not worth it — same call as keeping `down`.
+    --dashboard) dash=1; shift ;;
+    # For the one case no rule can infer: a person at a terminal who wants the
+    # summary and the exit code rather than the board.
+    --no-dashboard) no_dash=1; shift ;;
+    -h|--help) usage "$fleet_verb"; exit 0 ;;
+    # A bare slug names the fleet, with or without `create` in front of it:
+    # `fleet t-21 --agents all` is what people actually type, and `create` earns
+    # nothing by being compulsory — a terminal decides the board, not the verb.
+    # A word is only a slug if it does NOT start with `-` and none has been given
+    # yet, so a mistyped flag still lands as an error instead of a fleet name.
+    *) if [ "${1#-}" = "$1" ] && [ -z "$slug" ]; then
+         slug="$1"; shift
+       elif [ "${1#-}" = "$1" ]; then
+         # A second bare word. Almost always a task that lost its flag —
+         # `fleet t-21 "fix the login loop"` — so name the flag rather than
+         # calling the sentence an unknown argument.
+         echo "$FLEET_CLI: '$slug' is the slug, so what is '$1'?" >&2
+         echo "  an instruction goes behind --task:  $FLEET_CLI $slug --task \"$1\"" >&2
+         exit 2
+       elif [ "$(fleet_flag_home "$1")" = kill ]; then
+         echo "$FLEET_CLI: '$1' belongs to $FLEET_CLI kill" >&2; usage create >&2; exit 2
+       else
+         echo "$FLEET_CLI: unknown argument '$1'" >&2; usage "$fleet_verb" >&2; exit 2
+       fi ;;
+  esac
+done
+
+# --- the checkout we are fanning out from ------------------------------------
+# Resolved before the pickers, because screen one has to say whether this tree is
+# dirty and the base ref has to exist before we offer to branch off it.
+git rev-parse --git-dir >/dev/null 2>&1 || {
+  echo "$FLEET_CLI: $PWD is not a git repo — a fleet branches from the checkout you launch it in" >&2; exit 1
+}
+
+# Members start clean (docs/adr/0003): a member is a fresh worktree off the base
+# ref, so uncommitted work here is left behind. Warn — never block: unrelated
+# scratch files are normal and shouldn't stop a fleet.
+dirty=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+dirty_note=""
+[ "${dirty:-0}" -gt 0 ] && \
+  dirty_note="⚠️  $dirty uncommitted file(s) will not be carried into the fleet — members start clean."
+
+# --- node --------------------------------------------------------------------
+# Every question below (what the roster may contain, whether a slug survives
+# sanitizing, what the branches are called) is answered by src/*.js, so resolve
+# the interpreter once. It is NOT resolved before the git check: "you are not in
+# a repo" is the more useful thing to hear first.
+NODE=$(pane_node) || { echo "$FLEET_CLI: can't find node — set HERDR_E2B_NODE=/path/to/node" >&2; exit 1; }
+
+# Does this text survive ref sanitizing? src/fleet-name.js owns that rule and
+# ADR-0001 makes it load-bearing, so ask IT rather than re-deriving the regex in
+# bash. The template argument is a throwaway — only the exit code is read.
+slug_is_usable() { "$NODE" "$PLUGIN_DIR/src/fleet-name.js" "$1" base >/dev/null 2>&1; }
+
+# The roster offers exactly the list `open` offers — src/resolve-template.js is
+# the single place that builds it, so there is never a second template list to
+# maintain. Line 1 of its output is the header; the rest is the menu.
+# `--fleet`, not "": the roster is not the box picker. It leaves out the plain
+# default (a member with no agent is a shell nobody asked for) and hoists nothing,
+# so the list opens on the first agent in `[sandbox] templates` rather than on the
+# template `e2b-box open` would have defaulted to.
+fleet_template_choices() {
+  local info
+  info=$("$NODE" "$PLUGIN_DIR/src/resolve-template.js" --fleet 2>/dev/null) || return 1
+  printf '%s\n' "$info" | tail -n +2 | grep -v '^$'
+}
+
+# `[fleet] default_roster`, already resolved over the defaults by src/config.js
+# as `fleetRoster`. Inline rather than a helper script: it is read once, here,
+# and the chooser is deliberately node-free so it can't read config itself.
+fleet_default_roster() {
+  HERDR_E2B_CONFIG_JS="$PLUGIN_DIR/src/config.js" "$NODE" -e '
+    import("node:url")
+      .then((u) => import(u.pathToFileURL(process.env.HERDR_E2B_CONFIG_JS).href))
+      .then((m) => process.stdout.write(m.loadConfig().fleetRoster.join("\n")))
+      .catch(() => {})' 2>/dev/null
+}
+
+# `[fleet.agents]`, already resolved by src/config.js as `fleetAgents`: which
+# command starts a member's agent, per template. A template the map says nothing
+# about defaults to its OWN name — template `claude` runs `claude` — so the map
+# only has to exist for a custom template whose CLI is named something else.
+# A template mapped to the empty string is a deliberate control arm: plain shell,
+# no agent, no error and no warning. That is why the lookup is by key presence
+# rather than by truthiness, and why the failure path below falls back to the
+# template name: an unreadable config must never look like "you asked for none".
+fleet_agent_cmd() { # $1 = template  →  the command to type, or "" for none
+  HERDR_E2B_CONFIG_JS="$PLUGIN_DIR/src/config.js" HERDR_E2B_TEMPLATE="$1" "$NODE" -e '
+    const t = process.env.HERDR_E2B_TEMPLATE
+    import("node:url")
+      .then((u) => import(u.pathToFileURL(process.env.HERDR_E2B_CONFIG_JS).href))
+      .then((m) => {
+        const map = m.loadConfig().fleetAgents || {}
+        process.stdout.write(Object.prototype.hasOwnProperty.call(map, t) ? map[t] : t)
+      })
+      .catch(() => process.stdout.write(t))' 2>/dev/null
+}
+
+# The first-run state a member's agent needs before it will work instead of asking
+# questions — Claude's theme picker, Codex's sign-in menu. src/fleet-seed.js owns
+# both the shipped defaults and the `[fleet.seed]` override, so the shell that runs
+# inside a box lives in ONE place and `node --test` can execute it.
+#
+# The command it hands back names the credential's environment VARIABLE and never
+# its value: the key is already inside the box (`[templates.<name>.env]` →
+# `Sandbox.create`'s `envs`), so the box's own shell expands it. Nothing secret may
+# reach `pane run`, because that text is the pane, the scrollback and herdr's
+# session files forever.
+#
+# Empty output means "seed nothing" — a template mapped to "" in config, or one
+# nobody has verified a first-run schema for. Never fatal: a member that could not
+# be seeded still boots and still gets its agent.
+fleet_seed_cmd() { # $1 = template  →  the seeding command to type, or "" for none
+  "$NODE" "$PLUGIN_DIR/src/fleet-seed.js" "$1" 2>/dev/null
+}
+
+# Every name this config RECOGNISES, which is a wider list than the one the picker
+# offers: a template configured only in `[fleet.agents]` or `[fleet.seeds]` is your
+# own box, deliberately kept out of the menu, and refusing it would be refusing the
+# exact case those two blocks exist for. src/resolve-template.js owns the union.
+known_templates() {
+  "$NODE" "$PLUGIN_DIR/src/resolve-template.js" --known 2>/dev/null | grep -v '^$'
+}
+
+# --- --agents all ------------------------------------------------------------
+# Expanded here rather than at parse time because "all" is a question only node
+# can answer, and this is the first point node exists. Before the pickers, so
+# `--agents all` counts as having answered the roster screen.
+if [ "$want_all" -eq 1 ]; then
+  all_list=$(fleet_template_choices) || {
+    echo "$FLEET_CLI: couldn't read the template list — is the plugin installed (npm deps)?" >&2; exit 1
+  }
+  while IFS= read -r t; do [ -n "$t" ] && templates+=("$t"); done <<EOF
+$all_list
+EOF
+  [ ${#templates[@]} -gt 0 ] || {
+    echo "$FLEET_CLI: --agents all, but no templates are configured — set [sandbox] templates and try again." >&2
+    exit 2
+  }
+fi
+
+# --- the two picker screens --------------------------------------------------
+# Only with a human present. Scripts, CI and the dashboard get the refusals they
+# have always got — a verb that blocks on a menu when nobody is looking is worse
+# than one that exits 2.
+interactive=0
+{ [ -t 0 ] && [ -t 1 ]; } && interactive=1
+dirty_shown=0
+
+if [ -z "$slug" ] || [ ${#templates[@]} -eq 0 ]; then
+  if [ "$interactive" -eq 0 ]; then
+    [ -n "$slug" ] || {
+      echo "$FLEET_CLI: no slug — a fleet is named by what it is for: $FLEET_CLI create <slug> -t <template>" >&2
+      usage >&2; exit 2; }
+    echo "$FLEET_CLI: no templates — pass -t <template> at least once (a fleet with no members is nothing)" >&2
+    usage >&2; exit 2
+  fi
+
+  # Screen one: the task slug, the optional fleet task, and the dirty-tree
+  # warning if there is one. An abort here is an abort of the whole fleet —
+  # nothing exists yet, and nothing will.
+  #
+  # The task field is only offered when --task did not already answer it: asking
+  # twice for one value is how a flag and a picker start disagreeing. It prints
+  # the slug on line 1 and the task on the rest, so a task is read back with
+  # `tail -n +2` rather than by splitting on anything the user might type.
+  if [ -z "$slug" ]; then
+    want_task=task; [ -z "$fleet_task" ] || want_task=""
+    answer=$(ask_slug_tty "$dirty_note" slug_is_usable "$want_task"); rc=$?
+    case "$rc" in
+      0) [ -n "$want_task" ] && fleet_task=$(printf '%s' "$answer" | tail -n +2)
+         slug=$(printf '%s' "$answer" | head -1)
+         [ -n "$dirty_note" ] && dirty_shown=1 ;;
+      2) echo "$FLEET_CLI: aborted at the task slug — nothing was created." >&2; exit 130 ;;
+      *) echo "$FLEET_CLI: no terminal to ask on — use: $FLEET_CLI create <slug> -t <template>" >&2; exit 2 ;;
+    esac
+  fi
+
+  # Screen two: the roster, with `[fleet] default_roster` pre-ticked.
+  if [ ${#templates[@]} -eq 0 ]; then
+    choices=$(fleet_template_choices) || {
+      echo "$FLEET_CLI: couldn't read the template list — is the plugin installed (npm deps)?" >&2; exit 1
+    }
+    n_choices=$(printf '%s\n' "$choices" | grep -c '[^[:space:]]' || true)
+    [ "$n_choices" -gt 0 ] || {
+      echo "$FLEET_CLI: no templates configured — set [sandbox] templates and try again." >&2; exit 1
+    }
+    picked=$(ask_roster_tty "$slug" "$choices" "$n_choices" "$(fleet_default_roster)"); rc=$?
+    case "$rc" in
+      0) ;;
+      2) echo "$FLEET_CLI: aborted at the roster — nothing was created." >&2; exit 130 ;;
+      *) echo "$FLEET_CLI: no terminal to ask on — use: $FLEET_CLI create <slug> -t <template>" >&2; exit 2 ;;
+    esac
+    while IFS= read -r t; do [ -n "$t" ] && templates+=("$t"); done <<EOF
+$picked
+EOF
+    # ask_roster_tty cannot return an empty roster, but a launch off an empty one
+    # would be a silent no-op, so it is checked here too rather than assumed.
+    [ ${#templates[@]} -gt 0 ] || {
+      echo "$FLEET_CLI: no templates chosen — nothing was created." >&2; exit 2
+    }
+  fi
+fi
+
+# A TERMINAL asks for the board — not the verb, not the pickers. Whoever answered
+# two picker screens, typed `create`, or typed the short `fleet <slug> --agents all`
+# is sitting in front of this pane, and provisioning a roster takes minutes: a pane
+# that prints one header and then scrolls a wall of per-member lines is the worst
+# place to spend them. The board is where the whole roster is visible at once and
+# where you can act on a member the moment it lands, so that is where a human goes.
+#
+# Without a tty — a script, CI, the dashboard's own spawn — the foreground run and
+# its exit code are kept, which is what `create` exists to hand back. And
+# `--no-dashboard` is "I have a terminal and still want the summary", the one case
+# no rule can infer. Both are the same rule now: one line, no verb in it.
+if [ "$interactive" -eq 1 ] && [ "$no_dash" -eq 0 ]; then dash=1; fi
+
+# --- the roster --------------------------------------------------------------
+# A template appears in a roster at most once (CONTEXT.md): repeated -t collapses
+# to one member, keeping first-seen order so the plan is stable to assert against.
+uniq_templates=()
+seen=$'\n'
+for t in "${templates[@]}"; do
+  case "$seen" in *$'\n'"$t"$'\n'*) continue ;; esac
+  seen="$seen$t"$'\n'
+  uniq_templates+=("$t")
+done
+dropped=$(( ${#templates[@]} - ${#uniq_templates[@]} ))
+[ "$dropped" -gt 0 ] && \
+  echo "$FLEET_CLI: a template gets at most one member — collapsed $dropped duplicate(s)." >&2
+templates=("${uniq_templates[@]}")
+
+# --- the roster is spell-checked ---------------------------------------------
+# A name nobody configured used to plan perfectly and fail minutes later, when its
+# box tried to boot — the most expensive place to find out you typed `clade`, and
+# seven times more expensive with `--agents all` next door. So it is caught here,
+# before a single branch exists.
+#
+# Two deliberate non-refusals. An unreadable list skips the check entirely rather
+# than refusing everything: a missing config must never look like a bad roster.
+# And `--force` is the way past it, because `[sandbox] templates` is a MENU, not a
+# registry — a template can exist on your cluster and in no config of yours.
+if [ "$force" -eq 0 ]; then
+  known=$(known_templates)
+  if [ -n "$known" ]; then
+    unknown=()
+    for t in "${templates[@]}"; do
+      case $'\n'"$known"$'\n' in *$'\n'"$t"$'\n'*) ;; *) unknown+=("$t") ;; esac
+    done
+    if [ ${#unknown[@]} -gt 0 ]; then
+      for t in "${unknown[@]}"; do echo "$FLEET_CLI: no template named '$t'" >&2; done
+      echo "  configured: ${known//$'\n'/ }" >&2
+      echo "  add it to [sandbox] templates, or insist with --force" >&2
+      exit 2
+    fi
+  fi
+fi
+
+# --- names -------------------------------------------------------------------
+# src/fleet-name.js owns the sanitizing rules and the branch shape, and reads the
+# `[fleet]` config block — bash never builds a ref name itself.
+# stderr is deliberately NOT captured: node's own message (an unusable slug, a
+# runtime warning) must reach the terminal rather than end up parsed as a plan.
+plan=$("$NODE" "$PLUGIN_DIR/src/fleet-name.js" "$slug" "${templates[@]}") || {
+  echo "$FLEET_CLI: that task slug can't become a git branch — give it one with letters or digits in it." >&2
+  exit 2
+}
+# Split the header by hand: `read` treats a tab as whitespace and would swallow
+# an empty first field (the common case — no `[fleet] base` configured).
+header=$(printf '%s\n' "$plan" | head -1)
+cfg_base="${header%%$'\t'*}"
+fleet_slug="${header#*$'\t'}"
+members=$(printf '%s\n' "$plan" | tail -n +2 | grep -v '^$')
+
+# --- base ref ----------------------------------------------------------------
+# Members are branched from the checkout you launched from, so "fleet from here"
+# means what it says. `[fleet] base` overrides it with a ref of your choosing.
+if [ -n "$cfg_base" ]; then
+  base="$cfg_base"; base_src="[fleet] base"
+else
+  # The commit, not the branch name: every member of one fleet must start from
+  # the exact same point even if the branch moves while the fleet is spawning.
+  base=$(git rev-parse HEAD 2>/dev/null) || base=""
+  [ -n "$base" ] || { echo "$FLEET_CLI: this checkout has no commits yet — nothing to branch a fleet from" >&2; exit 1; }
+  base_src="HEAD of $PWD"
+fi
+
+# The picker already showed this on screen one; printing it again would just be
+# the same sentence twice.
+[ -n "$dirty_note" ] && [ "$dirty_shown" -eq 0 ] && echo "$dirty_note" >&2
+
+# Which workspace a member hangs off is not cosmetic: herdr groups worktree
+# workspaces under a SOURCE workspace, and `--workspace ID` and `--cwd PATH` are
+# the two mutually-exclusive ways to name one. `--cwd` resolves the source by
+# repo key — whichever workspace already claims this repo, or a new one herdr
+# invents when none does — so a fleet launched from a second workspace on the
+# same repo lands its members under the FIRST one, away from the user who asked
+# for them. Naming our own workspace keeps the fleet where it was launched.
+#
+# `$HERDR_WORKSPACE_ID` is the pane's own workspace, exported by herdr into every
+# pane it owns. The `--cwd` form stays as the fallback for the one case herdr
+# rejects: a pane already inside a LINKED worktree cannot be a source (herdr
+# wants the repo parent), which is exactly what launching a fleet from inside
+# another fleet's member looks like.
+#
+# The dry run prints what the spawn executes, so both take their argv from here
+# rather than from two printf/exec sites that agree only by inspection.
+wt_argv=()
+set_wt_argv() { # $1 = branch, $2 = label, $3 = "cwd" to force the repo-key form
+  local src=(--cwd "$PWD")
+  [ -n "${HERDR_WORKSPACE_ID:-}" ] && [ "${3:-}" != cwd ] && src=(--workspace "$HERDR_WORKSPACE_ID")
+  wt_argv=(worktree create "${src[@]}" --branch "$1" --base "$base" --label "$2" --no-focus)
+}
+
+# One `worktree create` attempt, so the fallback above is one call and not a
+# second copy of the response handling. Answers through two globals because a
+# shell function has one exit code and this has to hand back both the response
+# and the reason it has none.
+#
+# herdr reports a refusal EITHER by exiting non-zero OR by putting `.error` in a
+# body it exits 0 with, depending on transport, so both are failures here.
+wt_create_resp=""
+wt_create_err=""
+wt_create_try() { # $1 = branch, $2 = label, $3 = "" | "cwd"
+  local errf e
+  # stderr goes to its own file, never into the response: that is parsed as JSON,
+  # and a single herdr warning folded in would blank the pane id and orphan a
+  # worktree that had already been created.
+  errf=$(mktemp) || { wt_create_err="no temp file for herdr stderr"; return 1; }
+  set_wt_argv "$1" "$2" "${3:-}"
+  wt_create_resp=$("$HERDR" "${wt_argv[@]}" 2>"$errf") || {
+    wt_create_err="herdr could not create the worktree: $(tr '\n' ' ' <"$errf")"
+    rm -f "$errf"; return 1
+  }
+  rm -f "$errf"
+  e=$(printf '%s' "$wt_create_resp" | jq -r '.error.message // empty' 2>/dev/null)
+  [ -z "$e" ] || { wt_create_err="herdr refused the worktree: $e"; return 1; }
+  wt_create_err=""
+}
+
+# The member's agent, same shared-argv rule. herdr's `agent start` refuses a pane
+# that already has a foreground command and every member pane is running
+# `e2b sandbox connect`, so the agent is TYPED into the sandbox shell instead —
+# `pane run` is send-text plus Enter in one call. The whole command line goes in as
+# ONE argument so a configured `claude --resume` arrives with its quoting intact.
+#
+# herdr will NOT adopt it. Agent detection reads the LOCAL process — a session file,
+# the foreground cwd, the terminal title — and a member's agent is a process inside a
+# remote VM behind `e2b sandbox connect`, so `agent get` answers `agent_not_found` for
+# as long as the box lives (observed live: every member of test-6 burned the full
+# 90s wait and reported its task undelivered). Sandbox members are therefore driven by
+# TYPING, exactly the way the user would; `agent prompt` is kept only for a pane herdr
+# does adopt, which is what the test stub simulates.
+#
+# When there is a fleet task, the agent is launched WITH IT — as a positional
+# argument, read out of a file the box already has:
+#
+#   claude --dangerously-skip-permissions "$(cat ~/.herdr-e2b-task.md)"
+#
+# This is the whole delivery mechanism, and it replaces typing into the TUI.
+# Typing could never be made reliable: an agent that has drawn its first frame is
+# not yet reading input, so droid ate the head of every burst and produced
+# `o-world` from `say hello-world` — three times over, on two separate fleets —
+# while the identical send into the same pane a minute later was perfect. Every
+# fix for that was a guess about how long to wait.
+#
+# There is nothing to wait for here. The task is in the box before the agent
+# starts, the shell substitutes it into argv, and the agent boots already holding
+# it. Nearly every shipped agent accepts an initial prompt this way (`droid
+# "review app.tsx"` is in droid's own --help; the same shape is what
+# harness-bench uses for claude, codex and grok; opencode's command ends in
+# `--prompt` so the appended positional lands as that flag's value). The one
+# that can't is amp — see STDIN_TASK_TEMPLATES below.
+#
+# The FILE is what keeps this inside `pane run`'s 1024-byte ceiling: the line
+# typed here is a fixed ~40 characters no matter how long the brief is, and the
+# brief itself never has to survive shell quoting on the way in.
+TASK_FILE='$HOME/.herdr-e2b-task.md'
+# One exception to the positional shape: amp has NO positional prompt at all — its
+# positionals are subcommands, so `amp --dangerously-allow-all "task"` dies with
+# `Unknown command` (observed live, t-21). Amp's own --help ships the alternative:
+# piping a message on stdin seeds an interactive session, and execute mode keys off
+# stdout redirection, not stdin, so `cat task | amp` still draws the full TUI, runs
+# the task, and reopens /dev/tty for the keyboard afterwards (verified live). The
+# no-task line stays bare — a plain `amp` is the unseeded TUI either way.
+STDIN_TASK_TEMPLATES=" amp "
+agent_argv=()
+set_agent_argv() { # $1 = pane, $2 = command line to type, $3 = non-empty if a task awaits, $4 = template
+  if [ -n "${3:-}" ] && [ "${STDIN_TASK_TEMPLATES#* ${4:-} }" != "$STDIN_TASK_TEMPLATES" ]; then
+    agent_argv=(pane run "$1" "cat $TASK_FILE | $2")
+  elif [ -n "${3:-}" ]; then
+    agent_argv=(pane run "$1" "$2 \"\$(cat $TASK_FILE)\"")
+  else
+    agent_argv=(pane run "$1" "$2")
+  fi
+}
+
+# One echo, typed between the seeding and the agent. A shell reads its input one line
+# at a time, so this cannot print until the seeding has finished and the agent cannot
+# start until it has — which makes it the one unambiguous moment in the pane, and the
+# thing readiness is allowed to key off.
+#
+# It exists because guessing from the screen alone is not safe: the seeding command is
+# long enough to wrap, and a wrapped fragment of it has no shell prompt in it, so it
+# read as "an agent is drawing here". Both test-8 members were typed their task into
+# a shell that way — observed live, which is why this is a marker and not a heuristic.
+# Its own `pane run` rather than a prefix on the agent's, for the same reason the
+# seeding is its own: two steps that can fail separately should be readable separately.
+AGENT_START_MARKER="herdr-e2b: starting the agent"
+mark_argv=()
+set_mark_argv() { # $1 = pane
+  mark_argv=(pane run "$1" "echo '$AGENT_START_MARKER'")
+}
+# The member's first-run state, typed into the same shell a moment BEFORE the agent
+# command — so the agent finds `~/.claude.json` / `~/.codex/auth.json` already there
+# and comes up at its prompt instead of its wizard. Same shared-argv rule as every
+# other call: the dry run prints this, the spawn runs it, neither can drift.
+#
+# One `pane run` of its own rather than a prefix on the agent's: the two are separate
+# steps with separate failures, and a plan that reads `<seed>; claude` would hide
+# which one a member is stuck on.
+#
+# It ends in an echo the box itself has to produce, because a shell reading its input
+# one line at a time is not the same as a line ARRIVING in one go — see the note on
+# SEED_DONE_MARKER below. Appended here rather than inside src/fleet-seed.js so the
+# seeding stays a thing you can run by hand, and so a `[fleet.seed]` command somebody
+# writes themselves is gated exactly like the shipped ones.
+SEED_DONE_MARKER="herdr-e2b: first-run state written"
+seed_argv=()
+set_seed_argv() { # $1 = pane, $2 = the seeding command (variable NAMES only)
+  seed_argv=(pane run "$1" "$2; echo '$SEED_DONE_MARKER'")
+}
+# Once adopted, the agent is addressed by name in the sidebar and from the herdr
+# CLI. The pane id stays its fallback address — it is what every call here
+# targets, and what the report prints.
+rename_argv=()
+set_rename_argv() { # $1 = pane, $2 = label (<task-slug>-<template>)
+  rename_argv=(agent rename "$1" "$2")
+}
+
+# The fleet task, handed to one member's agent. Same shared-argv rule again, and
+# the same reason: the dry run must be the call.
+#
+# Bounded like the two waits below, and for the same reason — a member that
+# never takes the task is reported, never retried and never killed. herdr's
+# `agent prompt --timeout` is only accepted alongside `--wait`, and `--wait`
+# with no `--until` waits for the agent to go IDLE, which would be waiting for
+# the whole task to be finished. So every state is listed instead: the first
+# state herdr observes after submission is the confirmation that the agent took
+# it, which is all "delivered" ever means here.
+TASK_WAIT_S="${HERDR_E2B_FLEET_TASK_WAIT:-120}"
+prompt_argv=()
+set_prompt_argv() { # $1 = target (agent name, or the pane as fallback), $2 = task
+  prompt_argv=(agent prompt "$1" "$2" --wait
+               --until working --until idle --until done --until blocked
+               --timeout "$((TASK_WAIT_S * 1000))")
+}
+
+# The same task, for the members herdr cannot adopt — which is all of them, since a
+# member's agent runs inside the VM. Typed into the agent's own prompt the way a user
+# would, and split into text-then-Enter rather than one `pane run`: a task is free
+# text that may contain anything the picker accepted, and `send-text` puts it in
+# LITERALLY, while the Enter that submits it stays a separate, visible step. There is
+# no receipt to wait for here — the agent is not an object herdr knows about — so
+# delivery means the two calls were accepted, and the member's own pane is the proof.
+#
+# Writing the brief into the box, which is what makes launching with it possible.
+# Goes through `e2b-box exec` — the SDK, not a pty — so it has no length limit and
+# the text never crosses a terminal. Base64 for the same reason the seeding names
+# variables instead of values: a brief is free text, and quoting free text through
+# argv, a JS string, bash and a shell is four chances to mangle somebody's task.
+task_write_argv=()
+set_task_write_argv() { # $1 = box key, $2 = base64 of the task
+  task_write_argv=(exec "printf %s '$2' | base64 -d > $TASK_FILE")
+}
+
+type_task_argv=()
+set_type_task_argv() { # $1 = pane, $2 = task
+  type_task_argv=(pane send-text "$1" "$2")
+}
+submit_task_argv=()
+set_submit_task_argv() { # $1 = pane
+  submit_task_argv=(pane send-keys "$1" enter)
+}
+
+# --- the plan ----------------------------------------------------------------
+n=$(printf '%s' "$members" | grep -c '[^[:space:]]' || true)
+[ "$n" -eq 1 ] && unit=member || unit=members
+# Printed only once we're past every refusal — announcing a fleet and then
+# declining to make one reads like a half-done job.
+print_header() { printf "fleet '%s' — %s %s off %s (%s)\n" "$fleet_slug" "$n" "$unit" "$base" "$base_src"; }
+
+if [ "$dry" -eq 1 ]; then
+  print_header
+  # Print the exact orchestration, then stop. This is the seam the CLI tests
+  # assert against: no herdr, no E2B, nothing created. The pane id is the one
+  # thing that can't be known in advance — it comes from herdr's own response.
+  while IFS=$'\t' read -r template branch label; do
+    [ -n "$template" ] || continue
+    printf '  member %s\n' "$label"
+    set_wt_argv "$branch" "$label"
+    printf '    herdr %s\n' "${wt_argv[*]}"
+    printf '    herdr pane run <root pane of the new workspace> %s open -t %s\n' "$BOX_CLI" "$template"
+    # The auto-start, built from the same two builders the spawn uses, so the
+    # plan can only ever be wrong about the pane id — which nothing can know yet.
+    agent_cmd=$(fleet_agent_cmd "$template")
+    if [ -n "$agent_cmd" ]; then
+      # The seeding is not a herdr call and so is not a line in this plan: the box
+      # writes the agent's first-run state itself while it provisions. Named anyway,
+      # because "what happens to this member" is what the plan is for.
+      seed_cmd=$(fleet_seed_cmd "$template")
+      if [ -n "$seed_cmd" ]; then
+        printf '    (%s is seeded by the box as it provisions — src/fleet-seed.js, over the SDK, never typed)\n' "$template"
+      fi
+      # The brief goes in over the SDK, before the agent exists, so the agent can
+      # be STARTED with it. Not a herdr call, so it is named rather than printed
+      # as one — and the base64 is not shown, because the plan would then carry
+      # the task twice in two encodings.
+      if [ -n "$fleet_task" ]; then
+        printf '    KEY=<this member> %s exec (writes the brief to %s over the SDK)\n' "$BOX_CLI" "$TASK_FILE"
+      fi
+      set_mark_argv '<that pane, once its sandbox shell is up>'
+      printf '    herdr %s\n' "${mark_argv[*]}"
+      set_agent_argv '<that pane, once its sandbox shell is up>' "$agent_cmd" "$fleet_task" "$template"
+      printf '    herdr %s\n' "${agent_argv[*]}"
+    else
+      printf '    (no agent for %s — [fleet.agents] maps it to "", so the pane stays a plain shell)\n' "$template"
+      [ -n "$fleet_task" ] && \
+        printf '    (the fleet task is not sent to %s — there is no agent to give it to)\n' "$template"
+    fi
+  done <<EOF
+$members
+EOF
+  echo "dry run — nothing was created."
+  exit 0
+fi
+
+# --- herdr preflight ---------------------------------------------------------
+# Refuse BEFORE anything is created, and name the version, so an older herdr is
+# never a half-made fleet.
+in_herdr_session() {
+  [ -n "${HERDR_ENV:-}${HERDR_SOCKET_PATH:-}${HERDR_PANE_ID:-}${HERDR_WORKSPACE_ID:-}${HERDR_PLUGIN_ID:-}${HERDR_PLUGIN_ROOT:-}" ]
+}
+
+HERDR=$(pane_herdr) || {
+  echo "$FLEET_CLI: no herdr binary found — fleet is built on herdr's worktree API (needs herdr >= $FLEET_MIN_HERDR)." >&2
+  echo "  nothing was created." >&2; exit 1
+}
+in_herdr_session || {
+  echo "$FLEET_CLI: not inside a herdr session — every member is a herdr workspace, so there has to be a session to open it in." >&2
+  echo "  start herdr (>= $FLEET_MIN_HERDR) and run this from a pane. Nothing was created." >&2; exit 1
+}
+if ! "$HERDR" worktree list 2>/dev/null | jq -e '.result.type == "worktree_list"' >/dev/null 2>&1; then
+  echo "$FLEET_CLI: this herdr has no worktree API — fleet needs herdr >= $FLEET_MIN_HERDR ('herdr worktree list' must answer)." >&2
+  echo "  \`herdr update\` to get it; the rest of the plugin keeps working meanwhile. Nothing was created." >&2
+  exit 1
+fi
+
+# --- waiting for the box, then for the agent ----------------------------------
+# Both bounded, both overridable so the CLI tests can run them at zero. A member
+# is never retried forever and never killed for being slow: past the deadline the
+# run REPORTS and leaves the box running (spec, user story 36).
+SHELL_WAIT_S="${HERDR_E2B_FLEET_SHELL_WAIT:-300}"  # box boot + sandbox attach
+AGENT_WAIT_S="${HERDR_E2B_FLEET_AGENT_WAIT:-90}"   # herdr's screen-scrape detection
+
+# The last thing e2b-box prints before it hands the pane to `e2b sandbox connect`.
+# Typing before this lands types into a spinner, so it is the gate on the whole
+# auto-start. Coupled to bin/e2b-box by string; test/cli.test.sh asserts the pair.
+BOX_SHELL_MARKER="attaching a shell in the sandbox"
+
+wait_for_output() { # $1 = pane, $2 = text to wait for, $3 = seconds — 0 once it lands
+  local out
+  out=$("$HERDR" pane wait-output "$1" --match "$2" \
+        --timeout "$(($3 * 1000))" 2>/dev/null) || return 1
+  # herdr reports a timeout in the body as well as in the exit code on some
+  # transports, so the body is checked too rather than trusted to be a match.
+  printf '%s' "$out" | jq -e '.error' >/dev/null 2>&1 && return 1
+  return 0
+}
+
+wait_for_box_shell() { # $1 = pane — 0 once the sandbox shell is there
+  wait_for_output "$1" "$BOX_SHELL_MARKER" "$SHELL_WAIT_S"
+}
+
+# EVERY typed step is confirmed before the next one is sent, and this is the reason:
+# `pane run` returns as soon as herdr accepts the text, but the text still has to
+# stream through `e2b sandbox connect` into a pty in another machine. The seeding line
+# is ~1200 characters, which takes seconds to arrive, and anything sent meanwhile is
+# interleaved INTO it — a fleet task landed in the middle of the seed command and the
+# box ran `node -say hello-world` (observed live, test-9). Sending is not arriving, so
+# each step ends in an echo that only the box can produce, and the next step waits for
+# it. `pane wait-output` is the same primitive the box-shell gate already uses.
+# (SEED_DONE_MARKER and AGENT_START_MARKER are defined with the argv builders above,
+# because the dry run prints those lines before this section is reached.)
+
+# The sandbox shell's own prompt, set by src/provision.js as
+# `PS1='[e2b:<label>] \w $ '`. While it is the last thing on screen the agent has not
+# taken the pane yet — the command has been typed and echoed, or it exited straight
+# back to a prompt. Coupled to provision.js by string; test/cli.test.sh asserts the
+# pair, the same way BOX_SHELL_MARKER is coupled to bin/e2b-box.
+BOX_PROMPT_MARKER="[e2b:"
+
+# A member is reachable in one of two ways and this waits for whichever lands first,
+# rather than for the one that cannot:
+#
+#   agent  herdr adopted a real agent in the pane. Never happens for a sandbox member
+#          (the agent is a process in the VM, and detection reads the local one), but
+#          it is what the test stub answers and what a local pane would do.
+#   ui     the agent's own TUI now owns the pane — the sandbox prompt is no longer the
+#          last thing drawn. This is the real path, and it is what makes typing safe:
+#          text sent while a shell still owns the pane would be RUN as a command.
+#
+# Sets $member_ready to which one. Bounded like every other wait here: past the
+# deadline the run reports and leaves the box alone.
+member_ready=""
+wait_for_agent() { # $1 = pane — 0 once the member can be given a task
+  local deadline=$((SECONDS + AGENT_WAIT_S)) found screen last started=0 stable=0
+  member_ready=""
+  while :; do
+    found=$("$HERDR" agent get "$1" 2>/dev/null | jq -r '.result.agent.agent // empty' 2>/dev/null)
+    [ -n "$found" ] && { member_ready=agent; return 0; }
+
+    # `pane read` answers with raw terminal text, not JSON, and only for what is
+    # currently on screen. Blank lines are dropped so a TUI that pads its footer
+    # still reads as "the agent is up".
+    screen=$("$HERDR" pane read "$1" 2>/dev/null)
+    last=$(printf '%s\n' "$screen" | grep -v '^[[:space:]]*$' | tail -1)
+
+    # Two ways to know the agent line has been reached, because the two agents leave
+    # the pane in different states. Codex keeps the scrollback, so the marker is still
+    # up there to be found. Claude Code clears the screen, which takes the marker AND
+    # the shell prompt with it — and a screen with neither on it is a screen the shell
+    # no longer owns. Either one latches; neither can latch while the seeding is still
+    # echoing, because that always leaves the prompt line on screen above it.
+    case "$screen" in *"$AGENT_START_MARKER"*) started=1 ;; esac
+    if [ "$started" -eq 0 ] && [ -n "$last" ] \
+       && case "$screen" in *"$BOX_PROMPT_MARKER"*) false ;; *) true ;; esac; then
+      started=1
+    fi
+
+    # Latched, and the agent is drawing rather than the marker or the prompt sitting
+    # there. Confirmed twice a second apart: one poll can catch a half-drawn frame.
+    if [ "$started" -eq 1 ] && [ -n "$last" ]; then
+      case "$last" in
+        *"$BOX_PROMPT_MARKER"*|*"$AGENT_START_MARKER"*) stable=0 ;;
+        *) stable=$((stable + 1)); [ "$stable" -ge 2 ] && { member_ready=ui; return 0; } ;;
+      esac
+    fi
+
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep 1
+  done
+}
+
+# Type a task into an agent's prompt and make sure it actually got there.
+#
+#   0  typed and submitted
+#   2  the text never appeared — the pane swallowed it
+#   3  the text appeared but Enter did not submit it
+#   1  herdr refused the call
+#
+# The probe is a SLICE of the task, not the whole thing: an agent's prompt wraps,
+# reflows and may syntax-colour what you type, so the only thing safe to look for
+# is a short run of characters from the start of the first line. Punctuation is
+# stripped for the same reason — a TUI is free to render quotes however it likes.
+#
+# Retried, because "too early" is the common failure and it is self-correcting:
+# grok's changelog splash eats the first attempt and is gone by the second.
+TASK_TYPE_TRIES="${HERDR_E2B_FLEET_TYPE_TRIES:-3}"
+type_task_confirmed() { # $1 = pane, $2 = task
+  local pane="$1" task="$2" probe screen i
+  # First line, first 24 characters, letters and digits only — enough to be
+  # unmistakable, short enough to survive wrapping in a narrow pane.
+  probe=$(printf '%s' "$task" | head -1 | cut -c1-24 | tr -cd '[:alnum:] ' | sed 's/  */ /g; s/^ //; s/ $//')
+  [ -n "$probe" ] || probe=$(printf '%s' "$task" | head -1 | cut -c1-12)
+
+  # WAIT FOR THE PANE TO STOP MOVING before typing a character into it.
+  #
+  # A TUI that has drawn its first frame is not yet reading input: droid keeps
+  # painting (splash, tips, status, model line) for seconds afterwards and drops
+  # whatever arrives meanwhile. `say hello-world` landed as `o-world` — the head
+  # of the string eaten, the tail kept — on every attempt (observed live, t-17
+  # and t-19), while the exact same send into the SAME pane a minute later landed
+  # perfectly. So it is not the agent and not the text; it is when we type.
+  #
+  # A fixed sleep is the wrong instrument for that: too short for droid, wasted
+  # on codex. Two identical reads a second apart means the agent has finished
+  # drawing, whoever it is — and it costs the fast ones one extra second.
+  local prev="" now settled=0 waited=0
+  while [ "$waited" -lt "$AGENT_WAIT_S" ]; do
+    now=$("$HERDR" pane read "$1" 2>/dev/null)
+    if [ -n "$now" ] && [ "$now" = "$prev" ]; then
+      settled=$((settled + 1))
+      [ "$settled" -ge 2 ] && break
+    else
+      settled=0
+    fi
+    prev="$now"
+    waited=$((waited + 1))
+    sleep 1
+  done
+
+  i=0
+  while [ "$i" -lt "$TASK_TYPE_TRIES" ]; do
+    i=$((i + 1))
+    # Clear the prompt before every attempt after the first. Retrying on top of a
+    # half-delivered line is how `say hello-world` became
+    # `o-worldsay hello-worldsay hello-world` — the retry has to REPLACE what is
+    # there, not append to it. ctrl+u is kill-line in every readline-style prompt
+    # these agents use; on an already-empty prompt it does nothing.
+    if [ "$i" -gt 1 ]; then
+      "$HERDR" pane send-keys "$pane" ctrl+u >/dev/null 2>&1 || true
+      sleep 1
+    fi
+    set_type_task_argv "$pane" "$task"
+    "$HERDR" "${type_task_argv[@]}" >/dev/null 2>&1 || return 1
+    # Two seconds, not one: the text has to cross the sandbox connection and be
+    # redrawn by the agent before the pane can be believed.
+    sleep 2
+    screen=$("$HERDR" pane read "$pane" 2>/dev/null | tr -cd '[:alnum:][:space:]' | tr -s '[:space:]' ' ')
+    case "$screen" in
+      *"$probe"*) break ;;
+      # Not there. An agent mid-splash is the usual reason, and a splash is
+      # dismissed by the keypress it just ate, so the next attempt lands.
+      *) [ "$i" -lt "$TASK_TYPE_TRIES" ] || return 2 ;;
+    esac
+  done
+
+  set_submit_task_argv "$pane"
+  "$HERDR" "${submit_task_argv[@]}" >/dev/null 2>&1 || return 1
+  # Submitted means the prompt no longer HOLDS it — the text moves up into the
+  # transcript as the agent's own echo, so the check is that the last line has
+  # stopped being the text. Given a couple of seconds: a slow TUI redraws late.
+  i=0
+  while [ "$i" -lt 5 ]; do
+    i=$((i + 1))
+    sleep 1
+    screen=$("$HERDR" pane read "$pane" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -3 \
+             | tr -cd '[:alnum:][:space:]' | tr -s '[:space:]' ' ')
+    case "$screen" in *"$probe"*) ;; *) return 0 ;; esac
+  done
+  return 3
+}
+
+# A fleet task that did not arrive. Nothing here can fail a member — the box
+# booted, which is what a member promises — so this REPORTS, says where to type
+# it by hand, and leaves everything running. Silent when there is no task.
+task_undelivered() { # $1 = why, $2 = where the task can still be typed
+  [ -n "$fleet_task" ] || return 0
+  printf '      ⚠ fleet task NOT delivered — %s. Box left running; hand it to %s yourself.\n' "$1" "$2"
+}
+
+# --- spawn -------------------------------------------------------------------
+# One member: herdr creates the worktree (unfocused, no --path so the user's
+# [worktrees] directory decides where it lands), and the box boots in the pane
+# that new workspace was born with. Ids are READ from herdr's responses, never
+# predicted.
+spawn_member() {
+  local template="$1" branch="$2" label="$3" resp err ws pane first_err
+  # Our own workspace as the source, then the repo-key form once if herdr would
+  # not take it — a pane inside a linked worktree is the case it rejects. The
+  # FIRST reason is the one reported: if the retry also fails it is usually
+  # complaining that the branch the first attempt already made now exists, which
+  # would bury the failure that actually matters.
+  if ! wt_create_try "$branch" "$label"; then
+    first_err="$wt_create_err"
+    if [ -z "${HERDR_WORKSPACE_ID:-}" ] || ! wt_create_try "$branch" "$label" cwd; then
+      printf '  ✗ %s — %s\n' "$label" "$first_err" >&2
+      return 1
+    fi
+  fi
+  resp="$wt_create_resp"
+
+  ws=$(printf '%s' "$resp" | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null)
+  pane=$(printf '%s' "$resp" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
+  # The member's checkout, which is what its box record is keyed by. Needed to
+  # address the box directly (`KEY=… e2b-box exec`) when the brief is written in.
+  local wt_path
+  wt_path=$(printf '%s' "$resp" | jq -r '.result.workspace.worktree.checkout_path // empty' 2>/dev/null)
+  if [ -z "$wt_path" ] && [ -n "$ws" ]; then
+    wt_path=$("$HERDR" workspace list 2>/dev/null \
+      | jq -r --arg w "$ws" '.result.workspaces[] | select(.workspace_id == $w) | .worktree.checkout_path // empty' 2>/dev/null)
+  fi
+  # The create response carries the root pane; asking the new workspace for its
+  # panes is the fallback for a herdr that answers without one.
+  if [ -z "$pane" ] && [ -n "$ws" ]; then
+    pane=$("$HERDR" pane list --workspace "$ws" 2>/dev/null | jq -r '.result.panes[0].pane_id // empty' 2>/dev/null)
+  fi
+  [ -n "$pane" ] || {
+    printf '  ✗ %s — worktree created on %s, but herdr reported no pane to boot its box in\n' "$label" "$branch" >&2
+    return 1
+  }
+
+  # The box goes in that ordinary pane — not the plugin's zoomed entrypoint — so
+  # exiting the sandbox shell drops you at a prompt in the member's checkout
+  # rather than in plugin-owned furniture.
+  resp=$("$HERDR" pane run "$pane" "$BOX_CLI" open -t "$template" 2>/dev/null) || {
+    printf '  ✗ %s — worktree created on %s, but the box did not start in pane %s\n' "$label" "$branch" "$pane" >&2
+    return 1
+  }
+  # Same check as the worktree call: herdr can report a refusal in the response
+  # while still exiting 0, and a silent ✗ there would read as a booting box.
+  err=$(printf '%s' "$resp" | jq -r '.error.message // empty' 2>/dev/null)
+  [ -z "$err" ] || {
+    printf '  ✗ %s — worktree created on %s, but herdr refused to run the box: %s\n' "$label" "$branch" "$err" >&2
+    return 1
+  }
+  printf '  ✓ %s — %s → pane %s, box booting from %s\n' "$label" "$branch" "$pane" "$template"
+
+  # --- the member's agent ------------------------------------------------------
+  # Everything below is best-effort ON TOP of a member that is already up: the box
+  # booted, which is what the member promised, so nothing here can turn a ✓ into a
+  # ✗ and nothing here ever kills or retries. It only reports.
+  local cmd; cmd=$(fleet_agent_cmd "$template")
+  # The control arm. Not an error, not a warning — the user asked for a shell.
+  # A fleet task is skipped for it with a note, for the same reason: an arm with
+  # no agent is a choice, so it must not read as something that went wrong.
+  [ -n "$cmd" ] || {
+    printf '      ↳ no agent for %s — plain shell ([fleet.agents] maps it to "")\n' "$template"
+    [ -n "$fleet_task" ] && \
+      printf '      ↳ fleet task skipped for %s — there is no agent to give it to\n' "$template"
+    return 0
+  }
+
+  wait_for_box_shell "$pane" || {
+    printf '      ⚠ %s not started — the box was still booting after %ss. Box left running; type `%s` in pane %s.\n' \
+      "$cmd" "$SHELL_WAIT_S" "$cmd" "$pane"
+    task_undelivered "the box was still booting after ${SHELL_WAIT_S}s" "pane $pane"
+    return 0
+  }
+
+  # The shell is up and the agent has not been typed yet — the one moment where the
+  # agent's first-run state can be written before it is read. Best-effort like
+  # everything else here: a member that could not be seeded still gets its agent
+  # (it will just ask its questions), so this never returns non-zero.
+  # No seeding step here. The agent's first-run state is written by the SDK while the
+  # box is provisioned (src/provision.js) — it is far too long to type, and a box that
+  # is seeded before its shell exists cannot race the agent that reads it.
+
+  # The brief, written into the box BEFORE the agent is started, so the agent can
+  # be launched already holding it. Over the SDK (`e2b-box exec`), never through
+  # the pane: no length limit, no quoting, and nothing to race.
+  #
+  # A task that could not be written is reported and the agent still starts — a
+  # member with no brief is a ready box, which is worth more than no member.
+  local task_ready="" bkey
+  if [ -n "$fleet_task" ] && [ -n "$wt_path" ]; then
+    bkey=$(box_key "$wt_path")
+    set_task_write_argv "$bkey" "$(printf '%s' "$fleet_task" | base64 | tr -d '\n')"
+    if KEY="$bkey" "$BOX_CLI" "${task_write_argv[@]}" >/dev/null 2>&1; then
+      task_ready=1
+    else
+      task_undelivered "the brief could not be written into the box" "pane $pane"
+    fi
+  elif [ -n "$fleet_task" ]; then
+    task_undelivered "this member's checkout could not be resolved, so its box could not be addressed" "pane $pane"
+  fi
+
+  # The marker, before the agent, and waited for: it is what tells readiness the agent
+  # line is the next thing that can appear.
+  set_mark_argv "$pane"
+  if "$HERDR" "${mark_argv[@]}" >/dev/null 2>&1; then
+    wait_for_output "$pane" "$AGENT_START_MARKER" "$AGENT_WAIT_S" || true
+  fi
+
+  set_agent_argv "$pane" "$cmd" "$task_ready" "$template"
+  "$HERDR" "${agent_argv[@]}" >/dev/null 2>&1 || {
+    printf '      ⚠ %s not started — herdr could not type it into pane %s. Box left running.\n' "$cmd" "$pane"
+    task_undelivered "its agent could not be started" "pane $pane"
+    return 0
+  }
+  wait_for_agent "$pane" || {
+    printf '      ⚠ `%s` was sent but pane %s still showed the sandbox shell after %ss. Box left running — drive it by hand.\n' \
+      "$cmd" "$pane" "$AGENT_WAIT_S"
+    task_undelivered "no agent took pane $pane within ${AGENT_WAIT_S}s" "pane $pane"
+    return 0
+  }
+  # The rename decides the address: once it lands, the agent is `<slug>-<template>`
+  # everywhere, and the pane id is only the fallback for a rename that didn't. Only
+  # an ADOPTED agent has a name to rename — a sandbox member is a pane, so it is
+  # addressed as one and the rename is not attempted (and not reported as a failure).
+  local target="$pane"
+  if [ "$member_ready" = agent ]; then
+    set_rename_argv "$pane" "$label"
+    if resp=$("$HERDR" "${rename_argv[@]}" 2>/dev/null) \
+       && ! printf '%s' "$resp" | jq -e '.error' >/dev/null 2>&1; then
+      target="$label"
+      printf '      ↳ agent up in pane %s, named %s\n' "$pane" "$label"
+    else
+      printf '      ↳ agent up in pane %s (not renamed to %s — addressing it by pane)\n' "$pane" "$label"
+    fi
+  else
+    printf '      ↳ %s up in pane %s\n' "$template" "$pane"
+  fi
+
+  # --- the fleet task -----------------------------------------------------------
+  # Per member and never barriered: this member's agent settled, so this member
+  # gets the task now, whatever the others are still doing.
+  [ -n "$fleet_task" ] || return 0
+  local perr="" prc
+  if [ "$member_ready" = agent ]; then
+    set_prompt_argv "$target" "$fleet_task"
+    resp=$("$HERDR" "${prompt_argv[@]}" 2>&1); prc=$?
+    perr=$(printf '%s' "$resp" | jq -r '.error.message // empty' 2>/dev/null)
+    # A non-zero exit with nothing JSON to quote still has to say something, or an
+    # undelivered task would be reported as a blank reason.
+    [ "$prc" -eq 0 ] || [ -n "$perr" ] || \
+      perr=$(printf '%s' "${resp:-herdr exited $prc delivering the task}" | tr '\n' ' ' | sed 's/  */ /g; s/ *$//')
+  elif [ -n "$task_ready" ]; then
+    # Nothing to do. The agent was STARTED with the brief — it is already working
+    # on it, and there is no keystroke, no prompt and no timing involved. The
+    # failure paths that used to live here (swallowed text, unsubmitted Enter)
+    # cannot happen to an argument.
+    :
+  else
+    # The brief never made it into the box; the agent came up without it. Already
+    # reported where it failed, so this only has to not claim success.
+    perr="the agent started without it"
+  fi
+  if [ -z "$perr" ]; then
+    printf '      ↳ fleet task delivered to %s\n' "$target"
+  else
+    task_undelivered "$perr" "$target"
+  fi
+}
+
+# Provision every member and report. Factored out of the main line so it can run
+# in the foreground for a scripted caller (which wants the summary and the exit
+# code) and detached behind the dashboard for a human (who wants to watch).
+# Returns 0 only if every member came up.
+run_members() {
+  # All members at once, so three boxes are ready in roughly the time one takes.
+  #
+  # Background jobs can't hand a value back to the shell that started them, so each
+  # member writes ONE result file named by its position in the plan: its exit code
+  # on line 1, everything it printed after that. A per-member file (rather than a
+  # shared fifo) needs no reader loop, can't interleave two half-written lines, and
+  # lets the report come out in plan order however the finishing order fell.
+  local resdir idx template branch label up failed i mrc body rc
+  resdir=$(mktemp -d) || { echo "$FLEET_CLI: no temp dir to collect the member reports in" >&2; return 1; }
+  trap 'rm -rf "$resdir"' EXIT
+
+  idx=0
+  while IFS=$'\t' read -r template branch label; do
+    [ -n "$template" ] || continue
+    idx=$((idx + 1))
+    (
+      out=$(spawn_member "$template" "$branch" "$label" 2>&1); mrc=$?
+      printf '%s\n%s\n' "$mrc" "$out" >"$resdir/$idx"
+    ) &
+  done <<EOF
+$members
+EOF
+  wait
+
+  # No rollback (docs/adr/0001, and the spec's batch semantics): a member that
+  # failed keeps its branch and its worktree. Reported, never undone.
+  up=0; failed=0; i=0
+  while [ "$i" -lt "$idx" ]; do
+    i=$((i + 1))
+    if [ -r "$resdir/$i" ]; then
+      mrc=$(head -1 "$resdir/$i"); body=$(tail -n +2 "$resdir/$i")
+    else
+      mrc=1; body="  ✗ member $i — its provisioning job left no report"
+    fi
+    case "$mrc" in
+      0) up=$((up + 1)); printf '%s\n' "$body" ;;
+      *) failed=$((failed + 1)); printf '%s\n' "$body" >&2 ;;
+    esac
+  done
+
+  printf '%s/%s up\n' "$up" "$idx"
+  rc=0
+  [ "$failed" -eq 0 ] || {
+    rc=1
+    printf '  %s member(s) failed — their branches and worktrees were kept, nothing was rolled back.\n' "$failed" >&2
+  }
+
+  rm -rf "$resdir"; trap - EXIT
+  return "$rc"
+}
+
+print_header
+
+# The pane you launched from becomes the board — BEFORE the members are away, not
+# after. Provisioning a roster takes minutes, and a pane that prints one header
+# and then goes silent for all of them is the worst place to spend those minutes:
+# every member's own workspace is already drawing its box's spinner, and the board
+# is where all of them are visible at once. So the work goes behind the board and
+# each member appears on it as its record lands (the board re-reads every 2s).
+#
+# Set by the pickers having run (or by the legacy `--dashboard`). A caller that
+# named everything up front — `create`, a script, CI — wants the summary and the
+# exit code instead, so it keeps the foreground run below.
+if [ "$dash" -eq 1 ]; then
+  fleet_log="$STATE_DIR/fleets/$fleet_slug.log"
+  mkdir -p "$STATE_DIR/fleets" 2>/dev/null || true
+  printf '  provisioning behind the board — members appear as their boxes come up\n'
+  printf '  log: %s\n' "$fleet_log"
+  # Detached from this shell's terminal, and deaf to the HUP that arrives when the
+  # board is closed: killing the board must not orphan a half-created member.
+  # Nothing here writes to the pane — the board owns it from the exec below.
+  (
+    trap '' HUP
+    printf -- '--- %s: fleet %s ---\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$fleet_slug"
+    run_members
+    printf -- '--- done (rc=%s) ---\n' "$?"
+  ) >>"$fleet_log" 2>&1 &
+  disown 2>/dev/null || true
+  exec "$DASH_CLI"
+fi
+
+run_members
+exit "$?"

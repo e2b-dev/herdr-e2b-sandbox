@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# e2b-dash — launch the herdr-e2b dashboard TUI (Ratatui). Resolves the built
+# binary, seeds the default theme from [dashboard].theme, and execs it. Any args
+# are forwarded (e.g. a boxes dir to point at sample data).
+set -uo pipefail
+# Resolve through the ~/.local/bin symlink to the real script dir (BSD readlink
+# has no -f, so walk the links manually).
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  ldir="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [ "${SOURCE#/}" = "$SOURCE" ] && SOURCE="$ldir/$SOURCE"
+done
+DIR="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+source "$DIR/lib/paths.sh"
+
+# Answered here rather than in the TUI, and BEFORE the built-binary and TTY
+# checks below, because both of those are things you might be asking help about:
+# on a machine that never ran `cargo build`, or in a pipe, `--help` still has to
+# work. Without this the binary read `--help` as the directory to load boxes from.
+case "${1:-}" in
+  -h|--help|help)
+    cat <<'USAGE'
+e2b-dash — the live board of every box this plugin tracks
+
+usage
+  e2b-dash [BOXES_DIR]        the board (needs an interactive terminal)
+  e2b-box dash                the same board, through the one CLI
+  e2b-box dash toggle         close it if it's open — the one to bind a key to
+
+  BOXES_DIR                   read records from somewhere else (sample data)
+
+options
+  -h, --help · -V, --version  print this · print the plugin version
+
+environment
+  E2B_DASH_THEME              starting theme; 'T' inside the board still wins
+  HERDR_PLUGIN_STATE_DIR      where box records live
+USAGE
+    exit 0 ;;
+  -V|--version) printf 'herdr-e2b %s\n' "$(plugin_version)"; exit 0 ;;
+esac
+
+BIN="$PLUGIN_DIR/tui/target/release/e2b-dash"
+if [ ! -x "$BIN" ]; then
+  echo "herdr-e2b: dashboard not built." >&2
+  echo "  build it:  (cd '$PLUGIN_DIR/tui' && cargo build --release)" >&2
+  echo "  (needs the Rust toolchain — https://rustup.rs)" >&2
+  exit 1
+fi
+
+# The dashboard is a full-screen TUI — it needs a real terminal. With no TTY the
+# Ratatui backend aborts with a raw panic/backtrace; give a clean message instead.
+if [ ! -t 0 ] || [ ! -t 1 ]; then
+  # Named for how it was invoked: reached as `e2b-box dash` (the one CLI) or
+  # directly (herdr's pane entrypoints). Telling someone to run a command they
+  # did not type is how a tool loses their trust.
+  echo "herdr-e2b: the dashboard needs an interactive terminal — run '${HERDR_E2B_DASH_CLI:-e2b-dash}' in a shell or a herdr pane." >&2
+  exit 1
+fi
+
+# Seed the default theme from config. A saved 'T' choice inside the TUI still
+# wins; the env var is only the starting default. Needs any node (toml only).
+if [ -z "${E2B_DASH_THEME:-}" ] && command -v node >/dev/null 2>&1; then
+  t="$(node "$PLUGIN_DIR/src/resolve-theme.js" 2>/dev/null || true)"
+  [ -n "$t" ] && export E2B_DASH_THEME="$t"
+fi
+
+# Resolve the cluster the same way every other verb does and hand it to the TUI
+# in E2B_DOMAIN, so the header can show which E2B a new box would land on. Doing
+# it here (not in Rust) keeps ONE implementation of the precedence rules.
+ensure_e2b_path
+ensure_e2b_env
+
+# ...and let the TUI re-ask while it is running, so switching regions with the
+# dashboard open updates the header instead of showing the cluster it launched
+# with. Same resolver, so still one implementation.
+export E2B_DASH_DOMAIN_CMD="$PLUGIN_DIR/bin/e2b-domain"
+
+exec "$BIN" "$@"

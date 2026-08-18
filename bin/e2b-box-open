@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# e2b-box-open — the `open` keybinding/action: put the sandbox (template chooser
+# first, then its shell) in the pane you pressed it in, rather than taking over
+# the tab.
+#
+# Why not just run e2b-box here: a herdr ACTION has no terminal at all — its
+# output goes to the plugin command log — so it can neither host a shell nor ask
+# which template to boot. And the plugin's `box` pane entrypoint is `zoomed`,
+# which covers the whole tab. Same reasoning (and the same pane logic) as
+# e2b-dash-toggle: run in the focused pane when that pane is an idle shell, else
+# open beside it so whatever you were watching stays visible.
+set -uo pipefail
+# Resolve through the ~/.local/bin symlink to the real script dir so we can find
+# lib/*.sh (BSD readlink has no -f, so walk the links manually).
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  ldir="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [ "${SOURCE#/}" = "$SOURCE" ] && SOURCE="$ldir/$SOURCE"
+done
+DIR="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+source "$DIR/lib/paths.sh"
+source "$DIR/lib/pane.sh"
+
+PANE_TITLE="e2b"   # matches the `box` [[panes]] title in herdr-plugin.toml
+
+HERDR=$(pane_herdr) || { echo "e2b-box-open: can't find the herdr binary" >&2; exit 1; }
+NODE=$(pane_node) || { echo "e2b-box-open: can't find node — set HERDR_E2B_NODE=/path/to/node" >&2; exit 1; }
+
+read -r focus_pane _titled_pane _tab_list <<EOF
+$(pane_query "$HERDR" "$NODE" "$PANE_TITLE")
+EOF
+[ "${focus_pane:--}" != "-" ] || { echo "e2b-box-open: no focused pane" >&2; exit 1; }
+
+# Idle shell? Then the pane is ours: the chooser and the sandbox shell fill it
+# exactly, and exiting the shell hands the pane back.
+if pane_is_idle "$HERDR" "$NODE" "$focus_pane"; then
+  "$HERDR" pane run "$focus_pane" e2b-box open >/dev/null 2>&1 && exit 0
+  echo "e2b-box-open: couldn't start the sandbox in this pane" >&2
+fi
+
+# Busy pane (agent, dev server, an attached sandbox shell): never type into it.
+# Open beside it instead. The pane entrypoint carries its own cwd context, so the
+# box still belongs to the worktree you pressed the key in.
+"$HERDR" plugin pane open --plugin herdr-e2b --entrypoint box \
+  --placement split --target-pane "$focus_pane" --direction right --focus >/dev/null 2>&1 \
+  || { echo "e2b-box-open: couldn't open the sandbox pane" >&2; exit 1; }

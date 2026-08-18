@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>The loop you press</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #f5f5f5; }
+    svg { display: block; width: 1000px; height: 912px; }
+  </style>
+</head>
+<body>
+  <svg viewBox="0 0 1000 912" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="lifecycle-title lifecycle-desc">
+    <title id="lifecycle-title">The loop you press</title>
+    <desc id="lifecycle-desc">Pressing the keybind reconnects a box that is already up, or else asks which template to boot from and creates the sandbox; either path lands in the box's shell, and on exit offers to pull the changes down, leave the box running, or kill it.</desc>
+    <defs>
+      <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+      <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+    </defs>
+
+    <rect x="0" y="0" width="1000" height="912" fill="#f5f5f5"/>
+
+    <!-- arrows first -->
+    <line x1="500" y1="88" x2="500" y2="114" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <line x1="500" y1="232" x2="500" y2="266" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <line x1="500" y1="344" x2="500" y2="370" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <line x1="500" y1="456" x2="500" y2="494" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+
+    <!-- yes: the box is already up — straight past the chooser and the boot -->
+    <path d="M 610,176 H 792 Q 800,176 800,184 V 496 Q 800,504 792,504 H 512"
+          fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+    <line x1="500" y1="512" x2="500" y2="530" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+    <line x1="500" y1="616" x2="500" y2="650" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+    <path d="M 404,712 H 228 Q 220,712 220,720 V 818" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <line x1="500" y1="768" x2="500" y2="818" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 596,712 H 748 Q 756,712 756,720 V 818" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+    <!-- arrow labels -->
+    <rect x="632" y="154" width="40" height="14" rx="2" fill="#f5f5f5"/>
+    <text x="652" y="164" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+    <rect x="512" y="238" width="36" height="14" rx="2" fill="#f5f5f5"/>
+    <text x="530" y="248" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">NO</text>
+    <rect x="512" y="464" width="60" height="14" rx="2" fill="#f5f5f5"/>
+    <text x="542" y="474" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">READY</text>
+    <rect x="512" y="622" width="52" height="14" rx="2" fill="#f5f5f5"/>
+    <text x="538" y="632" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">EXIT</text>
+    <rect x="292" y="690" width="36" height="14" rx="2" fill="#f5f5f5"/>
+    <text x="310" y="700" fill="#7a8399" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">[p]</text>
+    <rect x="512" y="782" width="36" height="14" rx="2" fill="#f5f5f5"/>
+    <text x="530" y="792" fill="#7a8399" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">[L]</text>
+    <rect x="668" y="690" width="36" height="14" rx="2" fill="#f5f5f5"/>
+    <text x="686" y="700" fill="#7a8399" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">[k]</text>
+
+    <!-- start (oval) -->
+    <rect x="360" y="32" width="280" height="56" rx="28" fill="#f5f5f5"/>
+    <rect x="360" y="32" width="280" height="56" rx="28" fill="rgba(79,93,117,0.10)" stroke="#7a8399" stroke-width="1"/>
+    <text x="500" y="56" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">prefix+shift+e</text>
+    <text x="500" y="74" fill="#7a8399" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">or just run e2b-box</text>
+
+    <!-- decision: does a box have to be built at all? -->
+    <path d="M 500,120 L 610,176 L 500,232 L 390,176 Z" fill="#f5f5f5"/>
+    <path d="M 500,120 L 610,176 L 500,232 L 390,176 Z" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+    <text x="500" y="174" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">box already up?</text>
+    <text x="500" y="192" fill="#7a8399" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">this checkout's</text>
+
+    <!-- no → step: chooser -->
+    <rect x="340" y="272" width="320" height="72" rx="6" fill="#f5f5f5"/>
+    <rect x="340" y="272" width="320" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+    <rect x="348" y="278" width="52" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+    <text x="374" y="287" fill="rgba(45,49,66,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">CHOOSE</text>
+    <text x="500" y="314" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Which template?</text>
+    <text x="500" y="334" fill="#7a8399" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">unless a flag or a rule already said</text>
+
+    <!-- no → step: provision -->
+    <rect x="340" y="376" width="320" height="80" rx="6" fill="#f5f5f5"/>
+    <rect x="340" y="376" width="320" height="80" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+    <rect x="348" y="382" width="40" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+    <text x="368" y="391" fill="rgba(45,49,66,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">BOOT</text>
+    <text x="500" y="420" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Create the sandbox · upload · git init</text>
+    <text x="500" y="440" fill="#7a8399" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">a snapshot of the live tree</text>
+
+    <!-- merge: both paths arrive at the same shell -->
+    <circle cx="500" cy="504" r="4" fill="#2d3142"/>
+
+    <!-- step: the shell (focal) -->
+    <rect x="340" y="536" width="320" height="80" rx="6" fill="#f5f5f5"/>
+    <rect x="340" y="536" width="320" height="80" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+    <rect x="348" y="542" width="44" height="12" rx="2" fill="transparent" stroke="rgba(235,108,54,0.40)" stroke-width="0.8"/>
+    <text x="370" y="551" fill="#eb6c36" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SHELL</text>
+    <text x="500" y="580" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">e2b sandbox connect &lt;id&gt;</text>
+    <text x="500" y="600" fill="#7a8399" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">you are in the box</text>
+
+    <!-- decision: leaving the shell -->
+    <path d="M 500,656 L 596,712 L 500,768 L 404,712 Z" fill="#f5f5f5"/>
+    <path d="M 500,656 L 596,712 L 500,768 L 404,712 Z" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+    <text x="500" y="716" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">on close</text>
+
+    <!-- outcomes -->
+    <rect x="96" y="824" width="248" height="56" rx="28" fill="#f5f5f5"/>
+    <rect x="96" y="824" width="248" height="56" rx="28" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+    <text x="220" y="857" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">pull the changes down</text>
+
+    <rect x="400" y="824" width="200" height="56" rx="28" fill="#f5f5f5"/>
+    <rect x="400" y="824" width="200" height="56" rx="28" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+    <text x="500" y="857" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">leave it running</text>
+
+    <rect x="656" y="824" width="200" height="56" rx="28" fill="#f5f5f5"/>
+    <rect x="656" y="824" width="200" height="56" rx="28" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+    <text x="756" y="857" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">kill the box</text>
+
+    <!-- editorial aside: the teardown nobody presses -->
+    <text x="40" y="404" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', serif">removing the worktree kills its box</text>
+    <path d="M 252 412 Q 296 414 330 418" fill="none" stroke="rgba(45,49,66,0.40)" stroke-width="1" stroke-dasharray="4,3"/>
+    <circle cx="336" cy="418" r="2" fill="#2d3142"/>
+  </svg>
+</body>
+</html>

@@ -1,0 +1,82 @@
+name: Release
+
+# Tag a version to publish it: `git tag vX.Y.Z && git push origin main --tags`.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the GitHub Release + upload assets
+
+jobs:
+  release:
+    # macOS host: tui/build-prebuilt.sh needs `lipo` for the darwin universal
+    # binary, and zig cross-compiles both linux-gnu targets from here.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm test
+
+      - name: Verify tag matches package.json and herdr-plugin.toml versions
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(jq -r .version package.json)
+          man=$(grep -E '^version' herdr-plugin.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "tag=$tag  package.json=$pkg  herdr-plugin.toml=$man"
+          [ "$tag" = "$pkg" ] && [ "$tag" = "$man" ] \
+            || { echo "::error::tag $GITHUB_REF_NAME does not match versions ($pkg / $man)"; exit 1; }
+
+      - name: Build release notes from CHANGELOG
+        run: |
+          bash scripts/changelog-notes.sh "${GITHUB_REF_NAME#v}" > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "::error::no CHANGELOG section for ${GITHUB_REF_NAME#v}"; exit 1
+          fi
+          cat RELEASE_NOTES.md
+
+      # Rust and lipo are preinstalled on the macOS runner; the build script adds
+      # its own rustup targets.
+      - name: Install the cross-compile toolchain
+        run: brew install zig cargo-zigbuild
+
+      # Same recipe local dev runs, so CI and `tui/build-prebuilt.sh` cannot drift.
+      # The committed binaries are wiped first: the script skips the Linux targets
+      # in silence when the toolchain is missing, and this turns that into a hard
+      # failure below instead of a stale blob sneaking into the release.
+      - name: Build dashboard binaries from this tag's source
+        run: |
+          rm -f tui/prebuilt/*
+          bash tui/build-prebuilt.sh
+
+      - name: Verify all three binaries were built
+        run: |
+          status=0
+          for f in e2b-dash-darwin-universal e2b-dash-linux-x64 e2b-dash-linux-arm64; do
+            if [ -s "tui/prebuilt/$f" ]; then
+              file "tui/prebuilt/$f"
+            else
+              echo "::error::tui/build-prebuilt.sh did not produce $f"; status=1
+            fi
+          done
+          [ "$status" -eq 0 ] || exit 1
+          file tui/prebuilt/e2b-dash-darwin-universal | grep -q '2 architectures' \
+            || { echo "::error::darwin binary is not a universal (lipo) binary"; exit 1; }
+
+      - name: Publish GitHub Release (with dashboard binaries built above)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # A SemVer pre-release tag (v0.1.2-rc1) must not become "Latest" and
+          # displace the real release that install.sh resolves against.
+          pre=""
+          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" $pre \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file RELEASE_NOTES.md \
+            tui/prebuilt/e2b-dash-darwin-universal \
+            tui/prebuilt/e2b-dash-linux-x64 \
+            tui/prebuilt/e2b-dash-linux-arm64

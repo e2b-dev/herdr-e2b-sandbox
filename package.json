@@ -1,0 +1,35 @@
+{
+  "name": "herdr-e2b",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "herdr plugin: mirror a git worktree into an E2B sandbox",
+  "keywords": [
+    "herdr",
+    "herdr-plugin",
+    "e2b",
+    "sandbox",
+    "git-worktree",
+    "cloud-dev"
+  ],
+  "author": "Tomas Varga",
+  "license": "MIT",
+  "homepage": "https://github.com/tomasvarga/herdr-e2b#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tomasvarga/herdr-e2b.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tomasvarga/herdr-e2b/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js && bash test/cli.test.sh"
+  },
+  "dependencies": {
+    "e2b": "^2.32.0",
+    "@iarna/toml": "^2.2.5"
+  }
+}

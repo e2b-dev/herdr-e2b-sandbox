@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Fleet and bench</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0c1117; }
+    svg { display: block; width: 1000px; height: 624px; }
+  </style>
+</head>
+<body>
+  <svg viewBox="0 8 1000 624" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fleet-dark-title fleet-dark-desc">
+    <title id="fleet-dark-title">One task, several agents, one grade</title>
+    <desc id="fleet-dark-desc">e2b-fleet fans one checkout out into a worktree, branch and sandbox per template, hands the same task to each template's agent, and e2b-bench then runs one held-out check inside every box to produce a verdict per member.</desc>
+    <defs>
+      <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bfc0c0"/></marker>
+      <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#f08a59"/></marker>
+    </defs>
+
+    <rect x="0" y="0" width="1000" height="640" fill="#0c1117"/>
+
+    <!-- zone: the members -->
+    <rect x="48" y="280" width="904" height="176" rx="8" fill="rgba(245,245,245,0.03)" stroke="rgba(245,245,245,0.10)" stroke-width="0.8"/>
+    <rect x="64" y="284" width="128" height="12" rx="2" fill="#0c1117"/>
+    <text x="128" y="293" fill="rgba(245,245,245,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">ONE BOX PER TEMPLATE</text>
+
+    <!-- arrows first -->
+    <line x1="500" y1="96" x2="500" y2="146" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+    <path d="M 410,232 V 256 Q 410,264 402,264 H 216 Q 208,264 208,272 V 314" fill="none" stroke="#f08a59" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+    <line x1="500" y1="232" x2="500" y2="314" stroke="#f08a59" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+    <path d="M 590,232 V 256 Q 590,264 598,264 H 784 Q 792,264 792,272 V 314" fill="none" stroke="#f08a59" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+
+    <path d="M 208,432 V 464 Q 208,472 216,472 H 402 Q 410,472 410,480 V 506" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <line x1="500" y1="432" x2="500" y2="506" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 792,432 V 464 Q 792,472 784,472 H 598 Q 590,472 590,480 V 506" fill="none" stroke="#bfc0c0" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+    <!-- arrow labels -->
+    <rect x="404" y="240" width="80" height="14" rx="2" fill="#0c1117"/>
+    <text x="444" y="250" fill="#8e98ac" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">SAME TASK</text>
+
+    <!-- node: checkout -->
+    <rect x="384" y="32" width="232" height="64" rx="6" fill="#0c1117"/>
+    <rect x="384" y="32" width="232" height="64" rx="6" fill="rgba(191,192,192,0.10)" stroke="#8e98ac" stroke-width="1"/>
+    <rect x="392" y="38" width="36" height="12" rx="2" fill="transparent" stroke="rgba(142,152,172,0.40)" stroke-width="0.8"/>
+    <text x="410" y="47" fill="#8e98ac" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">BASE</text>
+    <text x="500" y="70" fill="#f5f5f5" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Your checkout</text>
+    <text x="500" y="86" fill="#8e98ac" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">HEAD · any branch</text>
+
+    <!-- node: e2b-fleet (focal) -->
+    <rect x="320" y="152" width="360" height="80" rx="6" fill="#0c1117"/>
+    <rect x="320" y="152" width="360" height="80" rx="6" fill="rgba(240,138,89,0.10)" stroke="#f08a59" stroke-width="1"/>
+    <rect x="328" y="158" width="32" height="12" rx="2" fill="transparent" stroke="rgba(240,138,89,0.50)" stroke-width="0.8"/>
+    <text x="344" y="167" fill="#f08a59" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">FAN</text>
+    <text x="500" y="196" fill="#f5f5f5" font-size="12" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">e2b-fleet login-fix --all</text>
+    <text x="500" y="216" fill="#bfc0c0" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">--task "fix the login redirect loop"</text>
+
+    <!-- member: claude -->
+    <rect x="80" y="320" width="256" height="112" rx="6" fill="#0c1117"/>
+    <rect x="80" y="320" width="256" height="112" rx="6" fill="#151b23" stroke="#f5f5f5" stroke-width="1"/>
+    <rect x="88" y="326" width="52" height="12" rx="2" fill="transparent" stroke="rgba(245,245,245,0.40)" stroke-width="0.8"/>
+    <text x="114" y="335" fill="rgba(245,245,245,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">MEMBER</text>
+    <text x="208" y="372" fill="#f5f5f5" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Claude Code</text>
+    <text x="208" y="394" fill="#bfc0c0" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">e2b/login-fix-claude-3f2a</text>
+    <text x="208" y="412" fill="#8e98ac" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">ANTHROPIC_API_KEY</text>
+
+    <!-- member: codex -->
+    <rect x="372" y="320" width="256" height="112" rx="6" fill="#0c1117"/>
+    <rect x="372" y="320" width="256" height="112" rx="6" fill="#151b23" stroke="#f5f5f5" stroke-width="1"/>
+    <rect x="380" y="326" width="52" height="12" rx="2" fill="transparent" stroke="rgba(245,245,245,0.40)" stroke-width="0.8"/>
+    <text x="406" y="335" fill="rgba(245,245,245,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">MEMBER</text>
+    <text x="500" y="372" fill="#f5f5f5" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Codex</text>
+    <text x="500" y="394" fill="#bfc0c0" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">e2b/login-fix-codex-91bd</text>
+    <text x="500" y="412" fill="#8e98ac" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">OPENAI_API_KEY</text>
+
+    <!-- member: grok -->
+    <rect x="664" y="320" width="256" height="112" rx="6" fill="#0c1117"/>
+    <rect x="664" y="320" width="256" height="112" rx="6" fill="#151b23" stroke="#f5f5f5" stroke-width="1"/>
+    <rect x="672" y="326" width="52" height="12" rx="2" fill="transparent" stroke="rgba(245,245,245,0.40)" stroke-width="0.8"/>
+    <text x="698" y="335" fill="rgba(245,245,245,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">MEMBER</text>
+    <text x="792" y="372" fill="#f5f5f5" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Grok</text>
+    <text x="792" y="394" fill="#bfc0c0" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">e2b/login-fix-grok-c07e</text>
+    <text x="792" y="412" fill="#8e98ac" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">XAI_API_KEY</text>
+
+    <!-- node: e2b-bench (focal) -->
+    <rect x="320" y="512" width="360" height="88" rx="6" fill="#0c1117"/>
+    <rect x="320" y="512" width="360" height="88" rx="6" fill="rgba(240,138,89,0.10)" stroke="#f08a59" stroke-width="1"/>
+    <rect x="328" y="518" width="44" height="12" rx="2" fill="transparent" stroke="rgba(240,138,89,0.50)" stroke-width="0.8"/>
+    <text x="350" y="527" fill="#f08a59" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">GRADE</text>
+    <text x="500" y="556" fill="#f5f5f5" font-size="12" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">e2b-bench login-fix --grade 'npm test'</text>
+    <text x="500" y="576" fill="#bfc0c0" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">one held-out check per box</text>
+    <text x="500" y="592" fill="#8e98ac" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">verdict = its exit code · pass / fail / error</text>
+  </svg>
+</body>
+</html>

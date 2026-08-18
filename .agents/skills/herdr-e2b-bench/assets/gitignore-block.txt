@@ -1,0 +1,9 @@
+
+# the bench measurement apparatus (see bench/README.md) — committing any of it
+# would put it in every fleet member's worktree, which is the one place it must
+# never be: grade.sh is the held-out test, and knowing which axes are measured is
+# itself a way to game them. judged/ holds pulled diffs and the blind mapping.
+/bench/grade.sh
+/bench/usage.sh
+/bench/judge.sh
+/bench/judged/

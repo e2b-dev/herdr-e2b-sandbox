@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Print the E2B cluster this plugin would use right now, or nothing if it can't
+# be resolved. One line, no key — safe to call repeatedly and to log.
+#
+# The dashboard polls this so a region switch shows up while it is open. It goes
+# through resolve-env.js rather than reading any file itself, so the precedence
+# (env / plugin config / `e2b` CLI login) has exactly one implementation.
+set -uo pipefail
+# Resolve through a ~/.local/bin symlink to the real script dir (BSD readlink
+# has no -f, so walk the links manually) — same dance as e2b-dash.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  ldir="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [ "${SOURCE#/}" = "$SOURCE" ] && SOURCE="$ldir/$SOURCE"
+done
+DIR="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+source "$DIR/lib/paths.sh"
+
+node_bin=$(e2b_node 2>/dev/null || command -v node 2>/dev/null || true)
+[ -n "$node_bin" ] || exit 0
+
+"$node_bin" "$PLUGIN_DIR/src/resolve-env.js" 2>/dev/null \
+  | sed -n 's/^E2B_DOMAIN=//p'

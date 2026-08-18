@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Delegate one worktree</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #f5f5f5; }
+    svg { display: block; width: 1000px; height: 296px; }
+  </style>
+</head>
+<body>
+  <svg viewBox="0 72 1000 296" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="delegate-title delegate-desc">
+    <title id="delegate-title">Delegate one worktree to a sandbox</title>
+    <desc id="delegate-desc">A local checkout is snapshot-uploaded by e2b-box open into an E2B sandbox where a coding agent works on it, and e2b-box pull brings the changed files back down.</desc>
+    <defs>
+      <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+      <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+    </defs>
+
+    <rect x="0" y="0" width="1000" height="400" fill="#f5f5f5"/>
+
+    <!-- zone: the cloud side -->
+    <rect x="456" y="104" width="488" height="208" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+    <rect x="472" y="108" width="80" height="12" rx="2" fill="#f5f5f5"/>
+    <text x="512" y="117" fill="rgba(45,49,66,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">E2B CLOUD</text>
+
+    <!-- arrows first -->
+    <line x1="272" y1="208" x2="490" y2="208" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+    <line x1="696" y1="208" x2="738" y2="208" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+    <path d="M 536,264 V 328 Q 536,336 528,336 H 176 Q 168,336 168,328 V 270"
+          fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+
+    <!-- arrow labels -->
+    <rect x="336" y="186" width="92" height="14" rx="2" fill="#f5f5f5"/>
+    <text x="382" y="196" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">e2b-box open</text>
+    <rect x="320" y="216" width="124" height="14" rx="2" fill="#f5f5f5"/>
+    <text x="382" y="226" fill="#7a8399" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">SNAPSHOT UPLOAD</text>
+    <rect x="308" y="316" width="92" height="14" rx="2" fill="#f5f5f5"/>
+    <text x="354" y="326" fill="#7a8399" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.04em">e2b-box pull</text>
+
+    <!-- node: worktree -->
+    <rect x="64" y="152" width="208" height="112" rx="6" fill="#f5f5f5"/>
+    <rect x="64" y="152" width="208" height="112" rx="6" fill="rgba(79,93,117,0.10)" stroke="#7a8399" stroke-width="1"/>
+    <rect x="72" y="158" width="44" height="12" rx="2" fill="transparent" stroke="rgba(122,131,153,0.40)" stroke-width="0.8"/>
+    <text x="94" y="167" fill="#7a8399" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">LOCAL</text>
+    <text x="168" y="204" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Your branch</text>
+    <text x="168" y="226" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">tracked + uncommitted</text>
+    <text x="168" y="242" fill="#7a8399" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">.gitignore honored</text>
+
+    <!-- node: sandbox (focal) -->
+    <rect x="496" y="152" width="200" height="112" rx="6" fill="#f5f5f5"/>
+    <rect x="496" y="152" width="200" height="112" rx="6" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+    <rect x="504" y="158" width="32" height="12" rx="2" fill="transparent" stroke="rgba(235,108,54,0.40)" stroke-width="0.8"/>
+    <text x="520" y="167" fill="#eb6c36" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">BOX</text>
+    <text x="596" y="204" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">E2B sandbox</text>
+    <text x="596" y="226" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">/home/user/project</text>
+    <text x="596" y="242" fill="#7a8399" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">one per checkout</text>
+
+    <!-- node: agent -->
+    <rect x="744" y="152" width="160" height="112" rx="6" fill="#f5f5f5"/>
+    <rect x="744" y="152" width="160" height="112" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+    <rect x="752" y="158" width="44" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+    <text x="774" y="167" fill="rgba(45,49,66,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">AGENT</text>
+    <text x="824" y="204" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Coding agent</text>
+    <text x="824" y="226" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">from the template</text>
+    <text x="824" y="242" fill="#7a8399" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">your key, its box</text>
+  </svg>
+</body>
+</html>

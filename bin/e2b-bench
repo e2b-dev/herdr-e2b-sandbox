@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# e2b-bench — grade a fleet: run one held-out check inside every member's box and
+# report a verdict per member.
+#
+#   e2b-bench                                list the graded runs on disk
+#   e2b-bench <task-slug>                    show the board for a run
+#   e2b-bench <task-slug> --grade 'npm test' run the check, then show it
+#   e2b-bench <task-slug> --grade CMD --timeout-ms 600000
+#
+# Members are found by branch (`<prefix>/<slug>-<template>-<rand4>`), never from
+# a stored list — see docs/adr/0005. Verdicts land in $STATE_DIR/bench/<slug>/.
+#
+# Thin on purpose. The Rust binary owns the whole interface; this script exists
+# for the two things Rust must not do twice: find the binary, and resolve the E2B
+# credentials the same way every other verb does. Grading itself never calls the
+# SDK from here — the Rust side shells out to `e2b-box exec`, which is the only
+# place the (JavaScript-only) SDK may be used.
+#
+# Exit codes compose: 0 only when every member was measured and every one passed,
+# 1 when any failed or could not be reached, 2 on a usage error.
+set -uo pipefail
+# Resolve through the ~/.local/bin symlink to the real script dir (BSD readlink
+# has no -f, so walk the links manually).
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  ldir="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [ "${SOURCE#/}" = "$SOURCE" ] && SOURCE="$ldir/$SOURCE"
+done
+DIR="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+source "$DIR/lib/paths.sh"
+
+BIN="${HERDR_E2B_BENCH_BIN:-$PLUGIN_DIR/tui/target/release/e2b-bench}"
+if [ ! -x "$BIN" ]; then
+  echo "herdr-e2b: e2b-bench not built." >&2
+  echo "  build it:  (cd '$PLUGIN_DIR/tui' && cargo build --release)" >&2
+  echo "  (needs the Rust toolchain — https://rustup.rs)" >&2
+  exit 1
+fi
+
+# No TTY guard, unlike e2b-dash: this prints a table and exits, so it is meant to
+# be piped, redirected and run from CI. Refusing without a terminal would break
+# the main reason it is a report rather than a TUI.
+
+# `e2b-box exec` is what actually reaches E2B, and the Rust side invokes it by
+# name — so it has to be on PATH, with the credentials already resolved. Doing it
+# here keeps ONE implementation of the precedence rules, same as e2b-dash.
+ensure_e2b_path
+ensure_e2b_env
+PATH="$DIR:$PATH"; export PATH
+
+exec "$BIN" "$@"

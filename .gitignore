@@ -1,0 +1,35 @@
+node_modules/
+
+# npm's package-lock.json is the single source of dependency truth; a bun
+# lockfile from a local `bun install` would silently drift dep versions away
+# from what `npm ci` resolves on every other machine and in CI.
+bun.lock
+bun.lockb
+
+# local markdown issue tracker (see docs/agents/issue-tracker.md) — never pushed
+/.scratch/
+# stray local demo scratch at the repo root (real demo data lives in /tmp)
+/demo/
+assets/ctx-debug.log
+assets/release-notes.json
+/*.gif
+
+# throwaway TUI prototypes
+/poc/
+
+# dashboard TUI build output + generated demo data
+/tui/target/
+/tui/demo/sample-boxes/
+
+# Ephemeral git worktrees created for background agents.
+.claude/worktrees/
+
+# the bench graders — the one thing that must never reach a member's worktree, because
+# a fleet branches off HEAD and an agent that can read the assertions is not being
+# measured. Covers the quick grader too. usage.sh and judge.sh are here for tidiness
+# rather than secrecy: bench/README.md documents every scored axis and IS committed,
+# so their contents reveal nothing that is not already public.
+/bench/grade*.sh
+/bench/usage.sh
+/bench/judge.sh
+/bench/judged/

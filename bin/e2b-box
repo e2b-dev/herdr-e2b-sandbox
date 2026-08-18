@@ -1,0 +1,1009 @@
+#!/usr/bin/env bash
+# e2b-box — work with the E2B sandbox mirroring the current checkout.
+#
+#   e2b-box            open the sandbox shell for the current worktree (spinner
+#                      while it boots; provisions one if none exists yet)
+#   e2b-box open       same as above; --template NAME picks what a NEW sandbox
+#                      boots from (else a branch rule decides, else it asks)
+#   e2b-box up         provision the sandbox in the background, don't attach
+#   e2b-box shell      connect a shell now (fails if the sandbox isn't ready)
+#   e2b-box status     print this worktree's sandbox record
+#   e2b-box list       list every tracked sandbox
+#   e2b-box url        print the preview URL
+#   e2b-box logs       tail the provisioning log
+#   e2b-box sync       re-upload the current worktree into its sandbox (local → sandbox)
+#   e2b-box pull       download the sandbox's files back into this folder (sandbox → local;
+#                      aborts on a dirty/non-git tree unless --force)
+#   e2b-box exec CMD   run CMD inside the sandbox and print one JSON result
+#                      (--timeout-ms N bounds it; what `e2b-bench` grades with)
+#   e2b-box kill       kill this worktree's sandbox
+set -uo pipefail
+# Resolve through the ~/.local/bin symlink to the real script dir so we can
+# find lib/*.sh (BSD readlink has no -f, so walk the links manually).
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  ldir="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [ "${SOURCE#/}" = "$SOURCE" ] && SOURCE="$ldir/$SOURCE"
+done
+DIR="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+source "$DIR/lib/paths.sh"
+source "$DIR/lib/chooser.sh"   # ask_template_tty — shared with the other verbs
+
+need() { command -v "$1" >/dev/null 2>&1 || { echo "e2b-box: '$1' not found on PATH" >&2; exit 1; }; }
+need jq
+
+# When herdr opens this as a plugin pane/action, our cwd is the NEW pane's dir
+# (often the plugin's own root) — NOT the folder you triggered from. herdr passes
+# the real one in HERDR_PLUGIN_CONTEXT_JSON; cd there so all the $PWD-based logic
+# (key, upload root, git) reflects the worktree you were actually in.
+if [ -n "${HERDR_PLUGIN_CONTEXT_JSON:-}" ]; then
+  ctx_cwd=$(printf '%s' "$HERDR_PLUGIN_CONTEXT_JSON" \
+    | jq -r '.focused_pane_cwd // .focusedPaneCwd // .workspace_cwd // .workspaceCwd // empty' 2>/dev/null)
+  [ -n "$ctx_cwd" ] && [ -d "$ctx_cwd" ] && cd "$ctx_cwd" || true
+fi
+
+# Current branch name — works on unborn branches (pre-first-commit) too.
+git_branch() {
+  git -C "$PWD" symbolic-ref --short HEAD 2>/dev/null \
+    || git -C "$PWD" rev-parse --abbrev-ref HEAD 2>/dev/null \
+    || true
+}
+
+# The folder we mirror into the sandbox: always the dir you're in. NOT the git
+# toplevel — a loose folder inside a big mono-checkout would otherwise resolve
+# to the whole enclosing repo and upload thousands of files.
+box_root() { printf '%s' "$PWD"; }
+
+# True when $PWD is itself a git repo/worktree root.
+at_repo_root() {
+  local top
+  top=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)
+  [ -n "$top" ] && [ "$top" = "$PWD" ]
+}
+
+# Sandbox identity = the folder (project) you're in — NOT the branch. A repo on
+# "main" shouldn't key as "main" (useless + collides). Keyed by folder PATH
+# (folder-name + a hash) so two same-named folders don't share a sandbox.
+key_from_cwd() {
+  box_key "$(box_root)"
+}
+
+# Human-facing name for the sandbox (prompt, notifications) — just the folder name,
+# without the disambiguating hash in the key.
+label_from_cwd() {
+  e2b_key "$(basename "$(box_root)")"
+}
+
+rec()   { cat "$BOXES_DIR/$1.json" 2>/dev/null; }
+field() { rec "$1" | jq -r --arg f "$2" '.[$f] // empty' 2>/dev/null; }
+
+# One shape for "that box isn't here", used by every verb that can miss. The
+# first line is the fact; the lines under it are the point. A key is derived
+# from the folder you are standing in, so the commonest way to see this message
+# is to be one directory off — and the old text left you staring at a key you
+# never typed, with no hint that your boxes are all fine and keyed elsewhere.
+# stderr, so a miss never lands in something's stdout.
+miss() {
+  local k="$1" what="$2" tail="${3:-}" others n
+  shopt -s nullglob; others=("$BOXES_DIR"/*.json)
+  n=${#others[@]}
+  printf "%s for '%s'%s\n" "$what" "$k" "${tail:+ — $tail}" >&2
+  if [ "$n" -gt 0 ]; then
+    printf '  %d box%s tracked elsewhere:  e2b-box list\n' "$n" "$([ "$n" -eq 1 ] && echo "" || echo es)" >&2
+    printf '  address one directly:     e2b-box %s --box <key>\n' "${cmd:-status}" >&2
+  fi
+}
+
+# Launch the provision worker in the background. op = ensure | sync.
+# Marks the record "provisioning" but PRESERVES a known sandboxId so the worker
+# can reconnect to (and resume) an existing sandbox instead of always creating fresh.
+provision_from_cwd() {
+  local k="$1" op="${2:-ensure}" want="${3:-}" b p l sid tpl payload node_bin
+  b=""; at_repo_root && b=$(git_branch); [ "$b" = "HEAD" ] && b=""
+  p=$(box_root)
+  l=$(label_from_cwd)
+  # This fn REPLACES the record wholesale (not a merge), so carry the identity
+  # fields forward — otherwise a re-provision orphans the live sandbox (lost id)
+  # or drops the resolved template (empties the dashboard/list column).
+  sid=$(field "$k" sandboxId)
+  tpl=$(field "$k" template)
+  # An explicit choice ($3, from --template / the picker) is for a box that
+  # doesn't exist yet, so it names the template the record should show while it
+  # boots. A tracked box keeps the template it was built from — you can't
+  # restamp a running sandbox.
+  [ -n "$want" ] && [ -z "$sid" ] && tpl="$want"
+  node_bin=$(e2b_node) || node_bin=""
+  if [ -z "$node_bin" ]; then
+    jq -cn --arg k "$k" --arg b "$b" --arg p "$p" --arg l "$l" --arg sid "$sid" --arg tpl "$tpl" \
+      '{key:$k, label:$l, status:"failed", step:"needs Node >= 22 (set HERDR_E2B_NODE)", branch:$b, worktreePath:$p, workspaceId:""}
+         + (if $sid != "" then {sandboxId:$sid} else {} end)
+         + (if $tpl != "" then {template:$tpl} else {} end)' \
+      > "$BOXES_DIR/$k.json"
+    return 1
+  fi
+  jq -cn --arg k "$k" --arg b "$b" --arg p "$p" --arg l "$l" --arg sid "$sid" --arg tpl "$tpl" \
+    '{key:$k, label:$l, status:"provisioning", step:"queued", branch:$b, worktreePath:$p, workspaceId:""}
+       + (if $sid != "" then {sandboxId:$sid} else {} end)
+       + (if $tpl != "" then {template:$tpl} else {} end)' \
+    > "$BOXES_DIR/$k.json"
+  payload=$(jq -cn --arg k "$k" --arg b "$b" --arg p "$p" --arg l "$l" --arg op "$op" --arg t "$want" \
+    '{key:$k, label:$l, branch:$b, worktreePath:$p, workspaceId:"", op:$op}
+       + (if $t != "" then {template:$t} else {} end)')
+  nohup "$node_bin" "$PLUGIN_DIR/src/provision.js" "$payload" >>"$BOXES_DIR/$k.log" 2>&1 &
+  # Remembered so an interrupt can stop the worker, not just the spinner in front
+  # of it. `disown` only detaches it from job control; the pid is still killable.
+  PROVISION_PID=$!
+  disown 2>/dev/null || true
+}
+
+# --- interrupting a boot ------------------------------------------------------
+# Provisioning is detached (nohup + disown) so a dropped pane can't kill a boot
+# half-way. The cost is that Ctrl-C at the spinner used to kill only the SPINNER:
+# the worker carried on, created the sandbox, and left it running and billing with
+# nobody attached and no shell ever handed over.
+#
+# So the run that starts a boot owns it until it is handed over. On INT/TERM it
+# stops the worker and kills the sandbox — but ONLY one this run brought into
+# existence: a re-provision of a box that already had an id must never destroy it
+# on Ctrl-C. That is what the pre-existing id is captured for.
+BOOT_ABORT_KEY=""
+BOOT_ABORT_PRIOR_SID=""
+PROVISION_PID=""
+arm_boot_abort() {
+  BOOT_ABORT_KEY="$1"
+  BOOT_ABORT_PRIOR_SID=$(field "$1" sandboxId)
+  trap boot_abort INT TERM
+}
+
+# Disarm once the box is someone else's problem — a boot that finished must not
+# have its sandbox killed because you pressed Ctrl-C in the shell it handed you.
+disarm_boot_abort() { trap - INT TERM; BOOT_ABORT_KEY=""; }
+
+boot_abort() {
+  trap - INT TERM
+  local k="$BOOT_ABORT_KEY" sid i
+  [ -n "$k" ] || exit 130
+  [ -t 1 ] && printf '\r\033[K'
+  echo "e2b-box: interrupted while booting '$k' — cleaning up." >&2
+  [ -n "$PROVISION_PID" ] && kill "$PROVISION_PID" 2>/dev/null
+  # The worker may have been mid-create when it was killed, so the id can land in
+  # the record a moment AFTER the pid dies. Look for a few seconds rather than
+  # deciding instantly that there is nothing to kill — an id missed here is a box
+  # nobody will ever look for again.
+  i=0
+  while [ "$i" -lt 10 ]; do
+    sid=$(field "$k" sandboxId)
+    [ -n "$sid" ] && break
+    i=$((i + 1)); sleep 0.5
+  done
+  if [ -z "$sid" ]; then
+    rm -f "$BOXES_DIR/$k.json" "$BOXES_DIR/$k.log"
+    echo "  no sandbox had been created — nothing to kill." >&2
+  elif [ "$sid" = "$BOOT_ABORT_PRIOR_SID" ]; then
+    echo "  '$k' already had sandbox $sid before this run — left alone." >&2
+  elif sdk_kill "$sid" "$(field "$k" domain)"; then
+    rm -f "$BOXES_DIR/$k.json" "$BOXES_DIR/$k.log"
+    echo "  killed sandbox $sid." >&2
+  else
+    # Same rule as the `kill` verb: a box we could not destroy keeps its record,
+    # because an orphaned sandbox you cannot name is one that bills forever.
+    echo "  ✗ couldn't kill $sid — record kept, retry with: e2b-box kill" >&2
+  fi
+  exit 130
+}
+
+# Which template a NEW sandbox should boot from, printed on stdout (empty = let
+# the config decide). Returns 2, and only 2, when a human was asked and said NO —
+# q, Esc or letting the menu time out. That is not the same as "no answer": a
+# caller that gets 2 must create NOTHING, because a sandbox booted from a keypress
+# meaning "get me out of here" is a box the user never asked for, running and
+# billing. Every other path returns 0, including "there is no terminal to ask on",
+# where falling through to the config is right.
+#
+# The order of precedence is "the more explicit, the better":
+#   --template / E2B_TEMPLATE  →  a matching template_rules pattern  →  ask you.
+# Asking happens ONLY when nothing else decided and there's a human at the
+# terminal: herdr actions, the dashboard and scripts must never block on a menu.
+# A template is fixed at creation, so this runs for a fresh box and never for a
+# reconnect (where the question is moot).
+pick_template() {
+  local k="$1" b node_bin info decided resolved choices n lbl
+  [ -n "${E2B_TEMPLATE:-}" ] && { printf '%s' "$E2B_TEMPLATE"; return 0; }
+  [ -n "$(field "$k" sandboxId)" ] && return 0     # box exists — template is settled
+  node_bin=$(e2b_node) || return 0                 # no node → config decides
+  b=""; at_repo_root && b=$(git_branch); [ "$b" = "HEAD" ] && b=""
+  info=$("$node_bin" "$PLUGIN_DIR/src/resolve-template.js" "$b" 2>/dev/null) || return 0
+  decided=$(printf '%s' "$info" | head -1 | cut -f1)
+  resolved=$(printf '%s' "$info" | head -1 | cut -f2)
+  [ "$decided" = decided ] && return 0             # a branch rule already chose
+  # Line 1 is the header; the rest are the menu, resolved template first.
+  choices=$(printf '%s' "$info" | tail -n +2 | grep -v '^$')
+  n=$(printf '%s\n' "$choices" | wc -l | tr -d ' ')
+  # A single candidate is not a choice — don't make you press Enter to confirm
+  # the only option there is.
+  [ "$n" -le 1 ] && return 0
+  # There's no record yet (that's the point), so the name comes from the folder.
+  lbl=$(label_from_cwd 2>/dev/null) || lbl=""
+  : "${lbl:=$k}"
+  # 2 (aborted) is passed straight through; 1 (no terminal to draw on) is not an
+  # answer and not a refusal, so it becomes "let the config decide" as before.
+  local rc
+  ask_template_tty "$lbl" "$resolved" "$choices" "$n"; rc=$?
+  [ "$rc" -eq 2 ] && return 2
+  return 0
+}
+
+# Describe the clobber risk of pulling into $1 — a dirty git tree (uncommitted work)
+# or a non-git folder (no `git diff`/undo) — or print nothing for a clean git tree.
+# Shared by the `pull` case and the on-close prompt so both guard the same way.
+pull_risk() {
+  local d="$1"
+  if git -C "$d" rev-parse --git-dir >/dev/null 2>&1; then
+    [ -n "$(git -C "$d" status --porcelain 2>/dev/null)" ] && printf '%s' "$d has uncommitted changes"
+  else
+    printf '%s' "$d is not a git repo (overwrites can't be reviewed or undone via git)"
+  fi
+}
+
+# After you exit the sandbox shell, decide what to do with the sandbox: pull your work
+# back down, kill it, or leave it (auto_pause will pause it at the timeout).
+on_close_prompt() {
+  local k="$1" sid="$2" ans a2 risk dest node_bin lbl st
+  lbl=$(field "$k" label); : "${lbl:=$k}"
+  [ -t 0 ] || return 0   # non-interactive: leave the sandbox as-is
+  st=$(field "$k" status)
+  echo
+  # A paused box needs a way back IN, and "leave running" would be a lie for it.
+  if [ "$st" = paused ]; then
+    printf "'%s' is paused — [r]esume & reattach · [p]ull changes down · [k]ill it · [L]eave paused: " "$lbl"
+  else
+    printf "left sandbox '%s' — [p]ull changes down · [k]ill it · [L]eave running: " "$lbl"
+  fi
+  read -r ans
+  case "${ans:-L}" in
+    r|R|resume)
+      # Re-exec rather than recurse: `open` resumes the box and reattaches, and
+      # the sandbox's tmux session hands back the screen you were on.
+      echo "  resuming '$lbl' …"
+      KEY="$k" exec "$0" open
+      ;;
+    p|P|pull)
+      node_bin=$(e2b_node) || { echo "  needs Node >= 22 to pull (set HERDR_E2B_NODE=/path/to/node)"; return 0; }
+      dest=$(box_root)
+      # Same clobber guard as `e2b-box pull`: confirm before overwriting a dirty or
+      # non-git tree. (This prompt is interactive — on_close only runs with a TTY.)
+      risk=$(pull_risk "$dest")
+      if [ -n "$risk" ]; then
+        echo "  ⚠️  $risk — pull overwrites files from the sandbox."
+        printf "  continue? [y/N] "; read -r a2
+        case "$a2" in [Yy]*) ;; *) echo "  skipped pull — sandbox left running."; return 0 ;; esac
+      fi
+      echo "  pulling '$lbl' → $dest …"
+      "$node_bin" "$PLUGIN_DIR/src/download.js" "$(jq -cn --arg k "$k" --arg d "$dest" '{key:$k,destRoot:$d}')"
+      git -C "$dest" rev-parse --git-dir >/dev/null 2>&1 && echo "  review: git -C '$dest' diff"
+      echo "  sandbox left running (auto-pauses at the timeout; e2b-box kill to stop it)."
+      ;;
+    k|K|kill)
+      if sdk_kill "$sid" "$(field "$k" domain)" >/dev/null 2>&1; then
+        echo "  killed sandbox '$lbl'."; rm -f "$BOXES_DIR/$k.json" "$BOXES_DIR/$k.log"
+      else
+        echo "  ! couldn't kill '$lbl' — keeping the record so it isn't orphaned; retry with 'e2b-box kill'."
+      fi
+      ;;
+    *)
+      if [ "$st" = paused ]; then
+        echo "  left paused — nothing is billing; 'e2b-box open' resumes it and puts you back."
+      else
+        echo "  left running — auto-pauses at the idle timeout; 'e2b-box open' to return."
+      fi
+      ;;
+  esac
+}
+
+# Why the attached shell dropped, and how to get back. A pause FREEZES the VM —
+# every process (your agent included) is still there, and with tmux in the sandbox
+# `e2b-box open` puts you back in the same screen. A kill removes the record, so an
+# empty status means the box is really gone.
+disconnect_notice() {
+  local k="$1" lbl="$2" st
+  st=$(field "$k" status)
+  echo
+  if [ -z "$st" ]; then
+    echo "■  '$lbl' is gone (killed) — 'e2b-box open' boots a fresh sandbox from this worktree."
+    return 0
+  fi
+  case "$st" in
+    paused) echo "⏸  '$lbl' paused — frozen, not lost: everything you had running is still in there." ;;
+    *)      echo "⏸  '$lbl' stopped — paused, or it hit its idle timeout." ;;
+  esac
+  echo "   back where you left off:   e2b-box open"
+  echo "   resume without attaching:  e2b-box resume"
+}
+
+# Print the ready sandbox's details and open an interactive shell into it.
+# In dashboard mode (E2B_DASH=1) stay quiet and skip the on-close prompt — the
+# dashboard shows the sandbox details and handles pull/kill/leave itself.
+connect_shell() {
+  local k="$1" sid url ppath lbl dom want
+  sid=$(field "$k" sandboxId); url=$(field "$k" url); ppath=$(field "$k" projectPath)
+  lbl=$(field "$k" label); : "${lbl:=$k}"
+  dom=$(field "$k" domain)
+  [ -n "$sid" ] || return 1
+  if [ "${E2B_DASH:-}" != 1 ]; then
+    echo "● E2B sandbox ready for '$lbl'"
+    [ -n "$url" ]   && echo "  preview : $url"
+    [ -n "$ppath" ] && echo "  project : $ppath  (run: cd $ppath)"
+    echo "  sandbox : $sid"
+    # A template that isn't on this box's cluster gets silently downgraded to
+    # `base` at creation. Say it here — otherwise the first sign is the agent you
+    # asked for not being installed. Templates are per-cluster: build it there
+    # (`e2b template build`), or switch clusters and open again.
+    want=$(field "$k" requestedTemplate)
+    [ -n "$want" ] && echo "  ! '$want' isn't built on ${dom:-this cluster} — this box is '$(field "$k" template)'."
+  fi
+  ensure_e2b_path   # get a good node + the e2b CLI onto PATH (herdr may be on old node)
+  # Point the CLI at the cluster that holds THIS box, so the shell you attach to
+  # is the sandbox the SDK just created — not a same-named box on another cluster.
+  ensure_e2b_env "$dom"
+  if ! command -v e2b >/dev/null 2>&1; then
+    echo "  ! e2b CLI not found — 'npm i -g @e2b/cli'. Then: e2b sandbox connect $sid" >&2
+    # The box is ready; only an interactive caller (that wanted to attach now) should
+    # see this as a failure. Headless callers got the box + instructions → exit 0.
+    { [ -t 0 ] && [ -t 1 ]; } && exit 1 || exit 0
+  fi
+  # The sandbox was just ensured live (reconnected/resumed) by provision.js, so
+  # `e2b sandbox connect` can attach directly — no separate resume needed.
+  # `e2b sandbox connect` needs a raw TTY; without one it crashes and would take
+  # the pane with it. Guard so we show instructions instead of dying silently.
+  if [ -t 0 ] && [ -t 1 ]; then
+    [ "${E2B_DASH:-}" != 1 ] && { echo "  attaching a shell in the sandbox — type 'exit' when done, then you'll pick: [p]ull changes · [k]ill · [L]eave running"; echo; }
+    local start=$SECONDS
+    # stderr only — stdin/stdout stay bound to the terminal, so the interactive
+    # shell is untouched; we just strip the CLI's stack traces on the way out.
+    e2b sandbox connect "$sid" 2> >(e2b_quiet_stderr >&2); local rc=$?   # blocks until you exit the shell
+    # A fast non-zero exit means we never attached (box idle-timed-out / paused) —
+    # not that your shell exited badly. Signal the caller so it can reprovision.
+    if [ "$rc" -ne 0 ] && [ "$((SECONDS - start))" -lt 2 ]; then return 2; fi
+    # The shell didn't end because you typed `exit` — the sandbox went away under
+    # it (paused from the dashboard / `e2b-box pause`, or the idle timeout). Say
+    # what happened and how to get back, instead of leaving the CLI's
+    # "sandbox was killed" line as the last thing on screen.
+    [ "$rc" -ne 0 ] && disconnect_notice "$k" "$lbl"
+    [ "${E2B_DASH:-}" = 1 ] && exit 0 # dashboard owns the post-exit pull/kill/leave
+    on_close_prompt "$k" "$sid"
+    return 0
+  fi
+  echo
+  echo "  ! this pane has no interactive terminal, so I can't attach a live shell."
+  echo "    run in any terminal:  e2b sandbox connect $sid"
+  # Inspect link on the box's OWN cluster — a hardcoded host sends a EU box's
+  # link to the US dashboard, where it 404s.
+  echo "    or open it:  ${url:-https://${dom:-${E2B_DOMAIN:-e2b.dev}}/dashboard/inspect/sandbox/$sid}"
+  # Don't drop into a bare local shell (it isn't the sandbox and reads as if it
+  # were). The box is up; the lines above say how to attach.
+  exit 0
+}
+
+# Spin on the sandbox record until it's ready. $1=key, $2=verb ("booting"/"syncing").
+# Renders the spinner only on a TTY, so headless callers (herdr actions, scripts)
+# get clean output. Returns 0 when ready; prints the failure and returns 1 on a
+# failed provision, a timeout, or a vanished record.
+spin_until_ready() {
+  local k="$1" verb="$2" raw st step laststep frames f i max missing lbl tty=0 line cols
+  [ -t 1 ] && tty=1
+  lbl=$(field "$k" label); : "${lbl:=$k}"
+  # ~20 min at 0.3s/iter by default (array = locale-safe indexing). `wait` sets
+  # WAIT_MAX_ITERS from its --timeout-ms so a caller can bound the same poll.
+  frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏); i=0; max="${WAIT_MAX_ITERS:-4000}"
+  missing=0; laststep="starting"
+  while :; do
+    raw=$(rec "$k")
+    st=$(printf '%s' "$raw" | jq -r '.status // empty' 2>/dev/null)
+    step=$(printf '%s' "$raw" | jq -r '.step // empty' 2>/dev/null)
+    [ -n "$step" ] && laststep="$step"
+    case "$st" in
+      ready) break ;;
+      failed) [ "$tty" = 1 ] && printf '\r\033[K'; echo "✗ E2B sandbox failed: ${step:-$laststep}"; echo "  see: e2b-box logs"; return 1 ;;
+      "")  # transient (mid-write / just before first write) — tolerate briefly
+        missing=$((missing + 1))
+        if [ "$missing" -ge 20 ]; then
+          [ "$tty" = 1 ] && printf '\r\033[K'; echo "sandbox record for '$k' went away — see: e2b-box logs"; return 1
+        fi ;;
+      *) missing=0 ;;
+    esac
+    if [ "$i" -ge "$max" ]; then
+      [ "$tty" = 1 ] && printf '\r\033[K'; echo "timed out waiting for sandbox '$k' (last: $laststep). see: e2b-box logs"; return 1
+    fi
+    if [ "$tty" = 1 ]; then
+      f=${frames[$((i % ${#frames[@]}))]}
+      line="$f  $verb E2B sandbox for $lbl … $laststep"
+      # Truncate to the terminal width. A line that WRAPS can't be erased by
+      # \r + \033[K (they only touch the last row), so every frame would leave
+      # its tail behind and the status would pile up instead of animating.
+      cols=${COLUMNS:-0}; [ "$cols" -gt 0 ] 2>/dev/null || cols=$(tput cols 2>/dev/null || echo 80)
+      [ "${#line}" -ge "$cols" ] && line="${line:0:$((cols - 2))}…"
+      printf '\r\033[K%s' "$line"
+    fi
+    i=$((i + 1))
+    sleep 0.3
+  done
+  [ "$tty" = 1 ] && printf '\r\033[K'
+  return 0
+}
+
+# Boot (ensure) the sandbox and attach a shell. provision.js is the single source of
+# truth for liveness: it reconnects to (and resumes) the tracked sandbox, or creates
+# a fresh one if it's gone — so there's no separate liveness poll here.
+#   create_missing=1 (open) provisions when no record exists;
+#   create_missing=0 (shell) errors instead, so `shell` only attaches to a sandbox
+#                    you already have.
+boot_and_connect() {
+  local create_missing="$1" want="${2:-}" st
+  st=$(field "$key" status)
+
+  # Optimistic connect: if we already have a `ready` record with a sandbox id,
+  # attach straight away — this skips the ensure Node cold-start for a box that's
+  # already live (the common "reopen" case). On a fast failure (idle-timed-out /
+  # paused) connect_shell returns non-zero and we fall through to provision +
+  # resume below (which also auto-heals a dead box).
+  #
+  # ONLY with a TTY: the real `e2b sandbox connect` attempt IS the liveness check
+  # here. With no TTY connect_shell can't attach and just prints instructions — so
+  # a stale `ready` record would have it point at a dead box without reconciling.
+  # Headless callers therefore skip this and go through `ensure` below (an SDK
+  # reconnect/resume, or recreate if gone), so the box is verified live first.
+  if [ "$st" = "ready" ] && [ -n "$(field "$key" sandboxId)" ] && [ -t 0 ] && [ -t 1 ]; then
+    connect_shell "$key" && exit 0
+    echo "  sandbox wasn't reachable — reprovisioning…"
+  fi
+
+  if [ "$st" != "provisioning" ]; then
+    if [ -z "$st" ] && [ "$create_missing" != "1" ]; then
+      echo "no sandbox tracked for '$key' — run 'e2b-box open' to boot one." >&2
+      exit 1
+    fi
+    # Ask which template only now — we know a sandbox has to be BUILT. And if the
+    # answer is "don't", stop here: nothing has been created yet, so nothing has to
+    # be cleaned up. Exit 130 is the same abort code the fleet pickers use.
+    if [ -z "$want" ]; then
+      want=$(pick_template "$key") || {
+        echo "e2b-box: no template chosen — nothing was created." >&2
+        exit 130
+      }
+    fi
+    # From here a sandbox is about to exist, so this run owns it: an interrupt
+    # before it is handed over has to take it with it (see arm_boot_abort).
+    arm_boot_abort "$key"
+    provision_from_cwd "$key" ensure "$want"
+  fi
+  # Spin until ready (bounded so a hung provision can't loop forever), then attach.
+  spin_until_ready "$key" "booting" || exit 1
+  # Ready means handed over: from here Ctrl-C belongs to whatever is in the pane.
+  disarm_boot_abort
+  connect_shell "$key" || { echo "✗ couldn't attach to '$key' — see: e2b-box logs" >&2; exit 1; }
+}
+
+# Grouped by what you are trying to DO, not alphabetically and not in one line: the
+# verbs fall into four jobs, and a reader looking for "how do I get my files back"
+# should be able to find `pull` by scanning four short lists rather than parsing a
+# pipe-separated string. Two columns, verb then plain-English result, one line each.
+# Every verb this CLI answers to, in one place: the did-you-mean below spell-checks
+# against it, so a verb that isn't here is a verb nobody can be nudged toward.
+VERBS="open up connect shell attach exec sync pull pause resume kill status list url logs wait doctor fleet dash"
+
+usage() {
+  cat <<'USAGE'
+e2b-box — the E2B sandbox mirroring the current checkout
+
+usage
+  e2b-box <command> [options]
+  e2b-box                     with no command, same as `open`
+
+session
+  open [-t NAME]              boot or reconnect this worktree's box, then attach
+  up [-t NAME]                same, but stay in this shell — the box boots behind you
+  connect [<sandbox-id>]      attach to a box that already exists — this
+                              worktree's, or the id `list` shows you
+  exec <cmd>                  run one command inside the box, print its output
+
+files
+  sync                        upload this worktree into the box      local → box
+  pull [--force]              download the box's project dir back    box → local
+
+lifecycle
+  pause                       freeze the box — everything in it keeps running state
+  resume                      thaw a paused box
+  kill                        destroy the box; the worktree and branch stay
+
+inspect
+  status                      this worktree's box: state, template, sandbox id
+  list                        every box this plugin is tracking
+  url                         the box's forwarded URL
+  logs                        follow the provisioning log
+  wait [--timeout-ms N]       block until the box is ready (exit 1 on timeout)
+  doctor                      check node, the e2b CLI, credentials and state
+
+fleet                         several boxes off one checkout, one per template
+  fleet                       pickers: name it, pick the roster, watch the board
+  fleet <slug> --agents claude,codex
+                              ...or say it outright, in one line  [--task TEXT]
+                              [--dry-run]; `create` in front is optional
+  fleet <slug> --all          every agent your config knows
+  fleet kill <slug>           kill its boxes, remove its worktrees, keep branches
+  fleet kill <slug> --prune-branches
+                              delete the branches too
+  fleet --help                the full fleet options
+
+options                       (before the verb or after it — same thing)
+  -t, --template NAME         template a NEW box boots from (open, up)
+  --template-any              accept a template name the config doesn't know
+  -b, --box KEY               act on that box instead of this worktree's
+  --json                      machine-readable output (list, status, wait)
+  --force                     let `pull` overwrite a dirty or non-git tree
+  --timeout-ms N              bound for `exec` and `wait`
+  -h, --help · -V, --version  print this · print the plugin version
+
+also spelled                  ls=list · rm,destroy=kill · unpause=resume
+                              shell,attach=connect · download=pull
+
+environment
+  KEY                         box key to act on (what --box sets)
+  E2B_TEMPLATE                template for a new box, ahead of any branch rule
+  HERDR_E2B_NODE              path to a Node >= 22, if yours isn't found
+  HERDR_PLUGIN_STATE_DIR      where box records live
+
+dash
+  dash                        the live board of every tracked box
+  dash toggle                 same board, but closes an open one (bind a key to this)
+USAGE
+}
+
+# Global flags are allowed BEFORE the verb as well as after it — `e2b-box --box
+# api status` and `e2b-box status --box api` are the same sentence, and which
+# one someone reaches for depends on whether they think of the box or the
+# question first. Hold the leading ones aside so the verb is still $1, then hand
+# them back to the single flag loop further down: one parser, both orders.
+#
+# This is also why `e2b-box -t claude` works with no verb at all: the flags come
+# off the front, nothing is left, and the default verb (`open`) takes over.
+pre_args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --box|-b|--template|-t)
+      [ $# -ge 2 ] || { echo "e2b-box: $1 needs a value" >&2; exit 2; }
+      pre_args+=("$1" "$2"); shift 2 ;;
+    --box=*|--template=*|--template-any|--json) pre_args+=("$1"); shift ;;
+    *) break ;;
+  esac
+done
+
+# AFTER the loop above, so the flags it lifts off the front can't hide the
+# question: `e2b-box -t claude --help` is still asking for help, not booting.
+case "${1:-}" in
+  -h|--help|help) usage; exit 0 ;;
+  -V|--version)   printf 'herdr-e2b %s\n' "$(plugin_version)"; exit 0 ;;
+esac
+
+cmd="${1:-open}"
+[ $# -gt 0 ] && shift
+set -- ${pre_args[@]+"${pre_args[@]}"} ${1+"$@"}
+
+# One alias table for the verbs people arrive already knowing — from `agentbox`,
+# from `docker`, from `git`. Nobody should have to read a usage block to learn
+# our spelling of a verb they named correctly.
+#
+# `stop`/`start` are deliberately NOT here. agentbox's `stop` means "disk
+# preserved, not frozen" and we have no such state, so aliasing it to `pause`
+# would quietly do a different thing than the word promises. They fall through
+# to the did-you-mean instead, which is allowed to be wrong out loud.
+case "$cmd" in
+  ls)         cmd=list ;;
+  rm|destroy) cmd=kill ;;
+  unpause)    cmd=resume ;;
+  attach)     cmd=connect ;;
+  shell)      cmd=connect ;;
+esac
+
+# One CLI for the plugin. Fleets keep their own script because they talk to a
+# different thing — herdr's socket API, not the E2B data plane — but that is an
+# implementation detail nobody should have to hold at a prompt, so `e2b-box fleet …`
+# is the way in and every message comes back saying so.
+#
+# Dispatched HERE, above the `--template` pre-parser, because a fleet's whole point
+# is a roster: `-t claude -t codex` must reach the fleet as two templates, and that
+# loop would swallow both into one box's `$template`.
+#
+# exec, not a call: the fleet script becomes this process, so its exit code, its
+# signals and its terminal are the ones you are already holding — the pickers need a
+# real tty and the dashboard never returns.
+if [ "$cmd" = fleet ]; then
+  HERDR_E2B_FLEET_CLI="e2b-box fleet" exec "$DIR/e2b-fleet" ${1+"$@"}
+fi
+
+# The board, under the same one-CLI rule as `fleet`. Dispatched up here for the
+# same reason too: the dashboard takes its own flags and must not have them eaten
+# by the `--template` pre-parser below.
+#
+# `toggle` is the one to bind a key to — it closes an open board instead of
+# stacking a second, and picks its own placement from the layout at keypress time.
+if [ "$cmd" = dash ] || [ "$cmd" = dashboard ]; then
+  case "${1:-}" in
+    toggle) shift; HERDR_E2B_DASH_CLI="e2b-box dash toggle" exec "$DIR/e2b-dash-toggle" ${1+"$@"} ;;
+    *)      HERDR_E2B_DASH_CLI="e2b-box dash" exec "$DIR/e2b-dash" ${1+"$@"} ;;
+  esac
+fi
+# `--help` ANYWHERE past the verb prints the manual instead of running the verb.
+# The arm above only sees $1, so until this existed `e2b-box open --help` fell
+# through to `open` with `--help` as an argument nothing read — and booted a
+# billable sandbox to answer a question about flags. Asking a command what it
+# does must never cost money.
+#
+# Deliberately AFTER the fleet/dash dispatch: `fleet --help` and `dash --help`
+# belong to those scripts, which document their own flags.
+for a in "$@"; do
+  case "$a" in -h|--help) usage; exit 0 ;; esac
+done
+
+# `--template X` / `-t X` on the creating verbs (open/up): boot a NEW sandbox
+# from that template instead of asking or falling back to the config. Parsed
+# here (not per-case) so `open --template x` and `up -t x` behave the same.
+# `--box` and `--json` are parsed in the same pass for the same reason: they
+# mean the same thing on every verb that takes them.
+# Everything else is left in "$@" for the verb to read (e.g. pull --force).
+template=""
+template_any=0
+box_flag=""
+json=0
+args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --template|-t)
+      [ $# -ge 2 ] || { echo "e2b-box: $1 needs a template name" >&2; exit 2; }
+      template="$2"; shift 2 ;;
+    --template=*) template="${1#*=}"; shift ;;
+    --template-any) template_any=1; shift ;;
+    --box|-b)
+      [ $# -ge 2 ] || { echo "e2b-box: $1 needs a box key — see: e2b-box list" >&2; exit 2; }
+      box_flag="$2"; shift 2 ;;
+    --box=*) box_flag="${1#*=}"; shift ;;
+    --json) json=1; shift ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+set -- ${args[@]+"${args[@]}"}
+
+# Which box this invocation acts on. Precedence: --box (you said so) > KEY (how
+# the dashboard and the fleet address a member) > the worktree you are standing
+# in (the everyday case, and why most commands take no argument at all).
+key="${box_flag:-${KEY:-$(key_from_cwd)}}"
+[ -z "$key" ] && key="workspace"
+
+# Addressing another box by key is only safe for verbs that talk to the E2B API
+# and nothing else. The rest read or write the LOCAL tree, so pointing them at
+# someone else's box while standing here is a data-loss bug, not a shortcut:
+# `--box other sync` would upload THIS worktree into that box, and `--box other
+# pull` would download that box on top of these files.
+#
+# So for those verbs, become the worktree the record names — the same rule the
+# dashboard already applies by pairing KEY with a cwd (tui/src/actions.rs).
+# For every existing caller the record's path IS the cwd, so this is a no-op
+# that only bites the mismatch it exists to catch.
+case "$cmd" in
+  kill|status|list|url|logs|exec|pause|resume|wait|doctor) ;;
+  *)
+    if [ -n "$box_flag" ] || [ -n "${KEY:-}" ]; then
+      wt=$(field "$key" worktreePath)
+      if [ -z "$wt" ]; then
+        [ -n "$box_flag" ] && { echo "e2b-box: no box '$key' — see: e2b-box list" >&2; exit 1; }
+      elif [ "$wt" != "$PWD" ]; then
+        [ -d "$wt" ] || { echo "e2b-box: '$key' belongs to $wt, which is gone — clear it with: e2b-box kill --box $key" >&2; exit 1; }
+        cd "$wt" || exit 1
+      fi
+    fi ;;
+esac
+
+# A template name the config doesn't recognise is a typo, and a typo must not
+# bill. Until this check existed an unknown name travelled all the way to
+# provision.js, which shrugged and booted the base image — so `-t clade` charged
+# you for a box that was not the one you asked for, and said nothing.
+#
+# The known-names list is the config's own answer (`--known`), not a second list
+# kept in bash: e2b-fleet already spell-checks rosters against exactly this.
+# `--template-any` is the escape hatch for an image that lives outside the config.
+if [ -n "$template" ] && [ "$template_any" -eq 0 ]; then
+  tpl_node=$(e2b_node 2>/dev/null) || tpl_node=""
+  if [ -n "$tpl_node" ]; then
+    known=$("$tpl_node" "$PLUGIN_DIR/src/resolve-template.js" --known 2>/dev/null)
+    if [ -n "$known" ] && ! printf '%s\n' "$known" | grep -qxF "$template"; then
+      # Suggest on a shared prefix — the overwhelmingly common typo is a
+      # transposition or a dropped letter, not a different word.
+      near=$(printf '%s\n' "$known" | grep -i "^${template:0:2}" | head -1)
+      { printf "e2b-box: no template '%s'%s\n" "$template" "${near:+ — did you mean '$near'?}"
+        printf '  known:  %s\n' "$(printf '%s' "$known" | tr '\n' ' ')"
+        printf '  any other image:  e2b-box %s -t %s --template-any\n' "$cmd" "$template"
+      } >&2
+      exit 2
+    fi
+  fi
+fi
+
+case "$cmd" in
+  status)
+    r=$(rec "$key")
+    if [ -n "$r" ]; then
+      printf '%s\n' "$r" | jq .
+      # The caveat goes to stderr so stdout stays a single parseable record.
+      [ "$(field "$key" status)" = ready ] && \
+        echo "note: status is last known — a 'ready' box may be paused/idle-timed-out; 'e2b-box open' reconciles." >&2
+    elif [ "$json" -eq 1 ]; then
+      # Never break the contract to deliver bad news: a caller that asked for
+      # JSON gets JSON, including for "there is nothing here".
+      jq -cn --arg k "$key" '{tracked:false, key:$k}'
+    else
+      miss "$key" "no sandbox tracked"
+    fi
+    ;;
+  wait)
+    # Block until this box is ready, then say so and exit 0 — the readiness poll
+    # `open` already runs, minus the attach. A script that boots with `up` had no
+    # way to find out when the box was usable except to attach a shell to it.
+    #
+    # Bounded by --timeout-ms rather than the spinner's fixed ~20 minutes, and
+    # exit 1 on timeout, so a caller can branch on the difference between "slow"
+    # and "never".
+    wait_ms=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --timeout-ms) [ $# -ge 2 ] || { echo "e2b-box: --timeout-ms needs a number of milliseconds" >&2; exit 2; }
+                      wait_ms="$2"; shift 2 ;;
+        --timeout-ms=*) wait_ms="${1#*=}"; shift ;;
+        *) echo "e2b-box: wait takes only --timeout-ms N [--json]" >&2; exit 2 ;;
+      esac
+    done
+    case "$wait_ms" in ""|*[!0-9]*|0) [ -z "$wait_ms" ] || { echo "e2b-box: --timeout-ms must be a positive integer (milliseconds)" >&2; exit 2; } ;; esac
+    [ -n "$(field "$key" sandboxId)" ] || [ -n "$(field "$key" status)" ] || {
+      [ "$json" -eq 1 ] && jq -cn --arg k "$key" '{ok:false, key:$k, status:"untracked"}'
+      miss "$key" "no sandbox tracked" "nothing to wait for"
+      exit 1
+    }
+    started=$(date +%s)
+    if [ -n "$wait_ms" ]; then WAIT_MAX_ITERS=$(( (wait_ms + 299) / 300 )); export WAIT_MAX_ITERS; fi
+    if spin_until_ready "$key" "waiting for"; then
+      [ "$json" -eq 1 ] && jq -cn --arg k "$key" --argjson e "$(( ($(date +%s) - started) * 1000 ))" \
+        '{ok:true, key:$k, status:"ready", elapsedMs:$e}'
+      exit 0
+    fi
+    [ "$json" -eq 1 ] && jq -cn --arg k "$key" --argjson e "$(( ($(date +%s) - started) * 1000 ))" \
+      '{ok:false, key:$k, status:"timeout", elapsedMs:$e}'
+    exit 1
+    ;;
+  doctor)
+    # Everything this plugin needs, one row each, with the fix on the row that
+    # failed — the questions people actually open an issue about ("why does the
+    # pane close instantly", "why is my box on the wrong cluster") are all
+    # answered here. Read-only, and exit 0 even with warnings: a preflight that
+    # fails the build is a preflight nobody runs.
+    warn=0
+    row() { printf '%-7s %-14s %s\n' "$1" "$2" "$3"; }
+    if n=$(e2b_node 2>/dev/null); then row "[ok]" "node >= 22" "$n"
+    else row "[warn]" "node >= 22" "not found — fix: install Node 22+, or set HERDR_E2B_NODE=/path/to/node"; warn=1; fi
+    if ensure_e2b_path && command -v e2b >/dev/null 2>&1; then row "[ok]" "e2b cli" "$(command -v e2b)"
+    else row "[warn]" "e2b cli" "not found — fix: npm i -g @e2b/cli   (only 'shell' needs it)"; warn=1; fi
+    ensure_e2b_env >/dev/null 2>&1
+    if [ -n "${E2B_API_KEY:-}" ]; then row "[ok]" "api key" "set (${#E2B_API_KEY} chars)"
+    else row "[warn]" "api key" "missing — fix: e2b auth login, or set E2B_API_KEY"; warn=1; fi
+    row "[ok]" "cluster" "${E2B_DOMAIN:-e2b.app (default)}"
+    for t in jq git; do
+      if command -v "$t" >/dev/null 2>&1; then row "[ok]" "$t" "$(command -v "$t")"
+      else row "[warn]" "$t" "not found — fix: install $t"; warn=1; fi
+    done
+    row "[ok]" "state dir" "$STATE_DIR"
+    shopt -s nullglob; dfiles=("$BOXES_DIR"/*.json)
+    row "[ok]" "tracked boxes" "${#dfiles[@]}  (e2b-box list)"
+    [ "$warn" -eq 1 ] && echo "" && echo "warnings above are the fixes — nothing here changed anything." >&2
+    exit 0
+    ;;
+  list)
+    shopt -s nullglob
+    files=("$BOXES_DIR"/*.json)
+    if [ "$json" -eq 1 ]; then
+      # A stable contract over the record files, so callers stop reaching into
+      # $STATE_DIR themselves. Empty is `[]`, never silence — a consumer should
+      # not have to special-case "no output" to tell it apart from a crash.
+      if [ ${#files[@]} -eq 0 ]; then echo "[]"; else jq -s '.' "${files[@]}"; fi
+    elif [ ${#files[@]} -eq 0 ]; then echo "no sandboxes"; else
+      printf '%-20s %-12s %-10s %-22s %s\n' BOX STATUS TEMPLATE SANDBOX URL
+      for f in "${files[@]}"; do
+        jq -r '[(.label // .key), (.status // "-"), (.template // "-"), (.sandboxId // "-"), (.url // "-")] | @tsv' "$f"
+      done | while IFS=$'\t' read -r k s tpl sid u; do printf '%-20s %-12s %-10s %-22s %s\n' "$k" "$s" "$tpl" "$sid" "$u"; done
+      echo "status is last known — a 'ready' box may be paused/idle-timed-out; 'e2b-box open' reconciles." >&2
+    fi
+    ;;
+  url)
+    u=$(field "$key" url)
+    if [ -n "$u" ]; then echo "$u"; else miss "$key" "no sandbox tracked"; exit 1; fi
+    ;;
+  logs)  touch "$BOXES_DIR/$key.log"; tail -n +1 -f "$BOXES_DIR/$key.log" ;;
+  sync)
+    # Run in the FOREGROUND so the exit status is the worker's own (a backgrounded
+    # worker + record-poll can't tell this sync's result from a concurrent one).
+    # provision.js streams its steps to stderr on a TTY, so this isn't silent.
+    node_bin=$(e2b_node) || { echo "needs Node >= 22 (set HERDR_E2B_NODE=/path/to/node)"; exit 1; }
+    b=""; at_repo_root && b=$(git_branch); [ "$b" = "HEAD" ] && b=""
+    p=$(box_root)
+    l=$(label_from_cwd)
+    payload=$(jq -cn --arg k "$key" --arg b "$b" --arg p "$p" --arg l "$l" \
+      '{key:$k, label:$l, branch:$b, worktreePath:$p, workspaceId:"", op:"sync"}')
+    # sync provisions a fresh box when none is tracked yet — say so, so it isn't a
+    # silent (billable) surprise for someone who expected an existing box to update.
+    if [ -z "$(field "$key" sandboxId)" ]; then
+      echo "no sandbox tracked for '$key' yet — provisioning a fresh one (creates a billable box)…"
+    fi
+    echo "re-uploading '$key' worktree into its sandbox…"
+    "$node_bin" "$PLUGIN_DIR/src/provision.js" "$payload"
+    ;;
+  pull|download)
+    force=0
+    for a in "$@"; do case "$a" in --force|--yes|-y|-f) force=1 ;; esac; done
+    node_bin=$(e2b_node) || { echo "needs Node >= 22 (set HERDR_E2B_NODE=/path/to/node)"; exit 1; }
+    st=$(field "$key" status)
+    [ "$st" = "ready" ] || { echo "no ready sandbox for '$key' — nothing to pull"; exit 1; }
+    dest=$(box_root)
+    # Safety: pull overwrites local files with the sandbox's versions. On a dirty git
+    # tree (uncommitted work at risk) or a non-git folder (no `git diff`/undo), require
+    # explicit consent — prompt when interactive, else ABORT unless --force is given.
+    # Never silently clobber a non-interactive caller (e.g. a herdr action, a script).
+    risk=$(pull_risk "$dest")
+    if [ -n "$risk" ] && [ "$force" -ne 1 ]; then
+      echo "⚠️  $risk — pull overwrites files from the sandbox."
+      if [ -t 0 ]; then
+        printf "continue? [y/N] "; read -r ans; case "$ans" in [Yy]*) ;; *) echo "aborted"; exit 0 ;; esac
+      else
+        echo "aborted (non-interactive) — re-run with --force to overwrite." >&2; exit 1
+      fi
+    fi
+    payload=$(jq -cn --arg k "$key" --arg d "$dest" '{key:$k, destRoot:$d}')
+    echo "pulling sandbox '$key' → $dest …"
+    # Propagate a download failure (set -e isn't on) instead of masking it with the
+    # trailing git/echo below.
+    "$node_bin" "$PLUGIN_DIR/src/download.js" "$payload" || exit $?
+    # `if` (not `&&`) so a non-git $dest doesn't leave the failing rev-parse status
+    # (128) as this case arm's — and the script's — exit code on a successful pull.
+    if git -C "$dest" rev-parse --git-dir >/dev/null 2>&1; then echo "review:  git -C '$dest' diff"; fi
+    ;;
+  exec)
+    # Run one command inside the box and print ONE JSON object on stdout:
+    # {ok, exitCode, stdout, stderr, error}. `ok:false` is "never measured" (box
+    # unreachable / gone / timed out), never a failing command — the grader in
+    # tui/src/grade.rs turns that distinction into its verdicts (ADR-0004).
+    #
+    # The command is ONE argument, quoted by the caller, so the box's own shell
+    # splits it and `cd sub && npm test` keeps working.
+    timeout_ms=""
+    run_cmd=""
+    # The value is checked where it is READ, not after the loop: `--timeout-ms
+    # 'npm test'` would otherwise swallow the command and complain about the
+    # missing command instead of the bad number.
+    set_timeout() {
+      case "${1:-}" in
+        ""|*[!0-9]*|0) echo "e2b-box: --timeout-ms must be a positive integer (milliseconds)" >&2; exit 2 ;;
+      esac
+      timeout_ms="$1"
+    }
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --timeout-ms)
+          [ $# -ge 2 ] || { echo "e2b-box: --timeout-ms needs a number of milliseconds" >&2; exit 2; }
+          set_timeout "$2"; shift 2 ;;
+        --timeout-ms=*) set_timeout "${1#*=}"; shift ;;
+        *)
+          [ -z "$run_cmd" ] || { echo "e2b-box: exec takes ONE command — quote it" >&2; exit 2; }
+          run_cmd="$1"; shift ;;
+      esac
+    done
+    [ -n "$run_cmd" ] || { echo "e2b-box: exec needs a command, e.g. e2b-box exec 'npm test'" >&2; exit 2; }
+    node_bin=$(e2b_node) || { echo "needs Node >= 22 (set HERDR_E2B_NODE=/path/to/node)" >&2; exit 1; }
+    payload=$(jq -cn --arg k "$key" --arg c "$run_cmd" --arg t "$timeout_ms" \
+      '{key:$k, cmd:$c} + (if $t == "" then {} else {timeoutMs: ($t | tonumber)} end)')
+    "$node_bin" "$PLUGIN_DIR/src/exec.js" "$payload"
+    ;;
+  kill)
+    sid=$(field "$key" sandboxId)
+    if [ -z "$sid" ]; then
+      rm -f "$BOXES_DIR/$key.json" "$BOXES_DIR/$key.log"; echo "cleared '$key' (no sandbox tracked)"
+    elif sdk_kill "$sid" "$(field "$key" domain)"; then
+      rm -f "$BOXES_DIR/$key.json" "$BOXES_DIR/$key.log"; echo "killed sandbox for '$key'"
+    else
+      # kill failed — KEEP the record (with the sandbox id) so the box isn't
+      # silently orphaned & billable. Retry, or check `e2b sandbox list`.
+      echo "✗ couldn't kill $sid for '$key' — record kept so you can retry: e2b-box kill" >&2
+      exit 1
+    fi
+    ;;
+  pause|resume)
+    # Stop / restart the billing clock without losing the box. pause snapshots
+    # the sandbox (files AND memory); resume brings the SAME sandbox id back.
+    # Both are record-only operations on this side — src/lifecycle.js flips
+    # status to paused/ready so the dashboard reflects it without a re-provision.
+    sid=$(field "$key" sandboxId)
+    [ -n "$sid" ] || { miss "$key" "no sandbox tracked" "nothing to $cmd"; exit 1; }
+    node_bin=$(e2b_node) || { echo "needs Node >= 22 (set HERDR_E2B_NODE=/path/to/node)"; exit 1; }
+    "$node_bin" "$PLUGIN_DIR/src/lifecycle.js" "$cmd" "$key" "$sid" "$(field "$key" domain)"
+    ;;
+  up)
+    # Boot the sandbox in the background; don't attach.
+    st=$(field "$key" status)
+    case "$st" in
+      ready) echo "sandbox for '$key' already ready — 'e2b-box open' to attach" ;;
+      provisioning) echo "sandbox for '$key' already provisioning ($(field "$key" step)) — e2b-box logs" ;;
+      *)
+        [ -z "$template" ] && template=$(pick_template "$key")
+        echo "provisioning E2B sandbox for '$key'${template:+ ($template)} in the background…"
+        provision_from_cwd "$key" ensure "$template"
+        echo "watch: e2b-box logs   ·   attach when ready: e2b-box open"
+        ;;
+    esac
+    ;;
+  connect)
+    # Attach to a box that already exists; never create one. With no argument
+    # that's this worktree's box, the everyday case.
+    #
+    # With a sandbox id it's the one you point at — the id `e2b-box list` prints
+    # in the SANDBOX column, and the same id `e2b sandbox connect` takes, because
+    # that is literally what runs underneath. Going through the record when we
+    # have one matters: the record carries the CLUSTER the box lives on, and
+    # attaching to the right id on the wrong cluster reports "not found" while
+    # the real box keeps running.
+    if [ $# -gt 0 ]; then
+      want_sid="$1"; shift
+      [ $# -eq 0 ] || { echo "e2b-box connect: one sandbox at a time — got '$want_sid' and '$1'" >&2; exit 2; }
+      found=""
+      shopt -s nullglob
+      for f in "$BOXES_DIR"/*.json; do
+        if [ "$(jq -r '.sandboxId // empty' "$f" 2>/dev/null)" = "$want_sid" ]; then
+          found=$(basename "$f" .json); break
+        fi
+      done
+      if [ -n "$found" ]; then
+        key="$found"
+      else
+        # Not ours. Still attachable — the id is all the CLI needs — but say
+        # plainly that we know nothing about it, because the cluster is a guess
+        # and a wrong guess looks exactly like a deleted sandbox.
+        echo "e2b-box connect: '$want_sid' isn't a box this plugin tracks — attaching on ${E2B_DOMAIN:-the default cluster}." >&2
+        echo "  if it lives elsewhere:  E2B_DOMAIN=<cluster> e2b-box connect $want_sid" >&2
+        ensure_e2b_path
+        ensure_e2b_env
+        command -v e2b >/dev/null 2>&1 || { echo "e2b-box: e2b CLI not found — npm i -g @e2b/cli" >&2; exit 1; }
+        { [ -t 0 ] && [ -t 1 ]; } || { echo "e2b-box connect: needs an interactive terminal." >&2; exit 1; }
+        exec e2b sandbox connect "$want_sid"
+      fi
+    fi
+    boot_and_connect 0
+    ;;
+  open)
+    # Ensure the sandbox is live (reconnect/resume, or create if missing) then attach.
+    boot_and_connect 1 "$template"
+    ;;
+  *)
+    usage >&2
+    # An unknown verb is a typo, not a request for the manual, so name the word that
+    # was not understood — LAST, where the eye lands after scrolling, and from $cmd
+    # because the positional it came from was shifted off long before this point.
+    printf '\ne2b-box: unknown command `%s`\n' "$cmd" >&2
+    # Two words get a spelled-out answer instead of a guess. They are the verbs
+    # agentbox users arrive with, and they are NOT aliases here: their `stop`
+    # preserves disk without freezing, which is a state we do not have, so
+    # quietly mapping it to `pause` would do a different thing than the word
+    # promises. Say the two things it could have meant and let them pick.
+    case "$cmd" in
+      stop)  printf "  did you mean 'pause' (freeze it, keep the state) or 'kill' (destroy it)?\n" >&2 ;;
+      start) printf "  did you mean 'resume' (thaw a paused box) or 'open' (boot one and attach)?\n" >&2 ;;
+      *)
+        near=$(printf '%s\n' $VERBS | grep -i "^${cmd:0:2}" | head -1)
+        [ -n "$near" ] && printf "  did you mean '%s'?\n" "$near" >&2 ;;
+    esac
+    exit 2
+    ;;
+esac

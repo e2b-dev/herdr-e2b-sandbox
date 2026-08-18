@@ -1,0 +1,162 @@
+id = "herdr-e2b"
+name = "herdr-e2b"
+version = "0.0.1"
+min_herdr_version = "0.7.0"
+description = "Send a git worktree to a fresh E2B cloud sandbox on demand — a snapshot upload of the live tree, uncommitted changes and all. Press prefix+shift+e to boot a box for the current worktree and drop into a shell; the box is torn down when the worktree is removed."
+platforms = ["macos", "linux"]
+
+# On `plugin install`: install node deps and link the e2b-box CLI onto PATH.
+# (Skipped by `plugin link`; run ./install.sh yourself when developing locally.)
+[[build]]
+command = ["bash", "install.sh"]
+
+# Worktree removed -> kill the sandbox (no orphaned, billable boxes left behind).
+[[events]]
+on = "worktree.removed"
+command = ["bash", "bin/teardown-worktree"]
+
+# Actions register the plugin's verbs with herdr. Invoke any of them with
+#   herdr plugin action invoke <id> --plugin herdr-e2b
+# or bind a key (optional) in your herdr config, e.g.:
+#   [[keys.command]]
+#   key = "prefix+shift+e"
+#   command = "herdr plugin action invoke open --plugin herdr-e2b"
+# (Avoid plain prefix+e — that's herdr's built-in edit_scrollback.) `open` and
+# `fleet` need an interactive pane and hand off to one; the one-shot verbs below
+# print to the plugin command log (herdr plugin log list --plugin herdr-e2b).
+
+# Send the current worktree to E2B and open its shell (provisions if needed).
+# This hands off to a PANE rather than running e2b-box here: a herdr action has
+# its output wired to the plugin command log and no terminal at all, so it can
+# neither host a shell (it printed "this pane has no interactive terminal") nor
+# ask which template to boot. e2b-box-open fills the pane you pressed the key in
+# — like the dashboard toggle — and only splits when that pane is busy.
+[[actions]]
+id = "open"
+title = "Open E2B sandbox"
+contexts = ["workspace"]
+command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box-open\""]
+
+# Fan this checkout out into a fleet: one worktree, workspace and box per
+# template on the roster, all off the same base ref. Two picker screens (task
+# slug, then roster), then the pane becomes the dashboard.
+# Hands off to a PANE for exactly the reason `open` does: an action has no
+# terminal, so it can neither draw the pickers nor read a keypress.
+# e2b-fleet-open fills the pane you pressed the key in and only splits when that
+# pane is busy. Suggested binding:
+#   [[keys.command]]
+#   key = "prefix+shift+f"
+#   command = "herdr plugin action invoke fleet --plugin herdr-e2b"
+[[actions]]
+id = "fleet"
+title = "Open E2B fleet"
+contexts = ["workspace"]
+command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-fleet-open\""]
+
+# Re-upload the current worktree into its box (local → box).
+[[actions]]
+id = "sync"
+title = "Sync worktree → sandbox"
+contexts = ["workspace"]
+command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box\" sync"]
+
+# Download the box's files back into this folder (box → local).
+[[actions]]
+id = "pull"
+title = "Pull sandbox → worktree"
+contexts = ["workspace"]
+command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box\" pull"]
+
+# Print this worktree's box record (status, sandbox id, url).
+[[actions]]
+id = "status"
+title = "Sandbox status"
+contexts = ["workspace"]
+command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box\" status"]
+
+# Pause this worktree's box (files + memory kept; stops the billing clock).
+[[actions]]
+id = "pause"
+title = "Pause E2B sandbox"
+contexts = ["workspace"]
+command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box\" pause"]
+
+# Bring a paused box back (same sandbox id).
+[[actions]]
+id = "resume"
+title = "Resume E2B sandbox"
+contexts = ["workspace"]
+command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box\" resume"]
+
+# Kill this worktree's box.
+[[actions]]
+id = "kill"
+title = "Kill E2B sandbox"
+contexts = ["workspace"]
+command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box\" kill"]
+
+# Open the dashboard TUI — a live board of every tracked box with per-box
+# open/sync/pull/kill (optional; requires the Rust build, see install.sh).
+[[actions]]
+id = "dashboard"
+title = "E2B dashboard"
+command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-dash\""]
+
+# The one to bind a key to. Same dashboard, but it closes an open one instead of
+# stacking a second, and picks its placement from the layout at keypress time:
+# alone in the tab it takes the whole tab, otherwise it splits so the pane you
+# were working beside stays visible. A [[panes]] placement can't do that — it is
+# fixed at install time. Suggested binding:
+#   [[keys.command]]
+#   key = "prefix+shift+d"
+#   command = "herdr plugin action invoke dashboard-toggle --plugin herdr-e2b"
+[[actions]]
+id = "dashboard-toggle"
+title = "E2B dashboard (toggle)"
+contexts = ["workspace"]
+command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box\" dash toggle"]
+
+# Persistent pane entrypoint (herdr's pane menu): shows a spinner while the box
+# boots, then execs a shell inside the sandbox. Zoomed (full-screen) — you're
+# working in the cloud box, so there's nothing local to keep beside it.
+[[panes]]
+id = "box"
+title = "e2b"
+placement = "zoomed"
+command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box\" open"]
+
+# Fleet pane: the two picker screens, then the dashboard — the board comes up as
+# soon as the slug and roster are answered, and the members provision behind it,
+# each appearing as a row when its box lands. Zoomed like `box` — the pickers are
+# full-screen and the board that follows wants the room.
+#
+# No `--dashboard`: answering the pickers is what asks for the board now. The verb
+# is the switch — `e2b-box fleet create …` is the one-liner that stays in the
+# foreground and hands back an exit code.
+[[panes]]
+id = "fleet"
+title = "e2b fleet"
+placement = "zoomed"
+command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box\" fleet"]
+
+# Bench pane: grade a fleet — run one held-out check inside every member's box
+# and print a verdict per member. A pane rather than an action because an
+# action's output goes to the plugin command log, where nobody watches a run that
+# takes minutes. Not zoomed: the board is short and reads well beside the work it
+# is judging.
+#
+# The task slug and the check cannot be guessed from a pane, so this opens on the
+# usage and leaves you a shell rather than pretending to know them:
+#   e2b-bench <task-slug> --grade 'npm test'
+[[panes]]
+id = "bench"
+title = "e2b bench"
+command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-bench\"; exec \"${SHELL:-bash}\""]
+
+# Dashboard pane: the live board of all tracked boxes. From here open/sync/pull
+# spawn their own panes and `open`'s shell hands back to the board on exit.
+[[panes]]
+id = "dashboard"
+title = "e2b dashboard"
+placement = "zoomed"
+command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-dash\""]

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# herdr event hook: worktree.removed
+# Kill the sandbox tied to this worktree so no billable sandbox is left orphaned.
+set -uo pipefail
+DIR="$(CDPATH= cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$DIR/lib/paths.sh"
+
+command -v jq >/dev/null 2>&1 || exit 0
+
+ev="${HERDR_PLUGIN_EVENT_JSON:-}"
+[ -z "$ev" ] && exit 0
+
+wt_path=$(printf '%s' "$ev" | jq -r '[.. | .path? // empty | strings][0] // empty' 2>/dev/null)
+[ -z "$wt_path" ] && exit 0
+
+# Find the sandbox record for this worktree. Prefer an exact match on the stored
+# worktreePath (robust — the removed dir may be gone, so we can't re-resolve it),
+# then fall back to the path-derived key. Matching by path (not basename) is what
+# keeps two same-named folders from tearing down each other's sandbox.
+key=""
+for f in "$BOXES_DIR"/*.json; do
+  [ -e "$f" ] || continue
+  wp=$(jq -r '.worktreePath // empty' "$f" 2>/dev/null)
+  [ "$wp" = "$wt_path" ] && { key=$(basename "$f" .json); break; }
+done
+[ -z "$key" ] && key=$(box_key "$wt_path")
+[ -z "$key" ] && exit 0
+
+[ -f "$BOXES_DIR/$key.json" ] || exit 0   # no sandbox for this worktree — nothing to do
+sid=$(jq -r '.sandboxId // empty' "$BOXES_DIR/$key.json" 2>/dev/null)
+# Kill on the cluster the record says the box lives on — a removed worktree must
+# not leave a live box behind just because the shell has since switched regions.
+dom=$(jq -r '.domain // empty' "$BOXES_DIR/$key.json" 2>/dev/null)
+if [ -z "$sid" ] || sdk_kill "$sid" "$dom" >/dev/null 2>&1; then
+  # killed (or already gone / no sandbox) → drop the record
+  rm -f "$BOXES_DIR/$key.json" "$BOXES_DIR/$key.log" 2>/dev/null || true
+  [ -n "$sid" ] && herdr notification show "E2B" --body "Sandbox for $key torn down" >/dev/null 2>&1 || true
+else
+  # kill FAILED — keep the record (with the sandbox id) rather than orphan a
+  # billable sandbox; the worktree is gone, so retry via the dashboard or
+  # `KEY=$key e2b-box kill`.
+  herdr notification show "E2B" --body "Couldn't kill sandbox for $key — retry: KEY=$key e2b-box kill" >/dev/null 2>&1 || true
+fi
+exit 0

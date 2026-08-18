@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# e2b-dash-toggle — one key both summons and dismisses the dashboard, filling the
+# pane you pressed it in rather than taking over the screen.
+#
+# herdr has no pane placement that means "cover exactly this pane": `zoomed` and
+# `overlay` both zoom the whole tab, `split` halves the pane, and `popup` is a
+# centered box sized in percent of the window. The only thing that fills one
+# pane exactly is running the TUI *in* that pane — so that is what this does,
+# and quitting it (q/esc) hands the pane back to your shell.
+#
+# That is only safe when the pane is an idle shell. A pane running an agent or a
+# long command would receive `e2b-dash` as typed input — into a Claude Code
+# prompt, say — so those fall back to a split beside it, which at least keeps
+# what you were watching visible.
+#
+# "Is it already open?" is a question only herdr can answer: the dashboard also
+# closes itself on q/esc, and herdr recycles pane ids, so a remembered id would
+# go stale and risk acting on an unrelated pane. We ask every time.
+set -uo pipefail
+# Resolve through the ~/.local/bin symlink to the real script dir so we can find
+# lib/paths.sh (BSD readlink has no -f, so walk the links manually).
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  ldir="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [ "${SOURCE#/}" = "$SOURCE" ] && SOURCE="$ldir/$SOURCE"
+done
+DIR="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+source "$DIR/lib/paths.sh"
+source "$DIR/lib/pane.sh"
+
+PANE_TITLE="e2b dashboard"   # matches [[panes]] title in herdr-plugin.toml, which
+                             # herdr applies as the pane's manual label.
+DASH_PROC="e2b-dash"         # process name when the TUI runs inside a pane.
+
+HERDR=$(pane_herdr) || { echo "e2b-dash-toggle: can't find the herdr binary" >&2; exit 1; }
+NODE=$(pane_node) || { echo "e2b-dash-toggle: can't find node — set HERDR_E2B_NODE=/path/to/node" >&2; exit 1; }
+
+# Focused pane, its tab's panes, and any dashboard opened as its own pane.
+read -r focus_pane pane_pane tab_list <<EOF
+$(pane_query "$HERDR" "$NODE" "$PANE_TITLE")
+EOF
+
+procs() { pane_procs "$HERDR" "$NODE" "$1"; }
+
+# --- toggle off ------------------------------------------------------------
+# A dashboard running inside a pane: quit it so the pane returns to its shell.
+if [ "${tab_list:--}" != "-" ]; then
+  IFS=, read -ra mates <<<"$tab_list"
+  for p in "${mates[@]}"; do
+    if procs "$p" | grep -qx "$DASH_PROC"; then
+      "$HERDR" pane send-keys "$p" q >/dev/null 2>&1 && exit 0
+    fi
+  done
+fi
+# A dashboard opened as its own pane (fallback mode): close the pane.
+if [ "${pane_pane:--}" != "-" ]; then
+  "$HERDR" pane close "$pane_pane" >/dev/null 2>&1 && exit 0
+fi
+
+# --- toggle on -------------------------------------------------------------
+[ "${focus_pane:--}" != "-" ] || { echo "e2b-dash-toggle: no focused pane" >&2; exit 1; }
+
+# Idle shell? Then the pane is ours to use, and the dashboard fills it exactly.
+# (pane_is_idle fails safe — see lib/pane.sh.)
+busy=1
+pane_is_idle "$HERDR" "$NODE" "$focus_pane" && busy=0
+
+if [ "$busy" -eq 0 ]; then
+  "$HERDR" pane run "$focus_pane" "$DASH_PROC" >/dev/null 2>&1 && exit 0
+  echo "e2b-dash-toggle: couldn't start the dashboard in this pane" >&2
+fi
+
+# Busy pane (agent, dev server, long command): never type into it. Open beside
+# it instead, so whatever you were watching stays on screen.
+"$HERDR" plugin pane open --plugin herdr-e2b --entrypoint dashboard \
+  --placement split --target-pane "$focus_pane" --direction right >/dev/null 2>&1 \
+  || { echo "e2b-dash-toggle: couldn't open the dashboard" >&2; exit 1; }

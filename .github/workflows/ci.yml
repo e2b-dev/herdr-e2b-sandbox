@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: package.json and herdr-plugin.toml versions match
+        run: |
+          pkg=$(jq -r .version package.json)
+          man=$(grep -E '^version' herdr-plugin.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "package.json=$pkg  herdr-plugin.toml=$man"
+          [ "$pkg" = "$man" ] || { echo "::error::version mismatch ($pkg vs $man)"; exit 1; }
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [22, 24]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci
+      # Offline: unit tests (config + pull path guards) + lint + CLI exit-code checks.
+      - run: npm test
+
+  # The Rust half — the dashboard and the grader — had no CI at all until now:
+  # `npm test` never touches tui/, so every one of its tests was local-only and a
+  # PR could redden them without anything saying so. One job, not a matrix: this
+  # is a single crate with no platform-specific code, and the install path already
+  # tolerates a machine with no toolchain.
+  tui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      # Cache keyed on the lockfile: a cold cargo build is most of this job.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tui
+      - name: cargo fmt
+        working-directory: tui
+        run: cargo fmt --check
+      # Warnings are errors here and nowhere else: an unused import in a TUI is
+      # invisible at runtime, so CI is the only thing that will ever notice.
+      - name: cargo clippy
+        working-directory: tui
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test
+        working-directory: tui
+        run: cargo test
+      # Both binaries must build in release — the installer's cargo path is the
+      # only thing that produces e2b-bench, so a break there is a missing verb.
+      - name: cargo build --release
+        working-directory: tui
+        run: cargo build --release --bins
