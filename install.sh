@@ -193,7 +193,7 @@ fi
 # Keep IN SYNC with src/config.js and bin/lib/paths.sh. HERDR_PLUGIN_CONFIG_DIR
 # is set when herdr runs this as the plugin's build step; the XDG path is the
 # fallback for a hand-run ./install.sh.
-CONFIG_DIR="${HERDR_PLUGIN_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins/config/herdr-e2b}"
+CONFIG_DIR="${HERDR_PLUGIN_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins/config/e2b-dev.herdr-e2b}"
 CFG="$CONFIG_DIR/config.toml"
 have_key=0
 [ -n "${E2B_API_KEY:-}" ] && have_key=1

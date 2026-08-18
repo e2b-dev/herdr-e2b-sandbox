@@ -9,7 +9,7 @@ const STATE_DIR =
   process.env.HERDR_E2B_STATE_DIR ||
   path.join(
     process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local/state"),
-    "herdr/plugins/herdr-e2b",
+    "herdr/plugins/e2b-dev.herdr-e2b",
   )
 
 export const BOXES_DIR = path.join(STATE_DIR, "boxes")

@@ -48,6 +48,6 @@ fi
 # Busy pane (agent, dev server, an attached sandbox shell): never type into it.
 # Open beside it instead. The pane entrypoint carries its own cwd context, so the
 # fleet still branches off the checkout you pressed the key in.
-"$HERDR" plugin pane open --plugin herdr-e2b --entrypoint fleet \
+"$HERDR" plugin pane open --plugin e2b-dev.herdr-e2b --entrypoint fleet \
   --placement split --target-pane "$focus_pane" --direction right --focus >/dev/null 2>&1 \
   || { echo "e2b-fleet-open: couldn't open the fleet pane" >&2; exit 1; }

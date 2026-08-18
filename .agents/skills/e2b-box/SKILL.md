@@ -65,7 +65,7 @@ Rules that bite:
 The human watches the board. An agent reads state instead:
 
 ```sh
-cat "${XDG_STATE_HOME:-$HOME/.local/state}/herdr/plugins/herdr-e2b/fleets/<slug>.log"  # per-member report
+cat "${XDG_STATE_HOME:-$HOME/.local/state}/herdr/plugins/e2b-dev.herdr-e2b/fleets/<slug>.log"  # per-member report
 e2b-box list                                        # every tracked box: status, template, id, url
 e2b-box exec 'git -C ~/project log --oneline -5'    # peek inside ONE box (run from its worktree)
 ```

@@ -73,6 +73,6 @@ fi
 
 # Busy pane (agent, dev server, long command): never type into it. Open beside
 # it instead, so whatever you were watching stays on screen.
-"$HERDR" plugin pane open --plugin herdr-e2b --entrypoint dashboard \
+"$HERDR" plugin pane open --plugin e2b-dev.herdr-e2b --entrypoint dashboard \
   --placement split --target-pane "$focus_pane" --direction right >/dev/null 2>&1 \
   || { echo "e2b-dash-toggle: couldn't open the dashboard" >&2; exit 1; }

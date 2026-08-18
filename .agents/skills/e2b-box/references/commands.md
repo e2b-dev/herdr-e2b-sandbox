@@ -20,12 +20,12 @@ the script header — then fix this file.
 - A box's identity is the FOLDER you run from (folder name + path hash) — not the
   branch. Two same-named folders never share a box; a repo on `main` doesn't key as
   "main". The mirrored root is `$PWD`, never the git toplevel.
-- State dir: `${HERDR_PLUGIN_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/herdr/plugins/herdr-e2b}`
+- State dir: `${HERDR_PLUGIN_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/herdr/plugins/e2b-dev.herdr-e2b}`
   - `boxes/<key>.json` — per-box record (status, sandboxId, url, template)
   - `boxes/<key>.log` — provisioning log (`e2b-box logs` tails it)
   - `fleets/<slug>.log` — fleet per-member report (what `create` prints)
   - `bench/<slug>/` — grading verdicts (ADR-0005: a bench run is an entity)
-- Config file: `~/.config/herdr/plugins/config/herdr-e2b/config.toml`
+- Config file: `~/.config/herdr/plugins/config/e2b-dev.herdr-e2b/config.toml`
   (or `$HERDR_PLUGIN_CONFIG_DIR/config.toml`).
 - Fleet members are found by BRANCH PREFIX `e2b/<slug>-` — nothing about a fleet is
   persisted as an object (ADR-0001). Branch shape: `e2b/<slug>-<template>-<rand4>`.
@@ -153,7 +153,7 @@ stacking, picks placement from the layout.
 
 ## herdr actions & keybindings
 
-Actions (`herdr plugin action invoke <id> --plugin herdr-e2b`): `open`, `fleet`,
+Actions (`herdr plugin action invoke <id> --plugin e2b-dev.herdr-e2b`): `open`, `fleet`,
 `sync`, `pull`, `status`, `pause`, `resume`, `kill`, `dashboard`, `dashboard-toggle`.
 Suggested bindings (herdr config `[[keys.command]]`):
 

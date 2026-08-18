@@ -45,10 +45,10 @@ pub(crate) fn state_dir() -> PathBuf {
         return PathBuf::from(d);
     }
     if let Ok(d) = std::env::var("XDG_STATE_HOME") {
-        return PathBuf::from(d).join("herdr/plugins/herdr-e2b");
+        return PathBuf::from(d).join("herdr/plugins/e2b-dev.herdr-e2b");
     }
     PathBuf::from(std::env::var("HOME").unwrap_or_default())
-        .join(".local/state/herdr/plugins/herdr-e2b")
+        .join(".local/state/herdr/plugins/e2b-dev.herdr-e2b")
 }
 
 /// All box records in `dir`, sorted by display label.

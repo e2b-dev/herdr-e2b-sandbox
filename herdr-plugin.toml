@@ -1,5 +1,5 @@
-id = "herdr-e2b"
-name = "herdr-e2b"
+id = "e2b-dev.herdr-e2b"
+name = "herdr-e2b-sandbox"
 version = "0.0.1"
 min_herdr_version = "0.7.0"
 description = "Send a git worktree to a fresh E2B cloud sandbox on demand — a snapshot upload of the live tree, uncommitted changes and all. Press prefix+shift+e to boot a box for the current worktree and drop into a shell; the box is torn down when the worktree is removed."
@@ -16,14 +16,14 @@ on = "worktree.removed"
 command = ["bash", "bin/teardown-worktree"]
 
 # Actions register the plugin's verbs with herdr. Invoke any of them with
-#   herdr plugin action invoke <id> --plugin herdr-e2b
+#   herdr plugin action invoke <id> --plugin e2b-dev.herdr-e2b
 # or bind a key (optional) in your herdr config, e.g.:
 #   [[keys.command]]
 #   key = "prefix+shift+e"
-#   command = "herdr plugin action invoke open --plugin herdr-e2b"
+#   command = "herdr plugin action invoke open --plugin e2b-dev.herdr-e2b"
 # (Avoid plain prefix+e — that's herdr's built-in edit_scrollback.) `open` and
 # `fleet` need an interactive pane and hand off to one; the one-shot verbs below
-# print to the plugin command log (herdr plugin log list --plugin herdr-e2b).
+# print to the plugin command log (herdr plugin log list --plugin e2b-dev.herdr-e2b).
 
 # Send the current worktree to E2B and open its shell (provisions if needed).
 # This hands off to a PANE rather than running e2b-box here: a herdr action has
@@ -46,7 +46,7 @@ command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box-open\""]
 # pane is busy. Suggested binding:
 #   [[keys.command]]
 #   key = "prefix+shift+f"
-#   command = "herdr plugin action invoke fleet --plugin herdr-e2b"
+#   command = "herdr plugin action invoke fleet --plugin e2b-dev.herdr-e2b"
 [[actions]]
 id = "fleet"
 title = "Open E2B fleet"
@@ -109,7 +109,7 @@ command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-dash\""]
 # fixed at install time. Suggested binding:
 #   [[keys.command]]
 #   key = "prefix+shift+d"
-#   command = "herdr plugin action invoke dashboard-toggle --plugin herdr-e2b"
+#   command = "herdr plugin action invoke dashboard-toggle --plugin e2b-dev.herdr-e2b"
 [[actions]]
 id = "dashboard-toggle"
 title = "E2B dashboard (toggle)"

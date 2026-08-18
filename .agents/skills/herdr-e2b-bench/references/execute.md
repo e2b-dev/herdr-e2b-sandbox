@@ -144,7 +144,7 @@ protecting, and re-grading is the repair, not a mistake. Tell them apart by read
 what the run actually used:
 
 ```sh
-BENCH="${XDG_STATE_HOME:-$HOME/.local/state}/herdr/plugins/herdr-e2b/bench/<slug>"
+BENCH="${XDG_STATE_HOME:-$HOME/.local/state}/herdr/plugins/e2b-dev.herdr-e2b/bench/<slug>"
 jq -r '.grade' "$BENCH/run.json" | head -30      # the exact grader those verdicts came from
 jq -r '.stderr' "$BENCH"/*.json | head           # identical errors across members = the grader
 ```
@@ -160,7 +160,7 @@ not: `bin/e2b-box` passes the command as one argv element (`jq --arg`), and
 `tui/src/grade.rs` passes it as one arg too. Compare timestamps before theorising:
 
 ```sh
-BENCH="${XDG_STATE_HOME:-$HOME/.local/state}/herdr/plugins/herdr-e2b/bench/<slug>"
+BENCH="${XDG_STATE_HOME:-$HOME/.local/state}/herdr/plugins/e2b-dev.herdr-e2b/bench/<slug>"
 jq -r '.gradedAt' "$BENCH"/*.json      # when the verdict was taken
 stat -f %m bench/grade.sh              # when the grader last changed (Linux: stat -c %Y)
 ```

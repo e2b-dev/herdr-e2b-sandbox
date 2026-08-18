@@ -11,7 +11,7 @@ const CONFIG_DIR =
   process.env.HERDR_PLUGIN_CONFIG_DIR ||
   path.join(
     process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"),
-    "herdr/plugins/config/herdr-e2b",
+    "herdr/plugins/config/e2b-dev.herdr-e2b",
   )
 
 /** The config file itself. Exported so error messages can name the path the

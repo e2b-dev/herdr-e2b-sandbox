@@ -7,7 +7,7 @@ layers, the data flow, the state model, and the invariants worth checking).
 
 - Requirements: **Node ≥ 22**, **jq**, **git**. Optional: **Rust** (only to build
   the dashboard TUI from source).
-- Local install into herdr: `herdr plugin link /path/to/herdr-e2b && ./install.sh`.
+- Local install into herdr: `herdr plugin link /path/to/herdr-e2b-sandbox && ./install.sh`.
 - Install deps + run the checks: `npm install && npm test`.
 
 ## Tests

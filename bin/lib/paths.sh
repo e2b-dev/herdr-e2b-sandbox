@@ -3,11 +3,11 @@
 PLUGIN_DIR="$(CDPATH= cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Keep IN SYNC with src/store.js and tui/src/main.rs so the writer, e2b-box, and
 # the dashboard all agree on where box records live.
-STATE_DIR="${HERDR_PLUGIN_STATE_DIR:-${HERDR_E2B_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/herdr/plugins/herdr-e2b}}"
+STATE_DIR="${HERDR_PLUGIN_STATE_DIR:-${HERDR_E2B_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/herdr/plugins/e2b-dev.herdr-e2b}}"
 # Same rule for config: herdr's HERDR_PLUGIN_CONFIG_DIR is the documented home
 # for user-editable config, so it wins over the XDG path it happens to point at.
 # Keep IN SYNC with src/config.js and install.sh.
-CONFIG_DIR="${HERDR_PLUGIN_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins/config/herdr-e2b}"
+CONFIG_DIR="${HERDR_PLUGIN_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins/config/e2b-dev.herdr-e2b}"
 BOXES_DIR="$STATE_DIR/boxes"
 mkdir -p "$BOXES_DIR" 2>/dev/null || true
 

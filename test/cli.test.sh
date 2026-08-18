@@ -336,7 +336,7 @@ rm -f "$FREPO/untracked.txt"
 
 # [fleet] base and prefix come from config, so the branch namespace and the ref
 # members fork from are both the user's to choose.
-FCFG="$TMP/fleet-home/.config/herdr/plugins/config/herdr-e2b"; mkdir -p "$FCFG"
+FCFG="$TMP/fleet-home/.config/herdr/plugins/config/e2b-dev.herdr-e2b"; mkdir -p "$FCFG"
 printf '[fleet]\nbase = "main"\nprefix = "bench/x"\n' > "$FCFG/config.toml"
 out=$( cd "$FREPO" && HERDR_E2B_FLEET_RAND=ab12 XDG_CONFIG_HOME="$TMP/fleet-home/.config" \
        "$FLEET" --slug login-fix -t claude -n 2>&1 ); rc=$?

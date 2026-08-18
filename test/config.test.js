@@ -220,7 +220,7 @@ test("readCliConfig: a missing or unparseable login is empty, never a throw", ()
 // every plugin command inherits that snapshot. Switching regions afterwards has
 // to take effect, so daemon-spawned commands demote the ambient values.
 
-const DAEMON = { HERDR_PLUGIN_ID: "herdr-e2b" }
+const DAEMON = { HERDR_PLUGIN_ID: "e2b-dev.herdr-e2b" }
 
 test("resolveCredentials: a stale daemon E2B_DOMAIN loses to the CLI login", () => {
   const r = resolveCredentials({

@@ -1,7 +1,7 @@
 # herdr-e2b config
 # Copy to:  $HERDR_PLUGIN_CONFIG_DIR/config.toml — herdr's own config dir for a
 #           plugin, and the documented home for user-editable config. Today that
-#           resolves to ~/.config/herdr/plugins/config/herdr-e2b/config.toml (or
+#           resolves to ~/.config/herdr/plugins/config/e2b-dev.herdr-e2b/config.toml (or
 #           under $XDG_CONFIG_HOME), which is the fallback when the var is unset.
 #           `chmod 600` it: this file holds secrets, and every installed herdr
 #           plugin runs as you with your environment.

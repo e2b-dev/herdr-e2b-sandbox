@@ -40,7 +40,7 @@ herdr plugin install e2b-dev/herdr-e2b-sandbox   # build step links e2b-box onto
 
 Needs **herdr ≥ 0.7.0**, **Node ≥ 22**, **jq**, the `e2b` CLI on PATH, and an
 [E2B API key](https://e2b.dev/dashboard). The key goes in `[secrets].e2b_api_key`
-in the plugin config (`~/.config/herdr/plugins/config/herdr-e2b/config.toml`), or
+in the plugin config (`~/.config/herdr/plugins/config/e2b-dev.herdr-e2b/config.toml`), or
 in `E2B_API_KEY`, which wins if both are set.
 
 Bind the two verbs you press (`prefix+e` is herdr's own `edit_scrollback` — stay
@@ -49,14 +49,14 @@ off it):
 ```toml
 [[keys.command]]
 key = "prefix+shift+e"                                          # one box, this checkout
-command = "herdr plugin action invoke open --plugin herdr-e2b"
+command = "herdr plugin action invoke open --plugin e2b-dev.herdr-e2b"
 
 [[keys.command]]
 key = "prefix+shift+f"                                          # a fleet, off this checkout
-command = "herdr plugin action invoke fleet --plugin herdr-e2b"
+command = "herdr plugin action invoke fleet --plugin e2b-dev.herdr-e2b"
 ```
 
-> Local dev: `herdr plugin link /path/to/herdr-e2b && ./install.sh`.
+> Local dev: `herdr plugin link /path/to/herdr-e2b-sandbox && ./install.sh`.
 
 ## Quick start
 
@@ -266,12 +266,12 @@ arch it skips, because the dashboard is optional.
 checkout:
 
 ```bash
-herdr plugin action invoke sync --plugin herdr-e2b
+herdr plugin action invoke sync --plugin e2b-dev.herdr-e2b
 ```
 
 `open` and `fleet` hand off to a pane — an action has no terminal of its own, so
 it can't host a shell or draw a chooser. One-shot verbs print to
-`herdr plugin log list --plugin herdr-e2b`.
+`herdr plugin log list --plugin e2b-dev.herdr-e2b`.
 
 ## How code gets in
 
@@ -285,7 +285,7 @@ non-git folders. Symlinks are skipped.
 ## Configuration
 
 Copy `config/config.example.toml` to
-`~/.config/herdr/plugins/config/herdr-e2b/config.toml`. Every key is optional and
+`~/.config/herdr/plugins/config/e2b-dev.herdr-e2b/config.toml`. Every key is optional and
 that file documents all of them — cluster, template, branch rules, timeout,
 auto-pause, per-template env, fleet roster, agents and seeds.
 
