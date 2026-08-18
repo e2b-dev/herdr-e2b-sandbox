@@ -110,6 +110,8 @@ command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-dash\""]
 #   [[keys.command]]
 #   key = "prefix+shift+d"
 #   command = "herdr plugin action invoke dashboard-toggle --plugin e2b-dev.herdr-e2b"
+# That key is herdr's own `close_workspace` by default, so binding it here takes
+# the verb over — move `close_workspace` first if you still want it.
 [[actions]]
 id = "dashboard-toggle"
 title = "E2B dashboard (toggle)"

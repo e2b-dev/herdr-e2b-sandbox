@@ -233,4 +233,5 @@ echo "  (https://e2b.dev/docs/sandbox-template) — or ask your coding agent to 
 echo "  one up. Public agent templates (claude, codex, opencode, amp, grok) also work."
 
 echo "herdr-e2b: done. Bind prefix+shift+e (open sandbox), prefix+shift+f (fleet) and"
-echo "  prefix+shift+d (dashboard) in your herdr config."
+echo "  prefix+shift+d (dashboard) in your herdr config — the block is in the README."
+echo "  Note prefix+shift+d is herdr's own close_workspace; move that first to keep it."
