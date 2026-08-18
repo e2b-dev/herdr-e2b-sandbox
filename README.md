@@ -34,8 +34,8 @@ get from the others.
 ## Install
 
 ```bash
-herdr plugin install tomasvarga/herdr-e2b     # build step links e2b-box onto PATH
-./install.sh                                  # prompts for your E2B API key, chmod 600
+herdr plugin install e2b-dev/herdr-e2b-sandbox   # build step links e2b-box onto PATH
+./install.sh                                     # prompts for your E2B API key, chmod 600
 ```
 
 Needs **herdr ≥ 0.7.0**, **Node ≥ 22**, **jq**, the `e2b` CLI on PATH, and an
