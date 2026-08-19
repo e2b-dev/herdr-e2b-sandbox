@@ -108,7 +108,7 @@ export function resolveFromFile(row, { readFile = readHarnessFile } = {}) {
  * Probe one harness: is the binary here, and what does its auth probe say.
  *
  * The version probe is what answers "installed" — a missing binary fails at spawn
- * with ENOENT, which is the spawn-probe rule ADR 0006 asks for and is why no
+ * with ENOENT, which is the spawn-probe rule ADR 0009 asks for and is why no
  * file-existence check appears anywhere in this file.
  */
 export async function probeHarness(id, { timeoutMs = PROBE_TIMEOUT_MS, env = process.env, readFile = readHarnessFile } = {}) {
@@ -171,7 +171,7 @@ export function untilExpiry(iso, now = Date.now()) {
 function describe(r) {
   if (r.state === "authenticated") {
     // A borrowed SESSION is not a key and must not read as one: it expires, and it
-    // is the whole account rather than a scoped credential (ADR 0007). Saying when
+    // is the whole account rather than a scoped credential (ADR 0010). Saying when
     // it dies is the difference between a report and a promise.
     if (r.source === "session") {
       const when = r.expires ? untilExpiry(r.expires) : "expiry unknown"

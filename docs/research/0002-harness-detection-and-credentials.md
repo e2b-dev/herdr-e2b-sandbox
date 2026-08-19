@@ -2,7 +2,7 @@
 
 Source material for `src/harnesses.js`. Established 2026-08-19 against vendor docs,
 vendor source, and live binaries on one macOS 25.5.0 machine. Scoped by
-[ADR 0006](../adr/0006-the-plugin-asks-a-harness-it-never-reads-its-credential-store.md):
+[ADR 0009](../adr/0009-the-plugin-asks-a-harness-it-never-reads-its-credential-store.md):
 detection is a spawn-the-binary probe, reads are limited to environment variables and a
 harness's own documented config location, and no OAuth store or Keychain item is opened.
 
@@ -18,7 +18,7 @@ not installed; its rows come from source and docs only.
 | codex | `codex --version` | `codex login status` — **stderr** | yes, 0/1 | `CODEX_API_KEY` | `OPENAI_API_KEY` | `~/.codex/auth.json`, field `OPENAI_API_KEY` |
 | grok | `grok --version` | `grok models` — first stdout line | **no, always 0** | `XAI_API_KEY` | same | `~/.grok/config.toml`, `[model.<id>] api_key` |
 | opencode | `opencode --version` | `opencode auth list` | **no, always 0** | any of ~190 | `OPENCODE_AUTH_CONTENT` | `~/.config/opencode/opencode.json`, `provider.<id>.options.apiKey` |
-| amp | `amp --version` | `amp usage` | yes, 0/1 | `AMP_API_KEY` | same | `~/.local/share/amp/secrets.json`, field `apiKey@<server>` — undocumented, but plaintext and now read (ADR 0007) |
+| amp | `amp --version` | `amp usage` | yes, 0/1 | `AMP_API_KEY` | same | `~/.local/share/amp/secrets.json`, field `apiKey@<server>` — undocumented, but plaintext and now read (ADR 0010) |
 | droid | `droid --version` | `droid computer list` | yes, 0/1 | `FACTORY_API_KEY` | same | none — `~/.factory/auth.v2.*`, encrypted |
 | prime | `prime-agent --version` (**stderr**) | `prime-agent model list` | **no, always 0** | `PRIME_API_KEY` | same | `~/.prime/config.json`, `api_key` |
 | gemini | `gemini --version` | **none exists** | n/a | `GEMINI_API_KEY` | same | none — OS keychain |
@@ -51,7 +51,7 @@ ignoring environment auth. A box with `CODEX_API_KEY` set works while the probe 
 `Not logged in`. Auth state is therefore *probe result OR environment presence*; neither
 alone is sufficient.
 
-Claude Code is the only harness that answers the question the way ADR 0006 wants:
+Claude Code is the only harness that answers the question the way ADR 0009 wants:
 `claude auth status` returns JSON carrying `apiKeySource: "ANTHROPIC_API_KEY"` — the
 variable's name and never its value. One ambiguity: with both a live subscription login
 and `ANTHROPIC_API_KEY` set it reports `authMethod: "claude.ai"` *and* a populated

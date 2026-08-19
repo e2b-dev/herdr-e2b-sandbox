@@ -676,7 +676,7 @@ test("fleetTemplateChoices: a fleet is agents only — the plain default is not 
 })
 
 // --- regions: a name a person picks, resolved to the domain the code speaks ---
-// ADR-0006. `region` is sugar; every other module keeps receiving a domain, and
+// ADR 0009. `region` is sugar; every other module keeps receiving a domain, and
 // box records are unchanged.
 
 test("resolveCredentials: region 'eu' resolves to the EU domain", () => {
@@ -926,7 +926,7 @@ test("resolveCredentials: [sandbox] domain is rejected, and names the region to 
   )
 })
 
-// ── ADR 0007: a discovered session outranks the user's own table ───────────────
+// ── ADR 0010: a discovered session outranks the user's own table ───────────────
 // The one place discovery is allowed to beat a hand-written value, so it is pinned
 // here rather than left to inspection — and so is every way it must NOT.
 

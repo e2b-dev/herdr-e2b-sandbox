@@ -22,7 +22,7 @@ const row = (o) => ({ installed: true, state: "no-key", source: null, hostVar: n
 
 const noFiles = () => null
 
-// --- store versus forward: the rule ADR 0006 fixes -----------------------------
+// --- store versus forward: the rule ADR 0009 fixes -----------------------------
 
 test("a key found in the environment records the NAME and never the value", () => {
   const plan = buildPlan(
@@ -169,7 +169,7 @@ test("a pointer file holds no credential, whatever the harness's file contains",
 })
 
 test("an oauth entry beside an api key is dropped by the reader, never forwarded", () => {
-  // ADR 0006 will not carry a token cache. opencode's auth.json can hold both kinds
+  // ADR 0009 will not carry a token cache. opencode's auth.json can hold both kinds
   // at once, and handing the file over whole would put an access/refresh pair into a
   // box the moment one api entry sat beside it. The filtering used to happen before
   // the value was written down; with a pointer it happens at box-create time, so it
@@ -280,7 +280,7 @@ test("gaps are printed as something to paste, and are never prompted for", () =>
   assert.match(shown, /AMP_API_KEY/)
 })
 
-// ── ADR 0007: a signed-in session in a file is borrowable ──────────────────────
+// ── ADR 0010: a signed-in session in a file is borrowable ──────────────────────
 // The whole point of these is that they need no codex installed: every case is a
 // fabricated auth.json handed to the same reader the real probe uses.
 

@@ -5,7 +5,7 @@ import { HARNESSES, interpretProbe } from "../src/harnesses.js"
 // --- what the plugin can borrow ----------------------------------------------
 // `state` answers one question only: can this plugin authenticate a box from what
 // is on this machine? It is not "is the harness working" — a harness signed in
-// with a subscription works perfectly and is still `no-key` here, because ADR 0006
+// with a subscription works perfectly and is still `no-key` here, because ADR 0009
 // puts its credential store out of reach.
 
 test("interpretProbe: a harness reporting an API key from the environment is borrowable", () => {
@@ -39,7 +39,7 @@ test("interpretProbe: a logged-out harness has no key to borrow", () => {
 
 test("interpretProbe: a subscription login is NOT borrowable", () => {
   // The harness works perfectly; its credential is in the macOS Keychain, which
-  // ADR 0006 puts out of reach. Reporting this as `authenticated` would promise a
+  // ADR 0009 puts out of reach. Reporting this as `authenticated` would promise a
   // box a credential the plugin cannot actually hand it.
   const r = interpretProbe("claude", {
     status: 0,
@@ -186,7 +186,7 @@ test("interpretProbe: a codex API key in its own auth file is borrowable from th
 })
 
 test("interpretProbe: a codex subscription login IS borrowable, as a session", () => {
-  // Reversed by ADR 0007. It used to be `no-key` on the grounds that OpenAI forbids
+  // Reversed by ADR 0010. It used to be `no-key` on the grounds that OpenAI forbids
   // sharing auth.json across concurrent jobs — but that rule guards the single-use
   // refresh token, which src/harnesses.js replaces with a placeholder rather than
   // copying. What is left is a fixed-expiry bearer that rotates nothing.
@@ -306,7 +306,7 @@ test("interpretProbe: a plain key in opencode's own auth file is a borrowable so
 test("interpretProbe: an opencode credential is read by KIND, not just counted", () => {
   // opencode labels every entry `api` or `oauth`. Counting them would report this
   // machine as borrowable and hand ticket 03 an OAuth token to copy — the exact
-  // thing ADR 0006 says is never read. One oauth entry is a login, not a key.
+  // thing ADR 0009 says is never read. One oauth entry is a login, not a key.
   const r = interpretProbe("opencode", {
     status: 0,
     stdout:
@@ -351,7 +351,7 @@ test("interpretProbe: prime writes even its model list to stderr", () => {
     env: {},
   })
   // A provider answered, so prime runs — but from a credential this probe cannot
-  // name and ADR 0006 will not go looking for. Saying `authenticated` here would
+  // name and ADR 0009 will not go looking for. Saying `authenticated` here would
   // promise a box a value the plugin does not have.
   assert.equal(r.state, "no-key")
   assert.equal(r.source, "login")
@@ -511,7 +511,7 @@ test("prime reads api_key, and treats an empty one as absent", () => {
 
 test("droid and claude have no file reader, and must not grow one by accident", () => {
   // Both keep their credential in a store this plugin does not open — droid's is
-  // encrypted beside its own key file, claude's is the macOS Keychain. ADR 0007
+  // encrypted beside its own key file, claude's is the macOS Keychain. ADR 0010
   // moved the OAuth line and deliberately left this one where it was.
   assert.equal(HARNESSES.droid.valueFile, undefined)
   assert.equal(HARNESSES.claude.valueFile, undefined)

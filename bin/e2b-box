@@ -388,7 +388,7 @@ connect_shell() {
   fi
   # The plugin's own terminal client (src/attach.js) does the attaching — not
   # `e2b sandbox connect`, which always opens a brand-new PTY and re-encodes
-  # nothing but also reattaches to nothing (ADR-0006). The client resumes a
+  # nothing but also reattaches to nothing (ADR 0009). The client resumes a
   # paused box on the way in, stamps the terminal with the box key, and reports
   # what happened through its exit code instead of leaving us to guess.
   # It needs a raw TTY; without one, show instructions instead of dying silently.

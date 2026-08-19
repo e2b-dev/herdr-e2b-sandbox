@@ -5,7 +5,7 @@
 // decisions are pure functions over probe results (`buildPlan`, `renderAuthToml`,
 // `formatPlan`) and only `writeAuthFile` and the entry point below touch anything.
 //
-// The rule this file exists to enforce is ADR 0006's, and it is the one thing here
+// The rule this file exists to enforce is ADR 0009's, and it is the one thing here
 // worth getting right:
 //
 //   a value read out of a FILE      → stored, as a value
@@ -75,7 +75,7 @@ export function buildPlan(rows, { readText = readTextFile } = {}) {
 
     if (r.source === "session") {
       // A subscription login, borrowed whole out of the file it already lives in
-      // (ADR 0007). It differs from every other entry in two ways the rest of the
+      // (ADR 0010). It differs from every other entry in two ways the rest of the
       // pipeline has to carry: it EXPIRES, and its refresh half is replaced by a
       // placeholder before it is written anywhere.
       const text = h.sessionFile ? readText(h.sessionFile.path) : null
@@ -202,7 +202,7 @@ export function renderAuthToml(plan) {
     const t = (templates[e.template] ||= {})
     // Three sub-tables, one per kind, and `session` is its own rather than another
     // row in `env` because it carries an expiry and outranks the user's table
-    // (ADR 0007). Folding it into `env` would lose both facts at the first read.
+    // (ADR 0010). Folding it into `env` would lose both facts at the first read.
     if (e.kind === "session") {
       // No `value` and no `expires`: both are read fresh from `path` at box-create
       // time. Writing them here would create a second copy of a live credential and

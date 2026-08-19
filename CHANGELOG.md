@@ -59,7 +59,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A box can now boot into the **signed-in session** on your machine rather than a
   pasted key. `e2b-box auth` records a Codex subscription login out of its own
   `auth.json`, and the codex row goes from "signed in, but not a key this plugin can
-  use" to "signed-in session (expires in 8 days)". Per ADR 0007: the single-use
+  use" to "signed-in session (expires in 8 days)". Per ADR 0010: the single-use
   refresh token is never copied — a visible placeholder goes in its place, so a
   borrowed copy can never revoke the login it came from — and unlike every other
   discovered thing a session **outranks** your own `[templates.<name>.env]`, with
@@ -67,7 +67,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   recorded and the report, the chooser mark and the fleet warning all render an
   expired session as expired; an expired one is never injected, so a box falls back
   to whatever credential still works instead of to a sign-in screen. Claude is
-  untouched — its credential is in the Keychain, which ADR 0007 does not reopen.
+  untouched — its credential is in the Keychain, which ADR 0010 does not reopen.
 - **The generated `auth.toml` holds no credentials at all.** Every discovered
   credential is recorded as a pointer — the variable to set and the file to read — and
   resolved when a box is created. No copy of a key or a token exists there, nothing
@@ -100,7 +100,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is named after the server it belongs to, so the reader takes the default server's
   entry and refuses when several are present rather than guessing which one a box
   should get.
-- **droid** and **claude** are deliberately still out, and ADR 0007 now records why
+- **droid** and **claude** are deliberately still out, and ADR 0010 now records why
   rather than leaving it open: droid's store is encrypted, and claude's is the macOS
   Keychain, which this plugin does not open on any path. Claude's route remains
   `claude setup-token`.

@@ -23,7 +23,7 @@ export const CONFIG_PATH = path.join(CONFIG_DIR, "config.toml")
 /** The file `e2b-box auth` GENERATES, beside the one the user writes. Two files
  * with one writer each is the whole point: this one is regenerated wholesale by
  * that command and merged UNDER config.toml, so a hand-written value always wins
- * (ADR 0006). Nothing but `e2b-box auth` may write it. */
+ * (ADR 0009). Nothing but `e2b-box auth` may write it. */
 export const AUTH_PATH = path.join(CONFIG_DIR, "auth.toml")
 
 // Where the `e2b` CLI keeps its login (@e2b/cli USER_CONFIG_PATH — hardcoded
@@ -261,7 +261,7 @@ export function resolveEnvConfig({ sandbox = {}, templates = {} } = {}) {
       const env = envTable(section?.env)
       if (Object.keys(env).length) byTemplate[name] = env
       // `prefer = "env"` — the documented way to take back the precedence a
-      // discovered SESSION otherwise wins (ADR 0007). Only that one value means
+      // discovered SESSION otherwise wins (ADR 0010). Only that one value means
       // anything; anything else is left unset rather than guessed at, so a typo
       // cannot quietly change which credential a box gets.
       if (String(section?.prefer ?? "").trim() === "env") prefer[name] = "env"
@@ -375,7 +375,7 @@ function sessionValue(cfg, template, now, readFile) {
  *   2. DISCOVERED by `e2b-box auth`  (auth.toml: a stored value, or a name to forward)
  *   3. the user's `[sandbox.env]`
  *   4. the user's `[templates.<name>.env]`
- *   5. a DISCOVERED SESSION, unless expired or opted out of  (ADR 0007)
+ *   5. a DISCOVERED SESSION, unless expired or opted out of  (ADR 0010)
  *
  * ...and when rung 5 lands, the API key it replaces is REMOVED from the result
  * entirely, whichever rung put it there. A box signed in by the session cannot use
@@ -386,7 +386,7 @@ function sessionValue(cfg, template, now, readFile) {
  * typed always wins. Rung 5 deliberately breaks it, and it is the only thing here
  * that does — the machine's live signed-in session beats a key pasted months ago,
  * because being handed the stale one while signed in is the exact surprise this
- * feature exists to remove. It will read as a bug; it is ADR 0007.
+ * feature exists to remove. It will read as a bug; it is ADR 0010.
  *
  * Two things keep that from being a trap. `prefer = "env"` on the template restores
  * the original order, and an EXPIRED session is not injected at all — it loses to
@@ -438,7 +438,7 @@ export function resolveEnv(cfg, template, env = {}, now = Date.now(), readFile =
  * The generated auth.toml, normalized into the same per-template shape as the
  * user's own tables. Pure — takes the parsed file, so it is testable without disk.
  *
- * Two sub-tables per template, and the split is ADR 0006's:
+ * Two sub-tables per template, and the split is ADR 0009's:
  *
  *   `env`      a VALUE, copied out of a harness's own plaintext config file
  *   `forward`  a variable NAME only, resolved from the environment at create time
@@ -470,7 +470,7 @@ export function resolveAuthConfig(parsed = {}) {
       if (Object.keys(forward).length) envForward[name] = forward
       // A borrowed session: one variable, one payload, one expiry. All three or
       // nothing — a session without its expiry cannot be aged out, and injecting a
-      // credential we cannot age out is the silent-stale-token bug ADR 0007 accepted
+      // credential we cannot age out is the silent-stale-token bug ADR 0010 accepted
       // the risk of and required this field to close.
       const sess = section?.session
       const v = String(sess?.var ?? "").trim()
@@ -508,7 +508,7 @@ export function readAuthConfig(file = AUTH_PATH) {
  *
  * The `open` picker's annotation, and the tag is the `auth` report's own `source`
  * vocabulary so the two read the same way. The two sub-tables of the generated file
- * ARE the two sources, which is ADR 0006's split showing through: a stored value came
+ * ARE the two sources, which is ADR 0009's split showing through: a stored value came
  * out of a harness's own config FILE, a forwarded name was seen only in the SHELL.
  *
  * Derived from that file and nothing else. The picker must never probe — the whole
@@ -598,7 +598,7 @@ export function readCliConfig(file = CLI_CONFIG_PATH) {
  */
 /**
  * The regions a user may name, and the domain each one means. Exactly two, and
- * they are the ONLY way to choose one (ADR-0007): there is no host to write by
+ * they are the ONLY way to choose one (ADR 0010): there is no host to write by
  * hand, because a region is the thing a person picks and a host is a detail.
  *
  * `us` maps to **null**, not to "e2b.dev". The SDK defaults to `e2b.app` and the
@@ -663,7 +663,7 @@ export function resolveCredentials({ env = {}, secrets = {}, sandbox = {}, cli =
   const fromDaemon = Boolean(env.HERDR_PLUGIN_ID || env.HERDR_PLUGIN_ROOT)
   const envKey = env.E2B_API_KEY?.trim() || null
   const envDomain = env.E2B_DOMAIN?.trim() || null
-  // `[sandbox] domain` was the old way to choose a cluster and is gone (ADR-0007).
+  // `[sandbox] domain` was the old way to choose a cluster and is gone (ADR 0010).
   // It must ERROR rather than be ignored: someone with `domain = "e2b-juliett.dev"`
   // who upgraded into a silent no-op would have every box quietly move to US,
   // which is precisely the failure regions exist to prevent.
@@ -820,7 +820,7 @@ export function loadConfig() {
     // file, read at create time so auth.toml holds no secret and no stale copy.
     envFile: auth.envFile,
     envForward: auth.envForward,
-    // A borrowed signed-in session (ADR 0007). Unlike the two above it OUTRANKS the
+    // A borrowed signed-in session (ADR 0010). Unlike the two above it OUTRANKS the
     // user's own tables, so it is the one discovered thing that can override a
     // hand-written value — and `templatePrefer` is how the user takes that back.
     envSession: auth.envSession,

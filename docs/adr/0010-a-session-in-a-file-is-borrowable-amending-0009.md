@@ -1,8 +1,8 @@
-# A session in a file is borrowable (amends ADR-0006)
+# A session in a file is borrowable (amends ADR 0009)
 
-**Amends:** [0006 — the plugin asks a harness, it never reads its credential store](0006-the-plugin-asks-a-harness-it-never-reads-its-credential-store.md)
+**Amends:** [0009 — the plugin asks a harness, it never reads its credential store](0009-the-plugin-asks-a-harness-it-never-reads-its-credential-store.md)
 
-ADR 0006 deferred subscription OAuth entirely and refused Codex OAuth inside a fleet.
+ADR 0009 deferred subscription OAuth entirely and refused Codex OAuth inside a fleet.
 Both of those clauses are overturned here. **Everything else in 0006 stands** — the
 Keychain is still never opened, detection is still a spawn-the-binary probe, and reads
 are still limited to environment variables and a harness's own documented config
@@ -79,7 +79,7 @@ scrollback, or herdr's session files.
 
 ## Precedence: a discovered session outranks a hand-written value
 
-0006's ladder put everything discovered *below* both user tables, so a value written by
+0009's ladder put everything discovered *below* both user tables, so a value written by
 hand always won. A discovered session is the one exception, and it sits at the top:
 
 ```
@@ -97,7 +97,7 @@ months-old pasted key instead — while signed in — is the surprise this featu
 remove.
 
 The cost is that a typed value can now lose, so it must be able to win back explicitly.
-A per-template `prefer = "env"` opts out and restores 0006's ordering for that template.
+A per-template `prefer = "env"` opts out and restores 0009's ordering for that template.
 Silently losing is the failure mode; losing with a documented way to say otherwise is a
 policy.
 
@@ -143,7 +143,7 @@ without needing to be bent:
 | droid | `~/.factory/auth.v2.file`, ciphertext, key file beside it | **out** |
 | claude | macOS Keychain (`Claude Code-credentials`) | **out** |
 
-Amp and prime needed nothing from this ADR — they are 0006's original "a value already
+Amp and prime needed nothing from this ADR — they are 0009's original "a value already
 in a plaintext file the user owns", and only ever lacked a reader.
 
 Droid and claude are the boundary doing its job. Droid's store is encrypted; the key
@@ -166,7 +166,7 @@ Making it useful would mean the box refreshing for itself, which means shipping 
 real refresh token, which means two rotators and a laptop logged out of its own
 session. Orca can hold that safely only because it runs claude locally and defers its
 refresh while a PTY is live; a box is remote and unobservable, which is the one part of
-0006's original reasoning that survives contact with the evidence.
+0009's original reasoning that survives contact with the evidence.
 
 So claude's route stays `claude setup-token` — a first-party long-lived token, pasted
 like every other value this plugin accepts. Not a consolation prize: one year against
