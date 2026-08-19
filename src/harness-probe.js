@@ -2,16 +2,14 @@
 // detection — every decision it makes about what a probe MEANT lives next door in
 // src/harnesses.js, which is pure and is where the tests are.
 //
-// Read-only by design: this file finds things out and prints them. Writing what it
-// found is a separate command (ticket 03), so `e2b-box auth` can be run by anyone at
-// any time without wondering what it will change.
-//
-// Runnable directly, which is how bin/e2b-box calls it:
-//   node src/harness-probe.js
+// Read-only by design: this file finds things out and formats them, and nothing in
+// it opens a file for writing. Deciding what to KEEP and putting it on disk is
+// src/harness-auth.js, which is the entry point bin/e2b-box runs — so the probe
+// itself stays something that can be called from anywhere without wondering what it
+// will change.
 import { spawn } from "node:child_process"
-import { pathToFileURL } from "node:url"
 
-import { HARNESSES, interpretProbe } from "./harnesses.js"
+import { HARNESSES, interpretProbe, remedyFor } from "./harnesses.js"
 
 // A ceiling rather than a guess: ticket 07 has the installer calling this, and an
 // installer that appears to stall is an installer people kill.
@@ -106,18 +104,9 @@ export function formatRow(r) {
   return `${mark} ${r.id.padEnd(10)} ${note}`
 }
 
-/**
- * What to tell the user to do about a row with no borrowable key.
- *
- * Normally that is "set <VAR>", but one harness has no single credential variable —
- * opencode resolves providers from a registry of ~190 names — so naming one would be
- * the guess the plugin promised not to make. Its row carries its own sentence instead.
- */
-function remedy(r) {
-  const advice = HARNESSES[r.id]?.advice
-  if (advice) return advice
-  return r.hostVar ? `set ${r.hostVar}` : "no credential variable is known for this harness"
-}
+// What to tell the user to do about a row with no borrowable key. One rule, in the
+// table, so this report and the write plan next door cannot disagree about it.
+const remedy = (r) => remedyFor(r.id, r.hostVar)
 
 function describe(r) {
   if (r.state === "authenticated") {
@@ -140,12 +129,10 @@ export function formatReport(rows) {
   const lines = rows.map(formatRow)
   const borrowable = rows.filter((r) => r.state === "authenticated").length
   lines.push("")
-  lines.push(`${borrowable} of ${rows.length} harnesses have a credential a box can borrow.`)
-  lines.push("nothing was written — this command only looks.")
+  // "can see", not "can borrow": whether a credential can actually be RECORDED is
+  // the write plan's question, and one harness resolves authenticated from a
+  // variable whose name cannot be known. Answering that question here made the two
+  // halves of `e2b-box auth` contradict each other in the same screenful.
+  lines.push(`${borrowable} of ${rows.length} harnesses have a credential this plugin can see.`)
   return lines.join("\n")
-}
-
-if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
-  const rows = await probeAll()
-  process.stdout.write(`${formatReport(rows)}\n`)
 }
