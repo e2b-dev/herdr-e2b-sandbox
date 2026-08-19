@@ -23,6 +23,7 @@ import {
   describeRegion,
   resolveAuthConfig,
   readAuthConfig,
+  discoveredSources,
 } from "../src/config.js"
 
 test("resolveTemplate: no rules → default template", () => {
@@ -417,6 +418,44 @@ test("readAuthConfig: a written generated file is read back into the resolved sh
     envDiscovered: { codex: { OPENAI_API_KEY: "sk-from-a-file" } },
     envForward: { claude: { ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY" } },
   })
+})
+
+// What the `open` picker draws beside each template. Reading only — the picker may
+// never probe, so these pin that the annotation is a function of the generated file
+// and nothing else.
+
+test("discoveredSources: a stored value reads as `file`, a forwarded name as `env`", () => {
+  // The two sub-tables ARE the two sources: `env` holds a value copied out of a
+  // harness's own config file, `forward` holds a variable name seen in the shell.
+  const cfg = {
+    envDiscovered: { codex: { OPENAI_API_KEY: "sk-from-a-file" } },
+    envForward: { claude: { ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY" } },
+  }
+  assert.deepEqual(discoveredSources(cfg), { codex: "file", claude: "env" })
+})
+
+test("discoveredSources: a template with no entry gets no source, so the picker says nothing", () => {
+  // `auth` never ran, or the harness is not in the table. Either way the picker has
+  // nothing true to say about it, and a mark would be a claim rather than a finding.
+  const cfg = { envDiscovered: { codex: { OPENAI_API_KEY: "x" } }, envForward: {} }
+  assert.equal(discoveredSources(cfg).base, undefined)
+  assert.equal(discoveredSources(cfg).claude, undefined)
+})
+
+test("discoveredSources: nothing discovered at all → nothing to annotate, never a throw", () => {
+  assert.deepEqual(discoveredSources({}), {})
+  assert.deepEqual(discoveredSources(), {})
+})
+
+test("discoveredSources: forwarding wins when a template has both, exactly as resolveEnv does", () => {
+  // The annotation names the source of the value that would actually be INJECTED,
+  // and resolveEnv puts a forwarded name over a stored one. Nothing emits both
+  // today; this pins the two functions to the same tie-break for when something does.
+  const cfg = {
+    envDiscovered: { claude: { ANTHROPIC_API_KEY: "sk-copied-when-auth-ran" } },
+    envForward: { claude: { ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY" } },
+  }
+  assert.equal(discoveredSources(cfg).claude, "env")
 })
 
 test("resolveEnv: the whole ladder, in one place", () => {

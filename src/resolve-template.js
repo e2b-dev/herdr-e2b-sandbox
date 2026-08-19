@@ -6,13 +6,19 @@
 // Usage: node resolve-template.js [branch]
 //        node resolve-template.js --fleet
 // Prints:  <decided|ask>\t<resolved template>
-//          <candidate>            (one per line, resolved template first)
+//          <candidate>\t<mark>   (one per line, resolved template first)
+//
+// <mark> is what `e2b-box auth` discovered for that template, empty when it found
+// nothing — the picker draws it beside the name so a box that will open on a
+// sign-in screen is visible BEFORE it is created. It comes off the generated file
+// (see discoveredSources); nothing here probes anything.
 //
 // `--fleet` answers a different question — which templates may be MEMBERS — so it
 // drops the plain default and does not hoist anything: a roster is a set, nothing
 // in it is "the one you'd have booted anyway", and the list stays in the order the
 // user configured (which puts the agents they care about first).
 import {
+  discoveredSources,
   loadConfig,
   resolveTemplate,
   templateRuleMatches,
@@ -54,4 +60,9 @@ const decided = templateRuleMatches(branch, cfg) ? "decided" : "ask"
 // top row — "the one I'd have booted anyway" without reading the list first.
 // Everything else keeps the order you configured.
 const choices = [resolved, ...templateChoices(cfg).filter((t) => t !== resolved)]
-process.stdout.write(`${decided}\t${resolved}\n${choices.join("\n")}\n`)
+// One tab per line whether or not there is a mark, so the caller can cut the two
+// fields apart without a special case — `cut -f2` on a line with no tab hands back
+// the whole line, which would print the template's own name as its annotation.
+const sources = discoveredSources(cfg)
+const rows = choices.map((t) => `${t}\t${sources[t] ? `key (${sources[t]})` : ""}`)
+process.stdout.write(`${decided}\t${resolved}\n${rows.join("\n")}\n`)

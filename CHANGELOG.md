@@ -29,6 +29,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   order is shipped defaults, then discovered, then `[sandbox.env]`, then
   `[templates.<name>.env]` — and an absent or malformed `auth.toml` is simply no
   discovery rather than a broken CLI.
+- The template picker in `e2b-box open` now marks each template with what
+  `e2b-box auth` discovered for it — `key (file)` for a credential stored out of a
+  harness's own config, `key (env)` for one forwarded by name from your shell — so
+  you learn a box will open on a sign-in screen before you spend a minute creating
+  it. It annotates and never filters: a template with no credential stays on the
+  menu, in the same position, because it may be one you intend to configure later
+  or a base image that needs none. The picker reads the generated file only and
+  spawns no probe, and a template it found nothing for is drawn with no mark rather
+  than a misleading one.
   (Nothing reads `auth.toml` yet; boxes start using it in the next change.)
 - **Pick a region by name.** `[sandbox] region = "us" | "eu"` is the only way to
   say where a box runs (see `docs/adr/0007`). `us` is the default and needs no

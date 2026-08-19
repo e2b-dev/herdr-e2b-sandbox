@@ -366,6 +366,33 @@ export function readAuthConfig(file = AUTH_PATH) {
 }
 
 /**
+ * Where each template's discovered credential came from: `{template: "file"|"env"}`.
+ *
+ * The `open` picker's annotation, and the tag is the `auth` report's own `source`
+ * vocabulary so the two read the same way. The two sub-tables of the generated file
+ * ARE the two sources, which is ADR 0006's split showing through: a stored value came
+ * out of a harness's own config FILE, a forwarded name was seen only in the SHELL.
+ *
+ * Derived from that file and nothing else. The picker must never probe — the whole
+ * reason `auth` is an explicit subcommand is to keep spawning off the box-creation
+ * path, and a fleet creates several boxes at once.
+ *
+ * A template with no entry yields no source, and the picker then draws no mark:
+ * absence means `auth` has not run, or the harness is not in the table, and an
+ * annotation for either would be a claim rather than a finding.
+ *
+ * Forwarding wins when a template somehow holds both, which is the tie-break
+ * resolveEnv already makes — the mark names the source of the value that would
+ * actually reach the box.
+ */
+export function discoveredSources(cfg) {
+  const out = {}
+  for (const t of Object.keys(cfg?.envDiscovered || {})) out[t] = "file"
+  for (const t of Object.keys(cfg?.envForward || {})) out[t] = "env"
+  return out
+}
+
+/**
  * Read the `e2b` CLI login. Private, undocumented format (it carries its own
  * `version` and the CLI already ships a "config is deprecated" path), so every
  * field is optional and anything unparseable degrades to {} — a broken login

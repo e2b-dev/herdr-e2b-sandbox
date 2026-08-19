@@ -27,7 +27,10 @@ layers, the data flow, the state model, and the invariants worth checking).
   developer's own config.
 - `test/cli.test.sh` — `bash -n` / `node --check` lint across the scripts, plus
   offline `e2b-box` behavior (the `no sandbox tracked` messages and the
-  non-interactive `pull` abort-without-clobber path).
+  non-interactive `pull` abort-without-clobber path). The template picker's auth
+  marks are covered from both ends: the menu `src/resolve-template.js` emits
+  against a fixture `auth.toml`, and the frame `ask_template_tty` actually draws,
+  read back off the forked pty.
 
 Live E2B round-trips (provision / sync / pull / kill) are verified manually,
 since they consume real sandbox time — use a throwaway git folder and kill the
