@@ -90,6 +90,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reattaching. A terminal that died (or whose pid was recycled) yields a fresh
   one, announced. The attach-or-create decision is a pure module
   (`src/attach-plan.js`) with offline tests.
+- **The record tells the truth about a paused box.** A box that pauses
+  underneath an attached session has `paused` written to its record by the
+  terminal client on the way out (one `getInfo` at the moment of loss — no
+  poll, no reconciler), so the dashboard stops showing a frozen box as ready.
+  The readiness spinner treats `paused` as a settled state: a box that pauses
+  mid-boot ends the wait with "resumes it and continues" instead of spinning
+  to the twenty-minute cap. Listing boxes makes no network call it didn't
+  make before.
 - **Boxes now pause at the idle timeout by default** (`auto_pause = true`) instead
   of being killed: a full memory snapshot, so the running agent and everything in
   memory are still there when `e2b-box open` wakes it. Set `auto_pause = false`

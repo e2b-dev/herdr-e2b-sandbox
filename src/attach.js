@@ -198,6 +198,22 @@ try {
   code = e instanceof CommandExitError ? 0 : LOST
 }
 
+if (code === LOST) {
+  // Correct the record on the way out. Only the explicit pause verb writes
+  // `paused`, so a box that auto-paused underneath this session would keep
+  // claiming `ready` — and this client is the only thing present at that
+  // moment. One getInfo, acting on the loss we just observed, is not a
+  // liveness poll; connect() can't be the probe here, because it would RESUME
+  // the box and undo the very pause being recorded.
+  try {
+    const info = await Sandbox.getInfo(rec.sandboxId, { ...conn, requestTimeoutMs: 10_000 })
+    if (info?.state === "paused") await writeRecord(key, { status: "paused" })
+  } catch {
+    // Gone or unreachable — nothing certain to write. The next open reconciles
+    // through the provisioning worker, the single source of truth, as always.
+  }
+}
+
 process.stdin.setRawMode(false)
 process.stdin.pause()
 await handle.disconnect().catch(() => {})
