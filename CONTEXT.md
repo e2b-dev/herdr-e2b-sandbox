@@ -37,8 +37,17 @@ already has installed (`claude`, `codex`, `grok`, `base`, …). A template is a 
 made once, when the box is created. A template belongs to one project in one region,
 and its name is written the way that region names it — `<project>/<template>` for a
 project's own templates, bare for E2B's public ones.
-_Avoid_: Image, agent, harness — a template may ship an agent, but the two are not the
-same thing and herdr's own "agent" means a *local* pane process
+_Avoid_: Image, agent — three things sit close together here and each has exactly one
+word: a **template** is the E2B image, an **agent** is herdr's local pane process, and a
+**harness** is the local CLI install whose credential the plugin borrows. A template
+ships an agent; a harness is that same agent installed locally.
+
+**Harness**:
+The coding CLI installed on your own machine — `claude`, `codex`, `opencode`, `droid`
+and the rest — and therefore a credential you already hold. The plugin borrows it so a
+box booted from the matching template comes up authenticated instead of on a sign-in
+screen. A harness is local and yours; a template is remote and E2B's.
+_Avoid_: Local agent, toolchain, credential source
 
 ### Regions and projects
 

@@ -538,7 +538,7 @@ boot_and_connect() {
 # pipe-separated string. Two columns, verb then plain-English result, one line each.
 # Every verb this CLI answers to, in one place: the did-you-mean below spell-checks
 # against it, so a verb that isn't here is a verb nobody can be nudged toward.
-VERBS="open up connect shell attach exec sync pull pause resume kill status list url logs wait doctor fleet dash"
+VERBS="open up connect shell attach exec sync pull pause resume kill status list url logs wait doctor auth fleet dash"
 
 usage() {
   cat <<'USAGE'
@@ -571,6 +571,8 @@ inspect
   logs                        follow the provisioning log
   wait [--timeout-ms N]       block until the box is ready (exit 1 on timeout)
   doctor                      check node, the e2b CLI, credentials and state
+  auth                        which coding harnesses are installed here, and
+                              whether a box can borrow their credentials
 
 fleet                         several boxes off one checkout, one per template
   fleet                       pickers: name it, pick the roster, watch the board
@@ -738,7 +740,7 @@ key="${box_flag:-${KEY:-$(key_from_cwd)}}"
 # For every existing caller the record's path IS the cwd, so this is a no-op
 # that only bites the mismatch it exists to catch.
 case "$cmd" in
-  kill|status|list|url|logs|exec|pause|resume|wait|doctor) ;;
+  kill|status|list|url|logs|exec|pause|resume|wait|doctor|auth) ;;
   *)
     if [ -n "$box_flag" ] || [ -n "${KEY:-}" ]; then
       wt=$(field "$key" worktreePath)
@@ -864,6 +866,19 @@ case "$cmd" in
     row "[ok]" "tracked boxes" "${#dfiles[@]}  (e2b-box list)"
     [ "$warn" -eq 1 ] && echo "" && echo "warnings above are the fixes — nothing here changed anything." >&2
     exit 0
+    ;;
+  auth)
+    # Which coding harnesses are installed HERE, and whether this plugin can borrow
+    # their credentials for a box. Read-only: it prints and exits. Writing what it
+    # found is a separate step, so this is safe to run at any time.
+    #
+    # An explicit verb rather than something `open` does for you — probing spawns
+    # binaries, and a fleet creates several boxes at once. Keeping it out of that path
+    # is the whole reason it is a command you type.
+    node_bin=$(e2b_node) || { echo "e2b-box auth: needs Node >= 22 (set HERDR_E2B_NODE=/path/to/node)" >&2; exit 1; }
+    # No arguments forwarded: the report takes none, and passing them on would let
+    # `auth --typo` look like it did something.
+    exec "$node_bin" "$PLUGIN_DIR/src/harness-probe.js"
     ;;
   list)
     shopt -s nullglob

@@ -1,0 +1,151 @@
+// Spawns the probes and prints the report. The thin, impure half of harness
+// detection — every decision it makes about what a probe MEANT lives next door in
+// src/harnesses.js, which is pure and is where the tests are.
+//
+// Read-only by design: this file finds things out and prints them. Writing what it
+// found is a separate command (ticket 03), so `e2b-box auth` can be run by anyone at
+// any time without wondering what it will change.
+//
+// Runnable directly, which is how bin/e2b-box calls it:
+//   node src/harness-probe.js
+import { spawn } from "node:child_process"
+import { pathToFileURL } from "node:url"
+
+import { HARNESSES, interpretProbe } from "./harnesses.js"
+
+// A ceiling rather than a guess: ticket 07 has the installer calling this, and an
+// installer that appears to stall is an installer people kill.
+//
+// Raised from three seconds when the table went from one harness to seven. Warm, the
+// whole report lands in about two seconds — but four of these probes reach the
+// network, and on a COLD machine (first run after an install, which is precisely when
+// the installer calls this) fourteen spawns contending at once pushed codex, amp and
+// droid past three seconds and printed `?` for three harnesses that work fine. A
+// wrong answer is worse than a slower one, and the answer is only wrong in the
+// direction that tells the user to go set a variable they already have.
+export const PROBE_TIMEOUT_MS = 5000
+
+/**
+ * Run one command and hand back what happened. Never throws, never inherits a tty.
+ *
+ * Two properties here are not optional, and both come from observed behaviour rather
+ * than caution:
+ *
+ *   · stdin is /dev/null. One shipped harness, with no credential, opens a browser
+ *     and blocks on stdin forever. A timeout does not undo a browser that has already
+ *     been opened, so the probe must never be ABLE to ask.
+ *   · `shell: false`, so the binary is resolved on PATH by exec and not by the user's
+ *     interactive shell. On a real machine two of these binaries were shell functions,
+ *     and one of them strips the very variable this plugin is looking for — probing
+ *     through the shell would have reported the opposite of the truth.
+ */
+export function runProbe(bin, args, { timeoutMs = PROBE_TIMEOUT_MS, env = process.env } = {}) {
+  return new Promise((resolve) => {
+    let child
+    try {
+      child = spawn(bin, args, {
+        shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: timeoutMs,
+        killSignal: "SIGKILL",
+        env,
+      })
+    } catch {
+      resolve({ notFound: true })
+      return
+    }
+
+    let stdout = ""
+    let stderr = ""
+    child.stdout.on("data", (d) => (stdout += d))
+    child.stderr.on("data", (d) => (stderr += d))
+
+    child.on("error", (err) => resolve({ notFound: err.code === "ENOENT", stdout, stderr }))
+    child.on("close", (status, signal) =>
+      resolve({ status, stdout, stderr, timedOut: signal === "SIGKILL" }),
+    )
+  })
+}
+
+/**
+ * Probe one harness: is the binary here, and what does its auth probe say.
+ *
+ * The version probe is what answers "installed" — a missing binary fails at spawn
+ * with ENOENT, which is the spawn-probe rule ADR 0006 asks for and is why no
+ * file-existence check appears anywhere in this file.
+ */
+export async function probeHarness(id, { timeoutMs = PROBE_TIMEOUT_MS, env = process.env } = {}) {
+  const h = HARNESSES[id]
+  if (!h) return { id, ...interpretProbe(id, { env }) }
+
+  const version = await runProbe(h.bin, h.versionArgs, { timeoutMs, env })
+  if (version.notFound) return { id, ...interpretProbe(id, { notFound: true, env }) }
+
+  const auth = await runProbe(h.bin, h.authArgs, { timeoutMs, env })
+  return { id, ...interpretProbe(id, { ...auth, env }) }
+}
+
+/**
+ * Every known harness at once. Concurrent because the table holds seven of these,
+ * and seven sequential worst-cases is not a command anyone waits for.
+ */
+export async function probeAll({ timeoutMs = PROBE_TIMEOUT_MS, env = process.env } = {}) {
+  return Promise.all(Object.keys(HARNESSES).map((id) => probeHarness(id, { timeoutMs, env })))
+}
+
+/**
+ * One line per harness. The states have to be told apart at a glance, so each gets
+ * its own marker rather than a colour: `?` for unknown is the important one — it must
+ * never be mistaken for a harness the user does not have.
+ *
+ * Rows are labelled by HARNESS, not by template. They are different nouns (CONTEXT.md)
+ * and this command is reporting on what is installed here, not on what a box boots.
+ */
+export function formatRow(r) {
+  const [mark, note] = describe(r)
+  return `${mark} ${r.id.padEnd(10)} ${note}`
+}
+
+/**
+ * What to tell the user to do about a row with no borrowable key.
+ *
+ * Normally that is "set <VAR>", but one harness has no single credential variable —
+ * opencode resolves providers from a registry of ~190 names — so naming one would be
+ * the guess the plugin promised not to make. Its row carries its own sentence instead.
+ */
+function remedy(r) {
+  const advice = HARNESSES[r.id]?.advice
+  if (advice) return advice
+  return r.hostVar ? `set ${r.hostVar}` : "no credential variable is known for this harness"
+}
+
+function describe(r) {
+  if (r.state === "authenticated") {
+    // A key with no local harness is still a key. The box needs the credential, not
+    // the binary — so say the credential is usable and mention the absence as an
+    // aside, rather than reporting the row as nothing.
+    return r.installed
+      ? ["[ok ]", `key found (${r.source})`]
+      : ["[ok ]", `not installed here, but ${r.hostVar} is set — a box can still use it`]
+  }
+  if (!r.installed) return ["[ - ]", "not installed"]
+  if (r.state === "unknown") return ["[ ? ]", `probe did not answer — ${remedy(r)} to be sure`]
+  if (r.source === "login") {
+    return ["[   ]", `signed in, but not a key this plugin can use — ${remedy(r)}`]
+  }
+  return ["[   ]", `no key — ${remedy(r)}`]
+}
+
+export function formatReport(rows) {
+  const lines = rows.map(formatRow)
+  const borrowable = rows.filter((r) => r.state === "authenticated").length
+  lines.push("")
+  lines.push(`${borrowable} of ${rows.length} harnesses have a credential a box can borrow.`)
+  lines.push("nothing was written — this command only looks.")
+  return lines.join("\n")
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
+  const rows = await probeAll()
+  process.stdout.write(`${formatReport(rows)}\n`)
+}

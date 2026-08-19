@@ -80,7 +80,7 @@ for form in "--help" "-h" "help"; do
 done
 
 before=$(ls -1 "$HERDR_PLUGIN_STATE_DIR/boxes" | wc -l | tr -d ' ')
-for v in open up pull sync exec status list wait doctor; do
+for v in open up pull sync exec status list wait doctor auth; do
   out=$("$E2B" "$v" --help 2>/dev/null); rc=$?
   { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "^e2b-box —"; } \
     && ok "$v --help → usage, exit 0" || bad "$v --help (rc=$rc)"
@@ -192,6 +192,44 @@ rm -f "$HERDR_PLUGIN_STATE_DIR/boxes/pausedbox.json"
 out=$("$E2B" doctor 2>&1); rc=$?
 { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "state dir"; } \
   && ok "doctor reports and exits 0 even with warnings" || bad "doctor (rc=$rc)"
+
+# `auth` reports which local harnesses a box could borrow a credential from. What
+# is installed on the machine running this suite is not a fixture, so the assertions
+# are about SHAPE — a row per known harness, and the promise that nothing was
+# written. The parse rules themselves are unit-tested in test/harnesses.test.js,
+# where no harness needs to be installed at all.
+echo "── behavior: auth reports harnesses without writing ──"
+out=$("$E2B" auth 2>&1); rc=$?
+# The expected rows come from the table itself, not from a list copied into this
+# file — a copy would go stale the moment an eighth harness lands, and go stale
+# silently, which is the failure a shell suite is worst at noticing.
+known=$(node -e 'import(process.argv[1]).then(m=>console.log(Object.keys(m.HARNESSES).join(" ")))' "$ROOT/src/harnesses.js")
+missing=""; n=0
+for h in $known; do
+  n=$((n + 1))
+  printf '%s' "$out" | grep -q "^\[.*\] *$h " || missing="$missing $h"
+done
+{ [ "$rc" -eq 0 ] && [ -z "$missing" ] && [ "$n" -gt 0 ]; } \
+  && ok "auth prints a row per known harness, exit 0" || bad "auth (rc=$rc, missing:$missing, out=$out)"
+# Whatever this machine has, no row may be silently dropped and none invented.
+printf '%s' "$out" | grep -q "of $n harnesses" \
+  && ok "auth counts every harness in the table" || bad "auth harness count (want $n, out=$out)"
+printf '%s' "$out" | grep -q "nothing was written" \
+  && ok "auth says it wrote nothing" || bad "auth omitted the read-only promise"
+cfgdir="$TMP/config"; mkdir -p "$cfgdir"
+cfg_before=$(ls -1A "$cfgdir" | wc -l | tr -d ' ')
+HERDR_PLUGIN_CONFIG_DIR="$cfgdir" "$E2B" auth >/dev/null 2>&1
+cfg_after=$(ls -1A "$cfgdir" | wc -l | tr -d ' ')
+[ "$cfg_before" = "$cfg_after" ] \
+  && ok "auth wrote nothing to the config dir" || bad "auth created config state ($cfg_before → $cfg_after)"
+
+# A key in the environment is borrowable and must be reported as such — and the
+# report must never contain the value, only the variable's name.
+out=$(ANTHROPIC_API_KEY=sk-ant-test-not-real "$E2B" auth 2>&1)
+printf '%s' "$out" | grep -q "key found" \
+  && ok "auth sees a credential in the environment" || bad "auth missed an env credential"
+printf '%s' "$out" | grep -q "sk-ant-test-not-real" \
+  && bad "auth PRINTED A SECRET VALUE" || ok "auth never prints a credential's value"
 
 # `connect` takes the sandbox id `list` prints, because that is the id the CLI
 # underneath takes. An id we don't track is still attachable, but the cluster is
