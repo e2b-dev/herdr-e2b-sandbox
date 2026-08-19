@@ -113,7 +113,7 @@ HTTPS_PROXY = "http://proxy.internal:3128"
 | — | `base` | — | nothing (a control arm) |
 
 These are E2B's public [agent templates](https://e2b.dev/docs/agents); names are
-per-cluster (`e2b template list`), and one that isn't built on yours falls back
+per **region** (`e2b template list`), and one that isn't built in yours falls back
 to `base` and says so. Keys are passed to `Sandbox.create` at **create** time
 only — never baked into an image, never written to the box record or the log.
 Rotating one means `e2b-box kill` and open again.
@@ -158,6 +158,52 @@ either, you get the chooser:
 E2B's minimal image — fine for trying the flow, tight on disk for real work. For
 that, [build a custom template](https://e2b.dev/docs/sandbox-template) with your
 toolchain and roomier resources, and point `[sandbox].template` at it.
+
+#### Your own project's templates
+
+A template you build lands in your E2B **project**, and E2B names it
+`<project>/<template>` — `ondrejs-project/herdr-agents`. Use that whole name
+wherever a template name goes: `--template`, `[sandbox] template`, the roster,
+the `t` prompt above. The plugin never composes the project half for you and
+never turns a bare name into a namespaced one, so write it out.
+
+```toml
+[sandbox]
+region    = "eu"                                    # us (default) or eu
+templates = ["ondrejs-project/herdr-agents", "claude", "base"]
+
+# A `/` in the name means the table header must be QUOTED:
+[templates."ondrejs-project/herdr-agents".env]
+ANTHROPIC_API_KEY = "sk-ant-…"
+
+[fleet.agents]
+"ondrejs-project/herdr-agents" = "claude --dangerously-skip-permissions"
+```
+
+Unquoted, TOML reads the `/` as part of a bare key, the table never matches, and
+the box boots with no credential — the agent then opens on its sign-in screen,
+which a fleet member cannot answer for itself.
+
+Two things `e2b template list` will not tell you:
+
+- **Names are per region.** The same project name can exist in both regions
+  owning different templates, so a `templates` list is not portable — changing
+  `region` means revisiting it.
+- **In the EU the listing omits public templates**, returning only your
+  project's own. A public name missing there is not evidence it is missing:
+  `claude`, `codex`, `opencode`, `amp`, `droid` and `base` all resolve in the EU
+  regardless.
+
+Get the project half wrong and E2B names the project you actually belong to:
+
+```
+400: namespace 'e2b' must match your team 'ondrejs-project'
+```
+
+A member of a fleet is named after the template's **last segment**, so
+`ondrejs-project/herdr-agents` gives the branch `e2b/<slug>-herdr-agents-<rand4>`
+— the project half is shared by every member, so it only costs a sidebar row its
+readability. Two roster entries that would claim the same name are refused.
 
 ## Commands
 
@@ -294,7 +340,7 @@ non-git folders. Symlinks are skipped.
 
 Copy `config/config.example.toml` to
 `~/.config/herdr/plugins/config/e2b-dev.herdr-e2b/config.toml`. Every key is optional and
-that file documents all of them — cluster, template, branch rules, timeout,
+that file documents all of them — region, template, branch rules, timeout,
 auto-pause, per-template env, fleet roster, agents and seeds.
 
 ## Limits

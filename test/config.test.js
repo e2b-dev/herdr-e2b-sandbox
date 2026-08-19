@@ -2,6 +2,7 @@
 // resolveTemplate/resolveLifecycle take a cfg object, so they're pure and offline.
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import TOML from "@iarna/toml"
 import {
   resolveTemplate,
   resolveLifecycle,
@@ -13,6 +14,7 @@ import {
   resolveFleet,
   resolveEnvConfig,
   resolveEnv,
+  describeRegion,
 } from "../src/config.js"
 
 test("resolveTemplate: no rules → default template", () => {
@@ -406,4 +408,256 @@ test("fleetTemplateChoices: a fleet is agents only — the plain default is not 
   assert.deepEqual(fleetTemplateChoices(mine), ["claude"])
   // And the box picker is untouched — one plain box is a fine thing to want.
   assert.deepEqual(templateChoices(cfg), ["claude", "codex", "base"])
+})
+
+// --- regions: a name a person picks, resolved to the domain the code speaks ---
+// ADR-0006. `region` is sugar; every other module keeps receiving a domain, and
+// box records are unchanged.
+
+test("resolveCredentials: region 'eu' resolves to the EU domain", () => {
+  const r = resolveCredentials({ sandbox: { region: "eu" }, secrets: { e2b_api_key: "e2b_cfg" } })
+  assert.equal(r.domain, "e2b-juliett.dev")
+  assert.equal(r.domainSource, "config")
+})
+
+test("resolveCredentials: region 'us' means NO domain, and does not borrow the CLI's", () => {
+  // The US region's correct value is absent — the SDK defaults to e2b.app and the
+  // CLI to e2b.dev, so no single string is right for both. Naming US while logged
+  // into the EU must not keep provisioning in the EU.
+  const r = resolveCredentials({ sandbox: { region: "us" }, cli: CLI })
+  assert.equal(r.domain, null)
+  assert.equal(r.domainSource, "config")
+})
+
+test("resolveCredentials: an explicit domain outranks a region", () => {
+  const r = resolveCredentials({ sandbox: { region: "eu", domain: "e2b-staging.dev" } })
+  assert.equal(r.domain, "e2b-staging.dev")
+})
+
+test("resolveCredentials: an unknown region fails, naming the valid ones", () => {
+  assert.throws(() => resolveCredentials({ sandbox: { region: "apac" } }), (e) => {
+    assert.match(e.message, /apac/)
+    assert.match(e.message, /us/)
+    assert.match(e.message, /eu/)
+    assert.match(e.message, /domain/, "points at the escape hatch for other clusters")
+    return true
+  })
+})
+
+test("resolveCredentials: region is case- and space-insensitive", () => {
+  assert.equal(resolveCredentials({ sandbox: { region: " EU " } }).domain, "e2b-juliett.dev")
+})
+
+test("resolveCredentials: no region behaves exactly as before", () => {
+  const r = resolveCredentials({ cli: CLI })
+  assert.equal(r.domain, "e2b-juliett.dev")
+  assert.equal(r.domainSource, "cli")
+})
+
+// --- a namespaced template's config keys, exactly as the example documents ---
+// `<project>/<template>` contains a `/`, so its TOML table header must be quoted.
+// Unquoted the table simply never matches the template, the box boots with no
+// credential, and the agent opens on its sign-in screen — a silent failure worth
+// pinning against the documented spelling rather than trusting prose.
+
+test("config: a quoted namespaced [templates.<name>.env] reaches that template", () => {
+  const file = TOML.parse(
+    '[sandbox.env]\nTZ = "Europe/Prague"\n' +
+      '[templates."ondrejs-project/herdr-agents".env]\nANTHROPIC_API_KEY = "sk-ant-x"\n',
+  )
+  const cfg = resolveEnvConfig({ sandbox: file.sandbox, templates: file.templates })
+  assert.deepEqual(resolveEnv(cfg, "ondrejs-project/herdr-agents"), {
+    TZ: "Europe/Prague",
+    ANTHROPIC_API_KEY: "sk-ant-x",
+  })
+  // The bare alias is a DIFFERENT key — the plugin never composes or strips a
+  // prefix, so a table written for one name does not leak to the other.
+  assert.deepEqual(resolveEnv(cfg, "herdr-agents"), { TZ: "Europe/Prague" })
+})
+
+test("config: a quoted namespaced [fleet.agents] key reaches that template", () => {
+  const file = TOML.parse(
+    '[fleet.agents]\nclaude = "claude --x"\n' +
+      '"ondrejs-project/herdr-agents" = "claude --dangerously-skip-permissions"\n',
+  )
+  const fleet = resolveFleet(file.fleet)
+  assert.equal(
+    fleet.agents["ondrejs-project/herdr-agents"],
+    "claude --dangerously-skip-permissions",
+  )
+})
+
+// --- one API key per region -------------------------------------------------
+// A key belongs to exactly one region, and herdr cannot see a shell-level region
+// switch — so config.toml IS the switch here. Holding both keys means changing
+// `region` moves the credential with it, and the pair can never fall out of step.
+
+test("resolveCredentials: region 'eu' picks the EU key", () => {
+  const r = resolveCredentials({
+    sandbox: { region: "eu" },
+    secrets: { e2b_api_key_us: "e2b_us", e2b_api_key_eu: "e2b_eu" },
+  })
+  assert.equal(r.apiKey, "e2b_eu")
+  assert.equal(r.domain, "e2b-juliett.dev")
+})
+
+test("resolveCredentials: no key for the active region falls back to the single key", () => {
+  const r = resolveCredentials({
+    sandbox: { region: "eu" },
+    secrets: { e2b_api_key: "e2b_plain", e2b_api_key_us: "e2b_us" },
+  })
+  assert.equal(r.apiKey, "e2b_plain", "the US key must not be used for the EU region")
+})
+
+test("resolveCredentials: the other region's key is never used, for any input", () => {
+  // The whole reason to store both is that only one can ever be right. If the
+  // wrong one could leak through, holding both would be worse than holding one.
+  const secrets = { e2b_api_key_us: "e2b_us", e2b_api_key_eu: "e2b_eu" }
+  assert.equal(resolveCredentials({ sandbox: { region: "us" }, secrets }).apiKey, "e2b_us")
+  assert.equal(resolveCredentials({ sandbox: { region: "eu" }, secrets }).apiKey, "e2b_eu")
+  // No region named at all is the US region, so it is the US key.
+  assert.equal(resolveCredentials({ secrets }).apiKey, "e2b_us")
+})
+
+test("resolveCredentials: env E2B_API_KEY still beats every config key", () => {
+  const r = resolveCredentials({
+    env: { E2B_API_KEY: "e2b_env" },
+    sandbox: { region: "eu" },
+    secrets: { e2b_api_key_eu: "e2b_eu", e2b_api_key: "e2b_plain" },
+  })
+  assert.equal(r.apiKey, "e2b_env")
+  assert.equal(r.keySource, "env")
+})
+
+test("resolveCredentials: a domain that names a region picks that region's key", () => {
+  // Someone who pinned the domain before regions existed gets the same behaviour
+  // as someone who named the region — it is one table, read backwards.
+  const r = resolveCredentials({
+    sandbox: { domain: "e2b-juliett.dev" },
+    secrets: { e2b_api_key_us: "e2b_us", e2b_api_key_eu: "e2b_eu" },
+  })
+  assert.equal(r.apiKey, "e2b_eu")
+})
+
+test("resolveCredentials: a domain naming no region borrows no region's key", () => {
+  // staging / e2b.pro / BYOC. Silently reaching for the US key here would send a
+  // credential to a cluster it has no business on.
+  const r = resolveCredentials({
+    sandbox: { domain: "e2b-staging.dev" },
+    secrets: { e2b_api_key_us: "e2b_us", e2b_api_key: "e2b_plain" },
+  })
+  assert.equal(r.apiKey, "e2b_plain")
+})
+
+test("resolveCredentials: with no key anywhere, nothing changes", () => {
+  const r = resolveCredentials({ sandbox: { region: "eu" } })
+  assert.equal(r.apiKey, null)
+  assert.equal(r.keySource, null)
+})
+
+test("resolveCredentials: a region pins the domain, so nothing is a guess", () => {
+  // The "cluster is a guess" warning exists for a config key whose region is
+  // unknown. Naming a region answers that question outright — warning here would
+  // tell the user to pin something they just pinned.
+  const r = resolveCredentials({
+    sandbox: { region: "eu" },
+    secrets: { e2b_api_key: "e2b_cfg" },
+    cli: { apiKey: "e2b_cli", domain: "e2b.dev" },
+  })
+  assert.equal(r.domain, "e2b-juliett.dev")
+  assert.equal(r.credWarning, null)
+})
+
+test("resolveCredentials: the guess warning names the key line it wants edited", () => {
+  const r = resolveCredentials({
+    secrets: { e2b_api_key_us: "e2b_us" },
+    cli: { apiKey: "e2b_cli", domain: "e2b-juliett.dev" },
+  })
+  assert.match(r.credWarning, /e2b_api_key_us/, "names the region key, not the plain one")
+})
+
+// --- a configured REGION and the frozen daemon env --------------------------
+// Only `domain` was ever covered against herdr's frozen environment. `region` is
+// the key users are now told to reach for, so it needs the same guarantees —
+// and it is the one most likely to be written while a stale E2B_DOMAIN is
+// already in herdr's launch snapshot, because that is exactly the moment someone
+// switches region.
+
+test("resolveCredentials: a configured region beats a daemon-inherited E2B_DOMAIN", () => {
+  const r = resolveCredentials({
+    env: { ...DAEMON, E2B_DOMAIN: "e2b-juliett.dev" },
+    sandbox: { region: "us" },
+    secrets: { e2b_api_key: "e2b_cfg" },
+  })
+  // The strongest case: config says US, whose answer is NO domain, while the
+  // frozen env says EU. Config must win, and win all the way to null.
+  assert.equal(r.domain, null)
+  assert.equal(r.domainSource, "config")
+})
+
+test("resolveCredentials: the stale-domain warning names what was ignored and what was used", () => {
+  const r = resolveCredentials({
+    env: { ...DAEMON, E2B_DOMAIN: "e2b.dev" },
+    sandbox: { region: "eu" },
+    secrets: { e2b_api_key: "e2b_cfg" },
+  })
+  assert.equal(r.domain, "e2b-juliett.dev")
+  assert.match(r.credWarning, /stale E2B_DOMAIN/)
+  assert.match(r.credWarning, /e2b\.dev/, "names the value it ignored")
+  assert.match(r.credWarning, /e2b-juliett\.dev/, "names the value it used instead")
+})
+
+test("resolveCredentials: region 'us' under the daemon says so in the warning", () => {
+  // US resolves to no domain at all, so the warning has to describe the absence
+  // rather than print an empty one.
+  const r = resolveCredentials({
+    env: { ...DAEMON, E2B_DOMAIN: "e2b-juliett.dev" },
+    sandbox: { region: "us" },
+  })
+  assert.match(r.credWarning, /the SDK default/)
+})
+
+test("resolveCredentials: outside the daemon, an exported E2B_DOMAIN still beats a region", () => {
+  // A shell export in a command you just typed is a decision you just made, and
+  // stays above the config file — the demotion applies only to herdr's snapshot.
+  const r = resolveCredentials({
+    env: { E2B_DOMAIN: "e2b.dev" },
+    sandbox: { region: "eu" },
+    secrets: { e2b_api_key: "e2b_cfg" },
+  })
+  assert.equal(r.domain, "e2b.dev")
+  assert.equal(r.domainSource, "env")
+  assert.equal(r.credWarning, null)
+})
+
+test("resolveCredentials: no region and no inherited domain is unchanged", () => {
+  const r = resolveCredentials({
+    env: { ...DAEMON },
+    cli: { apiKey: "e2b_cli", domain: "e2b-juliett.dev" },
+  })
+  assert.equal(r.domain, "e2b-juliett.dev")
+  assert.equal(r.domainSource, "cli")
+  assert.equal(r.credWarning, null)
+})
+
+// --- naming the region in a message -----------------------------------------
+// "template 'x' not found" is the signature symptom of asking the WRONG region,
+// so the region is the missing half of that diagnosis.
+
+test("describeRegion: a named region is named, by its name", () => {
+  assert.equal(describeRegion("e2b-juliett.dev"), "EU (e2b-juliett.dev)")
+})
+
+test("describeRegion: no domain is the default region, said out loud", () => {
+  // US resolves to no domain at all, so there is nothing to print — but "" in a
+  // sentence reads as a bug, and the user still needs to know where we looked.
+  assert.equal(describeRegion(null), "US (the default region)")
+  assert.equal(describeRegion(undefined), "US (the default region)")
+  assert.equal(describeRegion(""), "US (the default region)")
+})
+
+test("describeRegion: a host that names no region is printed as itself", () => {
+  // staging / e2b.pro / BYOC have no name to give, and inventing one would be
+  // worse than the host.
+  assert.equal(describeRegion("e2b-staging.dev"), "e2b-staging.dev")
 })

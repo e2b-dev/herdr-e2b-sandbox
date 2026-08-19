@@ -5,7 +5,7 @@
 // fleets.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { sanitizeSlug, memberBranch, memberLabel, randomSuffix, SLUG_MAX } from "../src/fleet-name.js"
+import { sanitizeSlug, memberBranch, memberLabel, memberLabels, templateSlug, randomSuffix, SLUG_MAX } from "../src/fleet-name.js"
 
 test("sanitizeSlug: lowercases and turns spaces into a single separator", () => {
   assert.equal(sanitizeSlug("Login Fix"), "login-fix")
@@ -83,4 +83,72 @@ test("randomSuffix: the environment can pin it so tests can assert exact names",
 test("memberLabel: <slug>-<template>, the name the workspace wears", () => {
   assert.equal(memberLabel("Login Fix", "claude"), "login-fix-claude")
   assert.throws(() => memberLabel("!!!", "claude"), /slug/i)
+})
+
+// --- a namespaced template is labelled by its last segment ------------------
+// `ondrejs-project/herdr-agents` is how E2B names a project's own template, but
+// the project prefix is shared by every member of a fleet, so in a sidebar row
+// it is pure noise. The label identifies the member, not its owner.
+
+test("memberLabel: a namespaced template contributes only its last segment", () => {
+  assert.equal(memberLabel("fix auth", "ondrejs-project/herdr-agents"), "fix-auth-herdr-agents")
+})
+
+test("memberLabel: a bare template name is untouched", () => {
+  assert.equal(memberLabel("fix auth", "claude"), "fix-auth-claude")
+  assert.equal(memberBranch("fix auth", "claude", { rand: "ab12" }), "e2b/fix-auth-claude-ab12")
+})
+
+test("memberBranch: a namespaced template shortens the branch too", () => {
+  assert.equal(
+    memberBranch("fix auth", "ondrejs-project/herdr-agents", { rand: "ab12" }),
+    "e2b/fix-auth-herdr-agents-ab12",
+  )
+})
+
+test("templateSlug: takes the last segment, however deep", () => {
+  assert.equal(templateSlug("amp"), "amp")
+  assert.equal(templateSlug("ondrejs-project/amp"), "amp")
+  assert.equal(templateSlug("a/b/c"), "c")
+  // Leading, trailing and doubled separators are not segments.
+  assert.equal(templateSlug("/amp"), "amp")
+  assert.equal(templateSlug("proj//amp"), "amp")
+  assert.equal(templateSlug("proj/"), "proj")
+})
+
+test("templateSlug: an unusable last segment is a refusal, not a fallback", () => {
+  // Falling back to the project prefix would label the member after its OWNER,
+  // which is never what the user meant by naming a template.
+  assert.equal(templateSlug("ondrejs-project/!!!"), "")
+  assert.equal(templateSlug("/"), "")
+  assert.equal(templateSlug(""), "")
+  assert.throws(() => memberLabel("ok", "ondrejs-project/!!!"), /template/i)
+})
+
+// --- a roster's members must be tellable apart ------------------------------
+// Dropping the project prefix can make two DIFFERENT templates share a label.
+// Two workspaces called `fix-auth-amp` are worse than a refusal: nothing on
+// screen says which is which, and the fleet is graded per member.
+
+test("memberLabels: distinct templates keep their order", () => {
+  assert.deepEqual(memberLabels("fix auth", ["claude", "ondrejs-project/herdr-agents"]), [
+    "fix-auth-claude",
+    "fix-auth-herdr-agents",
+  ])
+})
+
+test("memberLabels: two templates that collapse to one label are refused, both named", () => {
+  assert.throws(
+    () => memberLabels("fix auth", ["ondrejs-project/amp", "mpp/amp"]),
+    (e) => {
+      assert.match(e.message, /ondrejs-project\/amp/)
+      assert.match(e.message, /mpp\/amp/)
+      assert.match(e.message, /fix-auth-amp/, "names the label they collide on")
+      return true
+    },
+  )
+})
+
+test("memberLabels: a bare name colliding with a namespaced one is still a collision", () => {
+  assert.throws(() => memberLabels("x", ["amp", "ondrejs-project/amp"]), /amp/)
 })

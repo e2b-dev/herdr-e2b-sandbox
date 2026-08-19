@@ -38,7 +38,8 @@ e2b-box pull                 # bring the box's results back     box → local
 **You want the SAME task attempted by several agents at once, starting clean from
 the current checkout's HEAD (main or a feature branch)** → `e2b-fleet`. It creates
 the worktrees FOR you — one per agent, in herdr's default worktree directory, each
-on branch `e2b/<slug>-<template>-<rand4>`, each in its own herdr workspace, each
+on branch `e2b/<slug>-<template>-<rand4>` (`<template>` is the last path segment,
+so `ondrejs-project/herdr-agents` gives `herdr-agents`), each in its own herdr workspace, each
 with its own sandbox booted from that agent's template, each agent started already
 holding the task. Do NOT pre-create worktrees for a fleet; that is the whole point
 of the verb.

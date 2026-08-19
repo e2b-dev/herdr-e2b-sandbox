@@ -359,6 +359,50 @@ out=$( cd "$FREPO" && HERDR_E2B_FLEET_RAND=ab12 \
   && ok "HERDR_PLUGIN_CONFIG_DIR wins over the XDG config path" \
   || bad "HERDR_PLUGIN_CONFIG_DIR precedence (rc=$rc, out=$out)"
 
+# An unknown [sandbox] region must reach the user as ITSELF. The bash layer
+# resolves credentials through a node helper whose stderr it used to discard, so
+# a typo'd region degraded into the generic "No E2B API key" — a message naming
+# the wrong problem. The env is cleared because the credential lookup is skipped
+# entirely when E2B_API_KEY is already exported.
+RCFG="$TMP/bad-region"; mkdir -p "$RCFG"
+printf '[sandbox]\nregion = "apac"\n' > "$RCFG/config.toml"
+out=$( cd "$FREPO" && env -u E2B_API_KEY -u E2B_DOMAIN HERDR_PLUGIN_CONFIG_DIR="$RCFG" \
+       bash -c 'source "$1/bin/lib/paths.sh"; ensure_e2b_env' _ "$ROOT" 2>&1 )
+{ printf '%s' "$out" | grep -q "apac" \
+  && printf '%s' "$out" | grep -q "us, eu" \
+  && ! printf '%s' "$out" | grep -qi "at resolveCredentials"; } \
+  && ok "an unknown region is reported by name, not as a stack trace" \
+  || bad "unknown region message (out=$out)"
+
+# A project's own template is namespaced `<project>/<name>`, and the project half
+# is shared by every member of a fleet — so the member is named after the last
+# segment only. Asserted through the plan because the label is what herdr shows.
+NSCFG="$TMP/ns-templates"; mkdir -p "$NSCFG"
+printf '[sandbox]\ntemplates = ["ondrejs-project/amp", "mpp/amp", "claude"]\n' > "$NSCFG/config.toml"
+out=$( cd "$FREPO" && HERDR_E2B_FLEET_RAND=ab12 HERDR_PLUGIN_CONFIG_DIR="$NSCFG" \
+       "$FLEET" --slug fix-auth -t ondrejs-project/amp -t claude -n 2>&1 ); rc=$?
+{ [ "$rc" -eq 0 ] \
+  && printf '%s' "$out" | grep -q -- "--branch e2b/fix-auth-amp-ab12" \
+  && printf '%s' "$out" | grep -q -- "--label fix-auth-amp" \
+  && ! printf '%s' "$out" | grep -q -- "ondrejs-project-amp"; } \
+  && ok "a namespaced template is named by its last segment" \
+  || bad "namespaced template naming (rc=$rc, out=$out)"
+
+# Dropping the project half can make two DIFFERENT templates claim one member
+# name. Two workspaces called fix-auth-amp are worse than a refusal, so the
+# roster is rejected before anything is created, naming both entries — and bash
+# must not append a guessed cause that contradicts it.
+out=$( cd "$FREPO" && HERDR_E2B_FLEET_RAND=ab12 HERDR_PLUGIN_CONFIG_DIR="$NSCFG" \
+       "$FLEET" --slug fix-auth -t ondrejs-project/amp -t mpp/amp -n 2>&1 ); rc=$?
+{ [ "$rc" -eq 2 ] \
+  && printf '%s' "$out" | grep -q "ondrejs-project/amp" \
+  && printf '%s' "$out" | grep -q "mpp/amp" \
+  && printf '%s' "$out" | grep -q "fix-auth-amp" \
+  && ! printf '%s' "$out" | grep -q "herdr worktree create" \
+  && ! printf '%s' "$out" | grep -q "task slug can't become"; } \
+  && ok "a roster whose members would share a name is refused, naming both" \
+  || bad "roster label collision (rc=$rc, out=$out)"
+
 # A roster holds a template at most once (CONTEXT.md), so a repeated -t is one
 # member — and the plan keeps first-seen order, which is what makes it assertable.
 out=$(fleet --slug dup -t claude -t claude -t codex -n); rc=$?
@@ -1265,12 +1309,28 @@ printf '%s\n' "$out" | grep -q "not shaped like fleet members" \
   && ok "down --dry-run prints the box kill and the worktree removal it would run" \
   || bad "down dry-run plan (out=$out)"
 
+
+
 { [ "$(dgit worktree list | wc -l | tr -d ' ')" = "3" ] \
   && [ "$(dgit for-each-ref --format='%(refname:short)' 'refs/heads/e2b/*' | wc -l | tr -d ' ')" = "5" ] \
   && [ -f "$HERDR_PLUGIN_STATE_DIR/boxes/downbox.json" ] \
   && [ -d "$TMP/dwt-claude" ]; } \
   && ok "down --dry-run removed nothing — worktrees, branches and the box record all still there" \
   || bad "down --dry-run removed something"
+
+# A member booted from a namespaced template is named by the template's LAST
+# segment, so its branch is e2b/<slug>-herdr-agents-<rand4>, not
+# e2b/<slug>-ondrejs-project-herdr-agents-<rand4>. Teardown globs on
+# <prefix>/<slug>- and shape-checks the -<rand4> tail, so it still matches — but
+# nothing pinned that, and the naming change is exactly what could break it.
+dgit branch e2b/ns-run-herdr-agents-ij90
+out=$(down ns-run --dry-run); rc=$?
+{ [ "$rc" -eq 0 ] \
+  && printf '%s\n' "$out" | grep -q "member e2b/ns-run-herdr-agents-ij90" \
+  && ! printf '%s\n' "$out" | grep -q "not shaped like fleet members"; } \
+  && ok "down still finds a member booted from a namespaced template" \
+  || bad "down namespaced member (rc=$rc, out=$out)"
+
 
 out=$(down no-such-fleet); rc=$?
 { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "no members match e2b/no-such-fleet-\*"; } \

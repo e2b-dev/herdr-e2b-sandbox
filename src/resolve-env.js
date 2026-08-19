@@ -8,7 +8,17 @@
 // without its cluster is how you provision on the wrong one.
 import { loadConfig } from "./config.js"
 
-const cfg = loadConfig()
+// A broken config (an unknown [sandbox] region, say) is a user error with a
+// fixable message, not a crash. The bash layer folds our stderr into the
+// terminal, so print the message alone — a stack trace here buries the one line
+// that says what to change.
+let cfg
+try {
+  cfg = loadConfig()
+} catch (err) {
+  process.stderr.write(`${(err && err.message) || String(err)}\n`)
+  process.exit(1)
+}
 if (cfg.apiKey) process.stdout.write(`E2B_API_KEY=${cfg.apiKey}\n`)
 if (cfg.domain) process.stdout.write(`E2B_DOMAIN=${cfg.domain}\n`)
 if (cfg.credWarning) process.stderr.write(`${cfg.credWarning}\n`)
