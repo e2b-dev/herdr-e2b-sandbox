@@ -391,7 +391,7 @@ test("resolveAuthConfig: a forward entry is a variable NAME, so only strings sur
 })
 
 test("resolveAuthConfig: nothing in the file → empty tables, never undefined", () => {
-  assert.deepEqual(resolveAuthConfig(), { envDiscovered: {}, envForward: {}, envSession: {} })
+  assert.deepEqual(resolveAuthConfig(), { envDiscovered: {}, envFile: {}, envForward: {}, envSession: {} })
   assert.deepEqual(resolveAuthConfig({ templates: { claude: {} } }).envDiscovered, {})
 })
 
@@ -401,7 +401,7 @@ const tmpdir = () => mkdtempSync(path.join(os.tmpdir(), "herdr-e2b-auth-"))
 
 test("readAuthConfig: an absent generated file resolves to nothing and does not throw", () => {
   const r = readAuthConfig(path.join(os.tmpdir(), "herdr-e2b-no-such-auth.toml"))
-  assert.deepEqual(r, { envDiscovered: {}, envForward: {}, envSession: {} })
+  assert.deepEqual(r, { envDiscovered: {}, envFile: {}, envForward: {}, envSession: {} })
 })
 
 test("readAuthConfig: a malformed generated file resolves to nothing and does not throw", () => {
@@ -409,18 +409,21 @@ test("readAuthConfig: a malformed generated file resolves to nothing and does no
   // down. A half-written auth.toml is a bad discovery run, not a broken plugin.
   const file = path.join(tmpdir(), "auth.toml")
   writeFileSync(file, "[templates.claude.env\nANTHROPIC_API_KEY = ")
-  assert.deepEqual(readAuthConfig(file), { envDiscovered: {}, envForward: {}, envSession: {} })
+  assert.deepEqual(readAuthConfig(file), { envDiscovered: {}, envFile: {}, envForward: {}, envSession: {} })
 })
 
 test("readAuthConfig: a written generated file is read back into the resolved shape", () => {
   const file = path.join(tmpdir(), "auth.toml")
   // All three sub-tables in one file, so the reader is pinned against the shape
   // `renderAuthToml` actually emits rather than against one kind at a time.
-  writeFileSync(file, '[templates.codex.env]\nOPENAI_API_KEY = "sk-from-a-file"\n[templates.claude.forward]\nANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"\n[templates.grok.session]\nvar = "GROK_AUTH_JSON"\nvalue = "{payload}"\nexpires = "2099-01-01T00:00:00.000Z"\n')
+  writeFileSync(file, '[templates.codex.env]\nOPENAI_API_KEY = "sk-from-a-file"\n[templates.claude.forward]\nANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"\n[templates.grok.session]\nvar = "GROK_AUTH_JSON"\npath = "~/.grok/auth.json"\nharness = "grok"\n')
   assert.deepEqual(readAuthConfig(file), {
+    // `env` is the legacy inline form, still READ so an auth.toml written before
+    // pointers keeps working, though nothing writes it any more.
     envDiscovered: { codex: { OPENAI_API_KEY: "sk-from-a-file" } },
+    envFile: {},
     envForward: { claude: { ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY" } },
-    envSession: { grok: { var: "GROK_AUTH_JSON", value: "{payload}", expires: "2099-01-01T00:00:00.000Z" } },
+    envSession: { grok: { var: "GROK_AUTH_JSON", path: "~/.grok/auth.json", harness: "grok" } },
   })
 })
 
@@ -673,7 +676,7 @@ test("fleetTemplateChoices: a fleet is agents only — the plain default is not 
 })
 
 // --- regions: a name a person picks, resolved to the domain the code speaks ---
-// ADR-0006. `region` is sugar; every other module keeps receiving a domain, and
+// ADR 0009. `region` is sugar; every other module keeps receiving a domain, and
 // box records are unchanged.
 
 test("resolveCredentials: region 'eu' resolves to the EU domain", () => {
@@ -923,53 +926,90 @@ test("resolveCredentials: [sandbox] domain is rejected, and names the region to 
   )
 })
 
-// ── ADR 0007: a discovered session outranks the user's own table ───────────────
+// ── ADR 0010: a discovered session outranks the user's own table ───────────────
 // The one place discovery is allowed to beat a hand-written value, so it is pinned
 // here rather than left to inspection — and so is every way it must NOT.
 
-const sessionCfg = (expires) => ({
+// auth.toml holds a POINTER, so these inject the reader the resolver would use.
+// Every case below runs with no codex installed and no real auth.json anywhere.
+const jwtFor = (msFromNow) =>
+  `x.${Buffer.from(JSON.stringify({ exp: Math.floor((Date.now() + msFromNow) / 1000) })).toString("base64url")}.y`
+const sessionReader = (msFromNow) => () =>
+  JSON.stringify({
+    auth_mode: "chatgpt",
+    tokens: { access_token: jwtFor(msFromNow), refresh_token: "REAL-SECRET" },
+  })
+const inDays = (n) => n * 86400000
+
+const sessionCfg = () => ({
   envByTemplate: { codex: { OPENAI_API_KEY: "sk-hand-written" } },
-  envSession: { codex: { var: "CODEX_AUTH_JSON", value: "{session}", expires } },
+  envSession: {
+    codex: { var: "CODEX_AUTH_JSON", path: "/fake/auth.json", harness: "codex" },
+  },
 })
-const inDays = (n) => new Date(Date.now() + n * 86400000).toISOString()
+const envFor = (cfg, msFromNow) => resolveEnv(cfg, "codex", {}, Date.now(), sessionReader(msFromNow))
 
 test("a live session beats the user's own [templates.<name>.env]", () => {
-  const env = resolveEnv(sessionCfg(inDays(9)), "codex", {})
-  assert.equal(env.CODEX_AUTH_JSON, "{session}")
-  // The hand-written key is still delivered — it is outranked for the box's choice
-  // of credential, not deleted from the environment.
+  const env = envFor(sessionCfg(), inDays(9))
+  assert.ok(env.CODEX_AUTH_JSON, "no session resolved")
+  // Read fresh from the pointed-at file, and the refresh token is placeholdered on
+  // the way through — the copy in the box can never revoke the login it came from.
+  assert.ok(!env.CODEX_AUTH_JSON.includes("REAL-SECRET"))
+  assert.match(JSON.parse(env.CODEX_AUTH_JSON).tokens.refresh_token, /placeholder/i)
   assert.equal(env.OPENAI_API_KEY, "sk-hand-written")
 })
 
 test("an EXPIRED session is not injected at all", () => {
-  const env = resolveEnv(sessionCfg(inDays(-1)), "codex", {})
+  const env = envFor(sessionCfg(), -inDays(1))
   assert.equal(env.CODEX_AUTH_JSON, undefined)
   // ...and the hand-written value it would have outranked still reaches the box, so
   // an expired session degrades to a working credential rather than a sign-in screen.
   assert.equal(env.OPENAI_API_KEY, "sk-hand-written")
 })
 
-test("a session with an unparseable expiry is treated as expired", () => {
-  assert.equal(resolveEnv(sessionCfg("not a date"), "codex", {}).CODEX_AUTH_JSON, undefined)
+test("a session whose file has gone (signed out) is simply no session", () => {
+  const env = resolveEnv(sessionCfg(), "codex", {}, Date.now(), () => null)
+  assert.equal(env.CODEX_AUTH_JSON, undefined)
+  assert.equal(env.OPENAI_API_KEY, "sk-hand-written")
+})
+
+test("a session whose file is malformed is no session, never a throw", () => {
+  const env = resolveEnv(sessionCfg(), "codex", {}, Date.now(), () => "not json")
+  assert.equal(env.CODEX_AUTH_JSON, undefined)
+})
+
+test("a session naming a harness this build does not know is refused", () => {
+  const cfg = sessionCfg()
+  cfg.envSession.codex.harness = "some-future-harness"
+  assert.equal(envFor(cfg, inDays(9)).CODEX_AUTH_JSON, undefined)
 })
 
 test("prefer = 'env' takes the precedence back", () => {
-  const cfg = { ...sessionCfg(inDays(9)), templatePrefer: { codex: "env" } }
-  assert.equal(resolveEnv(cfg, "codex", {}).CODEX_AUTH_JSON, undefined)
-  assert.equal(resolveEnv(cfg, "codex", {}).OPENAI_API_KEY, "sk-hand-written")
+  const cfg = { ...sessionCfg(), templatePrefer: { codex: "env" } }
+  assert.equal(envFor(cfg, inDays(9)).CODEX_AUTH_JSON, undefined)
+  assert.equal(envFor(cfg, inDays(9)).OPENAI_API_KEY, "sk-hand-written")
 })
 
 test("prefer applies only to the template it names", () => {
-  const cfg = {
-    templatePrefer: { claude: "env" },
-    envSession: { codex: { var: "CODEX_AUTH_JSON", value: "{s}", expires: inDays(9) } },
-  }
-  assert.equal(resolveEnv(cfg, "codex", {}).CODEX_AUTH_JSON, "{s}")
+  const cfg = { ...sessionCfg(), templatePrefer: { claude: "env" } }
+  assert.ok(envFor(cfg, inDays(9)).CODEX_AUTH_JSON)
 })
 
-test("resolveAuthConfig refuses a session missing any of var/value/expires", () => {
-  const partial = { templates: { codex: { session: { var: "V", value: "x" } } } }
-  assert.deepEqual(resolveAuthConfig(partial).envSession, {})
+test("discoveredSources resolves the mark the same way the box's env is resolved", () => {
+  // The mark and the credential must never disagree, so both go through the same
+  // path — a snapshot in auth.toml is exactly what this avoids.
+  const cfg = sessionCfg()
+  assert.equal(discoveredSources(cfg, sessionReader(inDays(9))).codex, "session")
+  assert.equal(discoveredSources(cfg, sessionReader(-inDays(1))).codex, "session-expired")
+  assert.equal(discoveredSources(cfg, () => null).codex, "session-expired")
+})
+
+test("resolveAuthConfig refuses a session missing any of var/path/harness", () => {
+  // Half a pointer is worse than none: it cannot be resolved at create time and it
+  // reads, in the file, as though something was found.
+  for (const session of [{ var: "V" }, { var: "V", path: "/p" }, { path: "/p", harness: "codex" }]) {
+    assert.deepEqual(resolveAuthConfig({ templates: { codex: { session } } }).envSession, {})
+  }
 })
 
 test("resolveEnvConfig reads prefer only for the exact value 'env'", () => {
@@ -977,13 +1017,6 @@ test("resolveEnvConfig reads prefer only for the exact value 'env'", () => {
   assert.deepEqual(resolveEnvConfig({ templates: t }).templatePrefer, { codex: "env" })
 })
 
-test("discoveredSources tells a live session from a dead one", () => {
-  assert.equal(discoveredSources({ envSession: { codex: { expires: inDays(9) } } }).codex, "session")
-  assert.equal(
-    discoveredSources({ envSession: { codex: { expires: inDays(-1) } } }).codex,
-    "session-expired",
-  )
-})
 
 // ── 08: a forwarded name that resolves to nothing must be nameable ─────────────
 // The failure this catches arrives disguised as success — `auth` says `key found`,
@@ -1012,4 +1045,54 @@ test("unresolvedForwards names the HOST variable, which is what the user must ex
 test("unresolvedForwards is silent for a template with nothing forwarded", () => {
   assert.deepEqual(unresolvedForwards({ envForward: { grok: {} } }, "claude", {}), [])
   assert.deepEqual(unresolvedForwards({}, "grok", {}), [])
+})
+
+// ── a session keeps the API key it replaces OUT of the box ────────────────────
+// Not a precedence contest — the point is that the key does not travel at all.
+
+const supersedingCfg = () => ({
+  envDiscovered: { codex: { OPENAI_API_KEY: "sk-discovered" } },
+  envShared: { HTTPS_PROXY: "http://proxy" },
+  envByTemplate: { codex: { OPENAI_API_KEY: "sk-hand-written" } },
+  envSession: {
+    codex: { var: "CODEX_AUTH_JSON", path: "/fake/auth.json", harness: "codex", supersedes: "OPENAI_API_KEY" },
+  },
+})
+
+test("a live session removes the API key from the box entirely", () => {
+  const env = envFor(supersedingCfg(), inDays(9))
+  assert.ok(env.CODEX_AUTH_JSON)
+  assert.equal(env.OPENAI_API_KEY, undefined)
+})
+
+test("suppression removes the key from EVERY rung, not just the losing one", () => {
+  // It can arrive as a discovered value, from [sandbox.env], or from the user's own
+  // template table. None of them may reach a box the session already authenticates.
+  const cfg = supersedingCfg()
+  cfg.envShared.OPENAI_API_KEY = "sk-from-sandbox-env"
+  assert.equal(envFor(cfg, inDays(9)).OPENAI_API_KEY, undefined)
+})
+
+test("suppression touches nothing else in the environment", () => {
+  // Only the redundant CREDENTIAL is dropped — a proxy, a locale, a shipped default
+  // all still reach the box.
+  assert.equal(envFor(supersedingCfg(), inDays(9)).HTTPS_PROXY, "http://proxy")
+})
+
+test("an expired session suppresses nothing — the key is the fallback", () => {
+  const env = envFor(supersedingCfg(), -inDays(1))
+  assert.equal(env.CODEX_AUTH_JSON, undefined)
+  assert.equal(env.OPENAI_API_KEY, "sk-hand-written")
+})
+
+test("prefer = 'env' suppresses nothing either", () => {
+  const cfg = { ...supersedingCfg(), templatePrefer: { codex: "env" } }
+  assert.equal(envFor(cfg, inDays(9)).OPENAI_API_KEY, "sk-hand-written")
+})
+
+test("a session with no `supersedes` recorded drops nothing", () => {
+  // Older auth.toml files, and any future session whose harness has no key variable.
+  const cfg = supersedingCfg()
+  delete cfg.envSession.codex.supersedes
+  assert.equal(envFor(cfg, inDays(9)).OPENAI_API_KEY, "sk-hand-written")
 })

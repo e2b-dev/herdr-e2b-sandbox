@@ -59,7 +59,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A box can now boot into the **signed-in session** on your machine rather than a
   pasted key. `e2b-box auth` records a Codex subscription login out of its own
   `auth.json`, and the codex row goes from "signed in, but not a key this plugin can
-  use" to "signed-in session (expires in 8 days)". Per ADR 0007: the single-use
+  use" to "signed-in session (expires in 8 days)". Per ADR 0010: the single-use
   refresh token is never copied — a visible placeholder goes in its place, so a
   borrowed copy can never revoke the login it came from — and unlike every other
   discovered thing a session **outranks** your own `[templates.<name>.env]`, with
@@ -67,7 +67,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   recorded and the report, the chooser mark and the fleet warning all render an
   expired session as expired; an expired one is never injected, so a box falls back
   to whatever credential still works instead of to a sign-in screen. Claude is
-  untouched — its credential is in the Keychain, which ADR 0007 does not reopen.
+  untouched — its credential is in the Keychain, which ADR 0010 does not reopen.
+- **The generated `auth.toml` holds no credentials at all.** Every discovered
+  credential is recorded as a pointer — the variable to set and the file to read — and
+  resolved when a box is created. No copy of a key or a token exists there, nothing
+  goes stale, a credential you rotate in the harness is picked up with no re-run, and
+  the file stops being something that has to be guarded.
+- `amp` no longer flickers between `key found (file)` and `probe did not answer`: when
+  its probe exceeds the timeout but its config file plainly holds a key, the file
+  settles it. A credential that is there does not become uncertain because a binary
+  was slow.
+- When a borrowed session authenticates a box, the **API key it replaces is no longer
+  sent** — whichever rung supplied it, including your own `[templates.<name>.env]`. A
+  box signed in by the session cannot use the key, and an unusable credential in a
+  box's environment is blast radius bought for nothing. An expired or opted-out
+  session suppresses nothing, because that is precisely when the key is the fallback.
 - `e2b-box auth` now checks whether a variable it recorded by NAME is visible to a
   **login shell**, and says so when it is not. herdr runs plugin commands as
   `bash -lc`, which reads `~/.profile` and never a zsh rc, so a key exported only
@@ -79,6 +93,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   provisioning log at the moment it goes missing, instead of being dropped silently.
   The box is still created — an unauthenticated box is what was asked for and is
   still useful.
+- **amp** and **prime** now hand a box the key already sitting in their own config
+  file (`~/.local/share/amp/secrets.json`, `~/.prime/config.json`), taking the report
+  from 3 of 7 harnesses to 5 of 7. No policy change — this is the original rule about
+  a value already in a plaintext file you own; both simply lacked a reader. amp's key
+  is named after the server it belongs to, so the reader takes the default server's
+  entry and refuses when several are present rather than guessing which one a box
+  should get.
+- **droid** and **claude** are deliberately still out, and ADR 0010 now records why
+  rather than leaving it open: droid's store is encrypted, and claude's is the macOS
+  Keychain, which this plugin does not open on any path. Claude's route remains
+  `claude setup-token`.
   (Nothing reads `auth.toml` yet; boxes start using it in the next change.)
 - **Pick a region by name.** `[sandbox] region = "us" | "eu"` is the only way to
   say where a box runs (see `docs/adr/0007`). `us` is the default and needs no

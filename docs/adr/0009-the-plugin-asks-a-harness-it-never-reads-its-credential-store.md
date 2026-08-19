@@ -1,6 +1,6 @@
 # The plugin asks a harness, it never reads its credential store
 
-**Amended by:** [0007 — a session in a file is borrowable](0007-a-session-in-a-file-is-borrowable-amending-0006.md)
+**Amended by:** [0010 — a session in a file is borrowable](0010-a-session-in-a-file-is-borrowable-amending-0009.md)
 — which overturns the deferral of subscription OAuth and the fleet refusal below. The
 Keychain rule, the probe-don't-scrape rule, and the limits on what may be read all stand.
 

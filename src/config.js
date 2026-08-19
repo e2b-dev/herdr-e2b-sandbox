@@ -3,6 +3,8 @@ import path from "node:path"
 import os from "node:os"
 import TOML from "@iarna/toml"
 
+import { HARNESSES, readHarnessFile } from "./harnesses.js"
+
 // Plugin config dir. Prefer herdr's own HERDR_PLUGIN_CONFIG_DIR — the docs call
 // it the place for "user-editable config such as .env files", and it is the only
 // value herdr actually promises; the XDG path below is where it points today, not
@@ -21,7 +23,7 @@ export const CONFIG_PATH = path.join(CONFIG_DIR, "config.toml")
 /** The file `e2b-box auth` GENERATES, beside the one the user writes. Two files
  * with one writer each is the whole point: this one is regenerated wholesale by
  * that command and merged UNDER config.toml, so a hand-written value always wins
- * (ADR 0006). Nothing but `e2b-box auth` may write it. */
+ * (ADR 0009). Nothing but `e2b-box auth` may write it. */
 export const AUTH_PATH = path.join(CONFIG_DIR, "auth.toml")
 
 // Where the `e2b` CLI keeps its login (@e2b/cli USER_CONFIG_PATH — hardcoded
@@ -259,7 +261,7 @@ export function resolveEnvConfig({ sandbox = {}, templates = {} } = {}) {
       const env = envTable(section?.env)
       if (Object.keys(env).length) byTemplate[name] = env
       // `prefer = "env"` — the documented way to take back the precedence a
-      // discovered SESSION otherwise wins (ADR 0007). Only that one value means
+      // discovered SESSION otherwise wins (ADR 0010). Only that one value means
       // anything; anything else is left unset rather than guessed at, so a typo
       // cannot quietly change which credential a box gets.
       if (String(section?.prefer ?? "").trim() === "env") prefer[name] = "env"
@@ -314,18 +316,56 @@ export function unresolvedForwards(cfg, template, env = {}) {
 /**
  * The top rung: a borrowed session, or nothing.
  *
- * Nothing in three cases, and they are not the same case. No session was found;
- * the user opted out with `prefer = "env"`; or the session expired. Only the last
- * is a problem, and it is one the report and the fleet warning surface — this
+ * auth.toml holds a POINTER, so the payload is read HERE, at the one moment it is
+ * needed. That is what keeps a borrowed session from ever being staler than the
+ * login it came from, and what keeps a live credential from existing twice on disk.
+ * `readFile` is injected so the whole ladder stays testable without one.
+ *
+ * Nothing in five cases, and they are not the same case: no session recorded; the
+ * user opted out with `prefer = "env"`; this build has no reader for that harness;
+ * the file is gone or unreadable because the user signed out; or the session
+ * expired. Only the last two are problems, and both are surfaced elsewhere — this
  * function's job is simply never to inject a credential that has stopped working.
  */
-function sessionValue(cfg, template, now) {
+/**
+ * A key read, at create time, from the file auth.toml points at.
+ *
+ * Same rung as a stored discovered value and the same precedence — the only thing
+ * that changed is that the credential is fetched now rather than copied earlier. A
+ * file that has gone, or a key the user rotated out, resolves to nothing rather than
+ * to a stale copy that fails inside the box.
+ */
+function fileValue(cfg, template, readFile) {
+  const f = cfg?.envFile?.[template]
+  if (!f) return {}
+  const read = HARNESSES[f.harness]?.valueFile?.read
+  if (!read) return {}
+  try {
+    const text = readFile(f.path)
+    const v = text == null ? null : read(text)
+    return v ? { [f.var]: v } : {}
+  } catch {
+    return {}
+  }
+}
+
+function sessionValue(cfg, template, now, readFile) {
   const s = cfg?.envSession?.[template]
   if (!s) return {}
   if (cfg?.templatePrefer?.[template] === "env") return {}
-  const exp = new Date(s.expires).getTime()
+  const read = HARNESSES[s.harness]?.sessionFile?.read
+  if (!read) return {} // a harness this build does not know — never a guess
+  let session = null
+  try {
+    const text = readFile(s.path)
+    session = text == null ? null : read(text)
+  } catch {
+    session = null // signed out, moved, malformed — all "no session", never a throw
+  }
+  if (!session) return {}
+  const exp = new Date(session.expires).getTime()
   if (!Number.isFinite(exp) || exp <= now) return {}
-  return { [s.var]: s.value }
+  return { [s.var]: session.value }
 }
 
 /**
@@ -335,13 +375,18 @@ function sessionValue(cfg, template, now) {
  *   2. DISCOVERED by `e2b-box auth`  (auth.toml: a stored value, or a name to forward)
  *   3. the user's `[sandbox.env]`
  *   4. the user's `[templates.<name>.env]`
- *   5. a DISCOVERED SESSION, unless expired or opted out of  (ADR 0007)
+ *   5. a DISCOVERED SESSION, unless expired or opted out of  (ADR 0010)
+ *
+ * ...and when rung 5 lands, the API key it replaces is REMOVED from the result
+ * entirely, whichever rung put it there. A box signed in by the session cannot use
+ * the key, and an unusable credential in a box's environment is blast radius bought
+ * for nothing.
  *
  * Rungs 2–4 obey the original principle: discovery is a default, so a value the user
  * typed always wins. Rung 5 deliberately breaks it, and it is the only thing here
  * that does — the machine's live signed-in session beats a key pasted months ago,
  * because being handed the stale one while signed in is the exact surprise this
- * feature exists to remove. It will read as a bug; it is ADR 0007.
+ * feature exists to remove. It will read as a bug; it is ADR 0010.
  *
  * Two things keep that from being a trap. `prefer = "env"` on the template restores
  * the original order, and an EXPIRED session is not injected at all — it loses to
@@ -359,7 +404,8 @@ function sessionValue(cfg, template, now) {
  * written to the box record and must not be logged — the record is world-readable
  * state and the log is `herdr plugin log list`.
  */
-export function resolveEnv(cfg, template, env = {}, now = Date.now()) {
+export function resolveEnv(cfg, template, env = {}, now = Date.now(), readFile = readHarnessFile) {
+  const session = sessionValue(cfg, template, now, readFile)
   const merged = {
     ...(cfg?.templateEnvDefaults?.[template] || {}),
     // The discovered rung has two halves, and forwarding wins between them: a name
@@ -369,11 +415,22 @@ export function resolveEnv(cfg, template, env = {}, now = Date.now()) {
     // harness, so today this decides nothing — it is written down so that a future
     // harness offering both does not resolve it by accident.
     ...(cfg?.envDiscovered?.[template] || {}),
+    ...fileValue(cfg, template, readFile),
     ...forwardedValues(cfg?.envForward?.[template], env),
     ...(cfg?.envShared || {}),
     ...(cfg?.envByTemplate?.[template] || {}),
-    ...sessionValue(cfg, template, now),
+    ...session,
   }
+  // A box authenticated by the session has no use for the API key as well, so the
+  // key does not travel. Deleted rather than never-merged because it can arrive from
+  // any of the rungs above — a discovered value, [sandbox.env], the user's own
+  // template table — and the point is that NONE of them reach the box, not that one
+  // of them loses a precedence contest.
+  //
+  // Only when the session actually won. An expired or opted-out session leaves the
+  // key exactly where it was, which is what makes the fallback work at all.
+  const supersedes = cfg?.envSession?.[template]?.supersedes
+  if (supersedes && Object.keys(session).length) delete merged[supersedes]
   return Object.keys(merged).length ? merged : undefined
 }
 
@@ -381,7 +438,7 @@ export function resolveEnv(cfg, template, env = {}, now = Date.now()) {
  * The generated auth.toml, normalized into the same per-template shape as the
  * user's own tables. Pure — takes the parsed file, so it is testable without disk.
  *
- * Two sub-tables per template, and the split is ADR 0006's:
+ * Two sub-tables per template, and the split is ADR 0009's:
  *
  *   `env`      a VALUE, copied out of a harness's own plaintext config file
  *   `forward`  a variable NAME only, resolved from the environment at create time
@@ -392,6 +449,7 @@ export function resolveEnv(cfg, template, env = {}, now = Date.now()) {
  */
 export function resolveAuthConfig(parsed = {}) {
   const envDiscovered = {}
+  const envFile = {}
   const envForward = {}
   const envSession = {}
   const templates = parsed?.templates
@@ -399,22 +457,35 @@ export function resolveAuthConfig(parsed = {}) {
     for (const [template, section] of Object.entries(templates)) {
       const name = String(template).trim()
       if (!name) continue
+      // Legacy: an auth.toml written before pointers held values inline. Still read
+      // so an existing file keeps working, but nothing writes it any more.
       const env = envTable(section?.env)
       if (Object.keys(env).length) envDiscovered[name] = env
+      // The pointer form: a key in a harness's own config file, read at create time.
+      const fv = String(section?.file?.var ?? "").trim()
+      const fp = String(section?.file?.path ?? "").trim()
+      const fh = String(section?.file?.harness ?? "").trim()
+      if (fv && fp && fh) envFile[name] = { var: fv, path: fp, harness: fh }
       const forward = nameTable(section?.forward)
       if (Object.keys(forward).length) envForward[name] = forward
       // A borrowed session: one variable, one payload, one expiry. All three or
       // nothing — a session without its expiry cannot be aged out, and injecting a
-      // credential we cannot age out is the silent-stale-token bug ADR 0007 accepted
+      // credential we cannot age out is the silent-stale-token bug ADR 0010 accepted
       // the risk of and required this field to close.
       const sess = section?.session
       const v = String(sess?.var ?? "").trim()
-      if (v && typeof sess?.value === "string" && sess.value && typeof sess?.expires === "string") {
-        envSession[name] = { var: v, value: sess.value, expires: sess.expires }
+      // A pointer, and all of it or nothing: the variable to set, the file to read,
+      // and which harness row owns the transform. A session missing any of the three
+      // cannot be resolved at create time, and half a pointer is worse than none.
+      const path = String(sess?.path ?? "").trim()
+      const harness = String(sess?.harness ?? "").trim()
+      if (v && path && harness) {
+        const sup = String(sess?.supersedes ?? "").trim()
+        envSession[name] = { var: v, path, harness, ...(sup ? { supersedes: sup } : {}) }
       }
     }
   }
-  return { envDiscovered, envForward, envSession }
+  return { envDiscovered, envFile, envForward, envSession }
 }
 
 /**
@@ -428,7 +499,7 @@ export function readAuthConfig(file = AUTH_PATH) {
   try {
     return resolveAuthConfig(TOML.parse(readFileSync(file, "utf8")))
   } catch {
-    return { envDiscovered: {}, envForward: {}, envSession: {} }
+    return { envDiscovered: {}, envFile: {}, envForward: {}, envSession: {} }
   }
 }
 
@@ -437,7 +508,7 @@ export function readAuthConfig(file = AUTH_PATH) {
  *
  * The `open` picker's annotation, and the tag is the `auth` report's own `source`
  * vocabulary so the two read the same way. The two sub-tables of the generated file
- * ARE the two sources, which is ADR 0006's split showing through: a stored value came
+ * ARE the two sources, which is ADR 0009's split showing through: a stored value came
  * out of a harness's own config FILE, a forwarded name was seen only in the SHELL.
  *
  * Derived from that file and nothing else. The picker must never probe — the whole
@@ -452,16 +523,21 @@ export function readAuthConfig(file = AUTH_PATH) {
  * resolveEnv already makes — the mark names the source of the value that would
  * actually reach the box.
  */
-export function discoveredSources(cfg) {
+export function discoveredSources(cfg, readFile = readHarnessFile) {
   const out = {}
   for (const t of Object.keys(cfg?.envDiscovered || {})) out[t] = "file"
+  for (const t of Object.keys(cfg?.envFile || {})) out[t] = "file"
   for (const t of Object.keys(cfg?.envForward || {})) out[t] = "env"
-  // Last, because it is what actually reaches the box — and told apart from a live
-  // one, since a mark that says "authenticated" over a dead session is the lie this
-  // whole annotation exists to prevent.
-  for (const [t, s] of Object.entries(cfg?.envSession || {})) {
-    const exp = new Date(s?.expires).getTime()
-    out[t] = Number.isFinite(exp) && exp > Date.now() ? "session" : "session-expired"
+  // Last, because it is what actually reaches the box — and told apart from a dead
+  // one, since a mark saying "authenticated" over an expired session is the lie this
+  // annotation exists to prevent.
+  //
+  // Resolved the same way the box's own env is, through `sessionValue`, so the mark
+  // and the credential can never disagree. That means reading the pointed-at file —
+  // cheap, read-only, and still not a PROBE: no binary is spawned, which is the rule
+  // the picker actually has to keep.
+  for (const t of Object.keys(cfg?.envSession || {})) {
+    out[t] = Object.keys(sessionValue(cfg, t, Date.now(), readFile)).length ? "session" : "session-expired"
   }
   return out
 }
@@ -522,7 +598,7 @@ export function readCliConfig(file = CLI_CONFIG_PATH) {
  */
 /**
  * The regions a user may name, and the domain each one means. Exactly two, and
- * they are the ONLY way to choose one (ADR-0007): there is no host to write by
+ * they are the ONLY way to choose one (ADR 0010): there is no host to write by
  * hand, because a region is the thing a person picks and a host is a detail.
  *
  * `us` maps to **null**, not to "e2b.dev". The SDK defaults to `e2b.app` and the
@@ -587,7 +663,7 @@ export function resolveCredentials({ env = {}, secrets = {}, sandbox = {}, cli =
   const fromDaemon = Boolean(env.HERDR_PLUGIN_ID || env.HERDR_PLUGIN_ROOT)
   const envKey = env.E2B_API_KEY?.trim() || null
   const envDomain = env.E2B_DOMAIN?.trim() || null
-  // `[sandbox] domain` was the old way to choose a cluster and is gone (ADR-0007).
+  // `[sandbox] domain` was the old way to choose a cluster and is gone (ADR 0010).
   // It must ERROR rather than be ignored: someone with `domain = "e2b-juliett.dev"`
   // who upgraded into a silent no-op would have every box quietly move to US,
   // which is precisely the failure regions exist to prevent.
@@ -740,8 +816,11 @@ export function loadConfig() {
     // a variable to forward from this process's own environment at create time.
     // Both lose to the two tables above; see resolveEnv for the whole ladder.
     envDiscovered: auth.envDiscovered,
+    // The pointer form of the rung above: a path to a key in a harness's own config
+    // file, read at create time so auth.toml holds no secret and no stale copy.
+    envFile: auth.envFile,
     envForward: auth.envForward,
-    // A borrowed signed-in session (ADR 0007). Unlike the two above it OUTRANKS the
+    // A borrowed signed-in session (ADR 0010). Unlike the two above it OUTRANKS the
     // user's own tables, so it is the one discovered thing that can override a
     // hand-written value — and `templatePrefer` is how the user takes that back.
     envSession: auth.envSession,

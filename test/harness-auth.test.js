@@ -5,6 +5,8 @@ import os from "node:os"
 import path from "node:path"
 import TOML from "@iarna/toml"
 
+import { HARNESSES } from "../src/harnesses.js"
+
 import {
   buildPlan,
   renderAuthToml,
@@ -20,7 +22,7 @@ const row = (o) => ({ installed: true, state: "no-key", source: null, hostVar: n
 
 const noFiles = () => null
 
-// --- store versus forward: the rule ADR 0006 fixes -----------------------------
+// --- store versus forward: the rule ADR 0009 fixes -----------------------------
 
 test("a key found in the environment records the NAME and never the value", () => {
   const plan = buildPlan(
@@ -39,7 +41,7 @@ test("a key found in the environment records the NAME and never the value", () =
   assert.doesNotMatch(renderAuthToml(plan), /sk-ant-secret/)
 })
 
-test("a key found in a file is stored as a value", () => {
+test("a key found in a file is recorded as a POINTER, not copied", () => {
   const plan = buildPlan([row({ id: "codex", state: "authenticated", source: "file" })], {
     readText: (p) => (p.endsWith("/.codex/auth.json") ? '{"OPENAI_API_KEY":"sk-oai-from-file"}' : null),
   })
@@ -49,9 +51,13 @@ test("a key found in a file is stored as a value", () => {
     template: "codex",
     kind: "value",
     boxVar: "OPENAI_API_KEY",
-    value: "sk-oai-from-file",
+    path: "~/.codex/auth.json",
+    harness: "codex",
     from: "~/.codex/auth.json",
   })
+  // The file was read — that is how we know there is a key to point at — but the
+  // key itself is not kept.
+  assert.equal(plan.entries[0].value, undefined)
 })
 
 test("the box variable is what gets written, not the host variable", () => {
@@ -129,7 +135,7 @@ test("the generated file says it is generated and must not be hand-edited", () =
   assert.match(body, /do not edit/i)
 })
 
-test("values and forwarded names land in tables a config loader can read", () => {
+test("pointers and forwarded names land in tables a config loader can read", () => {
   const plan = buildPlan(
     [
       row({ id: "claude", state: "authenticated", source: "env", hostVar: "ANTHROPIC_API_KEY" }),
@@ -137,40 +143,47 @@ test("values and forwarded names land in tables a config loader can read", () =>
     ],
     { readText: () => '{"OPENAI_API_KEY":"sk-oai-from-file"}' },
   )
-  const parsed = TOML.parse(renderAuthToml(plan))
-  assert.deepEqual(parsed.templates.codex.env, { OPENAI_API_KEY: "sk-oai-from-file" })
+  const body = renderAuthToml(plan)
+  const parsed = TOML.parse(body)
+  assert.deepEqual(parsed.templates.codex.file, {
+    var: "OPENAI_API_KEY",
+    path: "~/.codex/auth.json",
+    harness: "codex",
+  })
   assert.deepEqual(parsed.templates.claude.forward, { ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY" })
-  // The forwarded row must not also appear as a value.
-  assert.equal(parsed.templates.claude.env, undefined)
+  // The forwarded row must not also appear as a pointer.
+  assert.equal(parsed.templates.claude.file, undefined)
+  // And the key itself is nowhere in the file.
+  assert.ok(!body.includes("sk-oai-from-file"))
 })
 
-test("a value carrying quotes and braces survives the round trip", () => {
-  // opencode's box variable is a whole auth.json inline, so the value written is
-  // itself JSON — the one place a stored value is not a flat token.
+test("a pointer file holds no credential, whatever the harness's file contains", () => {
+  // opencode's box variable is a whole auth.json inline — the largest value this
+  // feature ever handled, and now the clearest demonstration that none of it lands.
   const plan = buildPlan([row({ id: "opencode", state: "authenticated", source: "file" })], {
     readText: () => '{"anthropic": {"type": "api", "key": "sk-x"}}',
   })
-  const parsed = TOML.parse(renderAuthToml(plan))
-  assert.deepEqual(JSON.parse(parsed.templates.opencode.env.OPENCODE_AUTH_CONTENT), {
-    anthropic: { type: "api", key: "sk-x" },
-  })
+  const body = renderAuthToml(plan)
+  assert.ok(!body.includes("sk-x"))
+  assert.deepEqual(TOML.parse(body).templates.opencode.file.var, "OPENCODE_AUTH_CONTENT")
 })
 
-test("an oauth entry beside an api key is dropped, never forwarded", () => {
-  // ADR 0006 will not carry a token cache. opencode's auth.json can hold both
-  // kinds at once, and forwarding the file whole would have put an access/refresh
-  // pair into a box the moment one api entry sat beside it.
-  const plan = buildPlan([row({ id: "opencode", state: "authenticated", source: "file" })], {
-    readText: () =>
-      JSON.stringify({
-        openai: { type: "oauth", access: "at-secret", refresh: "rt-secret" },
-        anthropic: { type: "api", key: "sk-x" },
-      }),
-  })
-  const written = renderAuthToml(plan)
-  assert.doesNotMatch(written, /rt-secret/)
-  assert.doesNotMatch(written, /at-secret/)
-  assert.match(written, /sk-x/)
+test("an oauth entry beside an api key is dropped by the reader, never forwarded", () => {
+  // ADR 0009 will not carry a token cache. opencode's auth.json can hold both kinds
+  // at once, and handing the file over whole would put an access/refresh pair into a
+  // box the moment one api entry sat beside it. The filtering used to happen before
+  // the value was written down; with a pointer it happens at box-create time, so it
+  // is asserted on the READER, which is where it now lives.
+  const read = HARNESSES.opencode.valueFile.read
+  const out = read(
+    JSON.stringify({
+      openai: { type: "oauth", access: "at-secret", refresh: "rt-secret" },
+      anthropic: { type: "api", key: "sk-x" },
+    }),
+  )
+  assert.ok(!out.includes("rt-secret"))
+  assert.ok(!out.includes("at-secret"))
+  assert.ok(out.includes("sk-x"))
 })
 
 test("an auth.json holding nothing but oauth is a gap, not a forwarded token cache", () => {
@@ -267,7 +280,7 @@ test("gaps are printed as something to paste, and are never prompted for", () =>
   assert.match(shown, /AMP_API_KEY/)
 })
 
-// ── ADR 0007: a signed-in session in a file is borrowable ──────────────────────
+// ── ADR 0010: a signed-in session in a file is borrowable ──────────────────────
 // The whole point of these is that they need no codex installed: every case is a
 // fabricated auth.json handed to the same reader the real probe uses.
 
@@ -283,30 +296,37 @@ const sessionFile = (exp, extra = {}) =>
   })
 const sessionRow = { id: "codex", installed: true, state: "authenticated", source: "session" }
 
-test("a session is recorded with its expiry, and the real refresh token is not", () => {
+test("a session is recorded as a POINTER — no token material is written down", () => {
   const exp = Math.floor(Date.now() / 1000) + 240 * HOUR
   const plan = buildPlan([sessionRow], { readText: () => sessionFile(exp) })
   assert.equal(plan.entries.length, 1)
   const e = plan.entries[0]
   assert.equal(e.kind, "session")
   assert.equal(e.boxVar, "CODEX_AUTH_JSON")
+  assert.equal(e.path, "~/.codex/auth.json")
+  assert.equal(e.harness, "codex")
+  assert.equal(e.supersedes, "OPENAI_API_KEY")
+  // The file was still READ — that is how we know there is a session to point at,
+  // and what to tell the user about its expiry — but nothing from it is kept.
   assert.equal(e.expires, new Date(exp * 1000).toISOString())
-  // ADR 0007's rule, and the one that must never regress: the copy cannot revoke
-  // the login it came from.
-  assert.ok(!e.value.includes("rt-REAL-SECRET-MUST-NOT-LEAK"), "the real refresh token was copied")
-  assert.match(JSON.parse(e.value).tokens.refresh_token, /placeholder/i)
-  // Present, though — codex refuses to deserialize the file without the field.
-  assert.ok(JSON.parse(e.value).tokens.refresh_token)
-  assert.equal(JSON.parse(e.value).tokens.access_token, jwt(exp))
+  assert.equal(e.value, undefined)
 })
 
-test("the rendered file keeps the real refresh token out and the expiry in", () => {
+test("the rendered file contains no credential material at all", () => {
   const exp = Math.floor(Date.now() / 1000) + 240 * HOUR
-  const body = renderAuthToml(buildPlan([sessionRow], { readText: () => sessionFile(exp) }))
-  assert.ok(!body.includes("rt-REAL-SECRET-MUST-NOT-LEAK"))
+  const src = sessionFile(exp)
+  const body = renderAuthToml(buildPlan([sessionRow], { readText: () => src }))
+  const tokens = JSON.parse(src).tokens
+  // Stronger than "the refresh token is not copied": NOTHING is. A pointer cannot
+  // leak a token, cannot go stale, and cannot be a second copy of a live secret.
+  assert.ok(!body.includes(tokens.refresh_token), "refresh token leaked")
+  assert.ok(!body.includes(tokens.access_token), "access token leaked")
   assert.match(body, /\[templates\.codex\.session\]/)
-  assert.match(body, /var = "CODEX_AUTH_JSON"/)
-  assert.match(body, /expires = /)
+  assert.match(body, /path = "~\/\.codex\/auth\.json"/)
+  assert.match(body, /harness = "codex"/)
+  // ...and no snapshot of the expiry either, because a snapshot disagrees with the
+  // file an hour later. Freshness is read at box-create time or not at all.
+  assert.ok(!/expires = /.test(body), "an expiry snapshot was written")
 })
 
 test("a session whose expiry cannot be read is refused, not guessed at", () => {

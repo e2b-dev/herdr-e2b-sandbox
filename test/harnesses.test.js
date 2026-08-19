@@ -5,7 +5,7 @@ import { HARNESSES, interpretProbe } from "../src/harnesses.js"
 // --- what the plugin can borrow ----------------------------------------------
 // `state` answers one question only: can this plugin authenticate a box from what
 // is on this machine? It is not "is the harness working" — a harness signed in
-// with a subscription works perfectly and is still `no-key` here, because ADR 0006
+// with a subscription works perfectly and is still `no-key` here, because ADR 0009
 // puts its credential store out of reach.
 
 test("interpretProbe: a harness reporting an API key from the environment is borrowable", () => {
@@ -39,7 +39,7 @@ test("interpretProbe: a logged-out harness has no key to borrow", () => {
 
 test("interpretProbe: a subscription login is NOT borrowable", () => {
   // The harness works perfectly; its credential is in the macOS Keychain, which
-  // ADR 0006 puts out of reach. Reporting this as `authenticated` would promise a
+  // ADR 0009 puts out of reach. Reporting this as `authenticated` would promise a
   // box a credential the plugin cannot actually hand it.
   const r = interpretProbe("claude", {
     status: 0,
@@ -186,7 +186,7 @@ test("interpretProbe: a codex API key in its own auth file is borrowable from th
 })
 
 test("interpretProbe: a codex subscription login IS borrowable, as a session", () => {
-  // Reversed by ADR 0007. It used to be `no-key` on the grounds that OpenAI forbids
+  // Reversed by ADR 0010. It used to be `no-key` on the grounds that OpenAI forbids
   // sharing auth.json across concurrent jobs — but that rule guards the single-use
   // refresh token, which src/harnesses.js replaces with a placeholder rather than
   // copying. What is left is a fixed-expiry bearer that rotates nothing.
@@ -306,7 +306,7 @@ test("interpretProbe: a plain key in opencode's own auth file is a borrowable so
 test("interpretProbe: an opencode credential is read by KIND, not just counted", () => {
   // opencode labels every entry `api` or `oauth`. Counting them would report this
   // machine as borrowable and hand ticket 03 an OAuth token to copy — the exact
-  // thing ADR 0006 says is never read. One oauth entry is a login, not a key.
+  // thing ADR 0009 says is never read. One oauth entry is a login, not a key.
   const r = interpretProbe("opencode", {
     status: 0,
     stdout:
@@ -351,7 +351,7 @@ test("interpretProbe: prime writes even its model list to stderr", () => {
     env: {},
   })
   // A provider answered, so prime runs — but from a credential this probe cannot
-  // name and ADR 0006 will not go looking for. Saying `authenticated` here would
+  // name and ADR 0009 will not go looking for. Saying `authenticated` here would
   // promise a box a value the plugin does not have.
   assert.equal(r.state, "no-key")
   assert.equal(r.source, "login")
@@ -473,4 +473,46 @@ test("interpretProbe: neither of the two unsafe probes is in the table", () => {
   // fast and still answers the question.
   assert.deepEqual(HARNESSES.amp.authArgs, ["usage"])
   assert.deepEqual(HARNESSES.prime.authArgs, ["model", "list"])
+})
+
+// ── amp and prime keep a plain key in their own config file ───────────────────
+// Both probes answer "signed in" without saying how, so the FILE is the tie-break.
+// Fixtures, not this machine: the reader is the thing under test.
+
+test("amp reads its key from the default server's entry", () => {
+  const f = HARNESSES.amp.valueFile
+  assert.equal(f.read('{"apiKey@https://ampcode.com/":"amp-key"}'), "amp-key")
+})
+
+test("amp falls back to a sole entry when the server is not the default one", () => {
+  // amp's server is configurable, so the key name is not fixed.
+  assert.equal(HARNESSES.amp.valueFile.read('{"apiKey@https://amp.internal/":"self-hosted"}'), "self-hosted")
+})
+
+test("amp refuses to choose between two servers' keys", () => {
+  // Picking one of two is the guess this table does not make — and handing a box the
+  // wrong server's key fails at authentication, far from its cause.
+  const two = '{"apiKey@https://amp.internal/":"a","apiKey@https://other/":"b"}'
+  assert.equal(HARNESSES.amp.valueFile.read(two), null)
+  // ...unless one of them IS the default, which is not a guess.
+  const withDefault = '{"apiKey@https://ampcode.com/":"a","apiKey@https://other/":"b"}'
+  assert.equal(HARNESSES.amp.valueFile.read(withDefault), "a")
+})
+
+test("amp ignores non-key entries in the same file", () => {
+  assert.equal(HARNESSES.amp.valueFile.read('{"deviceId":"d","somethingElse":1}'), null)
+})
+
+test("prime reads api_key, and treats an empty one as absent", () => {
+  assert.equal(HARNESSES.prime.valueFile.read('{"api_key":"pk-1","team_id":"t"}'), "pk-1")
+  assert.equal(HARNESSES.prime.valueFile.read('{"api_key":"","team_id":"t"}'), null)
+  assert.equal(HARNESSES.prime.valueFile.read('{"team_id":"t"}'), null)
+})
+
+test("droid and claude have no file reader, and must not grow one by accident", () => {
+  // Both keep their credential in a store this plugin does not open — droid's is
+  // encrypted beside its own key file, claude's is the macOS Keychain. ADR 0010
+  // moved the OAuth line and deliberately left this one where it was.
+  assert.equal(HARNESSES.droid.valueFile, undefined)
+  assert.equal(HARNESSES.claude.valueFile, undefined)
 })

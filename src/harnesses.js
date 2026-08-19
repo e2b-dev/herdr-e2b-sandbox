@@ -51,7 +51,7 @@ const firstLine = (s) =>
  * another, opencode has no single name at all, and prime accepts a whole registry
  * of them. Collapsing the two fields would be wrong for three rows out of seven.
  *
- * `source` is where ADR 0006's boundary shows up in the data:
+ * `source` is where ADR 0009's boundary shows up in the data:
  *
  *   env   — a variable in the environment holds it; the NAME is recorded and the
  *           value is forwarded at create time, never written down
@@ -69,7 +69,7 @@ const firstLine = (s) =>
  * Read one of the documented config paths in this table, tilde and all.
  *
  * Lives here beside the paths it reads so there is exactly one implementation of
- * "the narrowest read ADR 0006 allows" — the probe needs it for a session's expiry
+ * "the narrowest read ADR 0009 allows" — the probe needs it for a session's expiry
  * and the write plan needs it for the payload, and two readers would be two places
  * for the boundary to drift. Absent or unreadable is null, never a throw: a file
  * that is not there is an answer.
@@ -83,11 +83,13 @@ export const readHarnessFile = (p) => {
   }
 }
 
+const AMP_SECRETS = "~/.local/share/amp/secrets.json"
+const PRIME_CONFIG = "~/.prime/config.json"
 const CODEX_AUTH_JSON = "~/.codex/auth.json"
 const CODEX_KEY_FIELD = "OPENAI_API_KEY"
 
 /**
- * What goes where a borrowed session's refresh token used to be (ADR 0007).
+ * What goes where a borrowed session's refresh token used to be (ADR 0010).
  *
  * The refresh token is single-use: two holders that both rotate invalidate each
  * other, so a copy that carried the real one could log the user out of their own
@@ -116,7 +118,7 @@ const jwtExpiry = (token) => {
 
 /**
  * A Codex subscription login, read out of the file it already sits in, ready to be
- * handed to a box (ADR 0007).
+ * handed to a box (ADR 0010).
  *
  * Returns null for every shape that is not a live borrowable session — an API-key
  * file, a missing access token, an expiry that cannot be read — because a partial
@@ -149,12 +151,22 @@ export const HARNESSES = {
     authArgs: ["auth", "status"],
     hostVar: "ANTHROPIC_API_KEY",
     boxVar: "ANTHROPIC_API_KEY",
+    // The row that cannot be discovered, so its remedy has to carry the whole answer.
+    // Claude keeps its subscription login in the macOS Keychain, which no path here
+    // opens (ADR 0010) — and unlike codex, borrowing it would not help much anyway:
+    // measured on a real login, the access token had about FOUR HOURS left, against
+    // codex's ten days. A box handed that meets a sign-in screen mid-task, which is
+    // the failure this whole feature exists to remove. `claude setup-token` mints a
+    // long-lived token instead, and it is pasted like any other value — so the advice
+    // names it rather than leaving "set ANTHROPIC_API_KEY" to imply the user should
+    // go hunting for a key that lasts.
+    advice: "run `claude setup-token` for a long-lived token, then set ANTHROPIC_API_KEY to it",
     // No plain-key config file exists: on macOS the credential is in the Keychain,
-    // which ADR 0006 puts out of scope. The environment is the only readable surface.
+    // which ADR 0009 puts out of scope. The environment is the only readable surface.
     keyFile: null,
     // Claude Code is the only harness that answers this question properly: JSON on
     // stdout with a meaningful exit code, and `apiKeySource` carrying the variable's
-    // NAME and never its value — the exact shape ADR 0006 asks for. Every other
+    // NAME and never its value — the exact shape ADR 0009 asks for. Every other
     // harness needs a scrappier rule of its own, which is why this lives in the table.
     parse: ({ stdout, env }) => {
       let j
@@ -166,7 +178,7 @@ export const HARNESSES = {
       if (j.apiKeySource && env[j.apiKeySource]) {
         return { state: "authenticated", source: "env", hostVar: j.apiKeySource }
       }
-      // Logged in by a route whose credential lives somewhere ADR 0006 will not read.
+      // Logged in by a route whose credential lives somewhere ADR 0009 will not read.
       // `login` is recorded so the report can say WHY nothing was borrowed.
       if (j.loggedIn === true) return { state: "no-key", source: "login" }
       if (j.loggedIn === false) return { state: "no-key", source: null }
@@ -191,11 +203,11 @@ export const HARNESSES = {
     // `source: "file"` above is a claim about WHERE the credential is; this is how
     // it is fetched from there. Read only when the probe already said `file`, only
     // from this documented path, and only for the field named in `keyFile` — the
-    // narrowest read ADR 0006 allows, and the reason a value may be written down at
+    // narrowest read ADR 0009 allows, and the reason a value may be written down at
     // all: it is already sitting in a plaintext file this user owns.
     valueFile: { path: CODEX_AUTH_JSON, read: (text) => JSON.parse(text)?.[CODEX_KEY_FIELD] || null },
     // The `session` counterpart of valueFile, and the only row that has one. Same
-    // file, same ADR-0006-narrow read; a different shape comes out because a box
+    // file, same ADR 0009-narrow read; a different shape comes out because a box
     // authenticated by a subscription needs the FILE, not a variable — so `boxVar`
     // here names the variable that CARRIES that file, which src/fleet-seed.js writes
     // into ~/.codex/auth.json inside the box.
@@ -212,7 +224,7 @@ export const HARNESSES = {
       if (/^Logged in using an API key\b/m.test(out)) {
         return { state: "authenticated", source: "file" }
       }
-      // "Logged in using ChatGPT" — a subscription, and borrowable since ADR 0007.
+      // "Logged in using ChatGPT" — a subscription, and borrowable since ADR 0010.
       // Its access token is in the same auth.json, is a fixed-expiry bearer, and
       // rotates nothing once its refresh half is replaced by a placeholder. OpenAI's
       // "not across concurrent jobs" rule guards the rotating half, which is exactly
@@ -284,7 +296,7 @@ export const HARNESSES = {
     // The odd one out in a second way: `boxVar` is not a key, it is a whole
     // auth.json, so the "value" read out of the file is a FILE — rebuilt here
     // rather than copied, because an entry opencode labels `oauth` is a token
-    // cache and ADR 0006 will not carry one. Forwarding the file whole would put
+    // cache and ADR 0009 will not carry one. Forwarding the file whole would put
     // an access/refresh pair into auth.toml and then into a box the moment ONE
     // api-kind entry sat beside it, which is the refresh race the ADR exists to
     // refuse. Providers dropped here are simply unauthenticated in the box.
@@ -305,7 +317,7 @@ export const HARNESSES = {
     // Exit code says nothing, and the output is coloured, so it is stripped first.
     // The two counts say how much there is; the per-credential lines say what KIND,
     // and the kind is what decides borrowability — opencode labels each entry `api`
-    // or `oauth`, and an oauth entry is a token cache, which ADR 0006 puts out of
+    // or `oauth`, and an oauth entry is a token cache, which ADR 0009 puts out of
     // reach however convenient auth.json would be to forward. Counting credentials
     // without reading their labels would report a browser-only sign-in as a key.
     //
@@ -339,10 +351,26 @@ export const HARNESSES = {
     authArgs: ["usage"],
     hostVar: "AMP_API_KEY",
     boxVar: "AMP_API_KEY",
-    // ~/.local/share/amp/secrets.json exists but is undocumented, and ADR 0006 limits
-    // file reads to a harness's own DOCUMENTED location. The environment is the only
-    // borrowable surface.
-    keyFile: null,
+    // ~/.local/share/amp/secrets.json — a plaintext key in amp's own data dir, keyed
+    // by the server it belongs to (`apiKey@https://ampcode.com/`). Undocumented by
+    // the vendor, which is why ADR 0009 originally left it alone; ADR 0010 restated
+    // the boundary as credential-STORE versus file, and a plain JSON file the user
+    // owns is the same category as codex's auth.json, not the same as a Keychain.
+    //
+    // The URL suffix is the wrinkle: amp's server is configurable, so the key name is
+    // not fixed. Exact match on the default server first, then a sole `apiKey@` entry
+    // — and nothing at all when several are present, because picking one of two
+    // servers' keys is the guess this table does not make.
+    keyFile: { path: AMP_SECRETS, field: "apiKey@https://ampcode.com/" },
+    valueFile: {
+      path: AMP_SECRETS,
+      read: (text) => {
+        const j = JSON.parse(text)
+        if (typeof j?.["apiKey@https://ampcode.com/"] === "string") return j["apiKey@https://ampcode.com/"]
+        const keys = Object.keys(j || {}).filter((k) => k.startsWith("apiKey@") && typeof j[k] === "string")
+        return keys.length === 1 ? j[keys[0]] : null
+      },
+    },
     parse: ({ stdout, stderr }) => {
       if (/^Signed in as /m.test(stripAnsi(stdout))) return { state: "no-key", source: "login" }
       if (/Invalid or missing API key/.test(stripAnsi(stderr))) return { state: "no-key", source: null }
@@ -383,7 +411,12 @@ export const HARNESSES = {
     authArgs: ["model", "list"],
     hostVar: "PRIME_API_KEY",
     boxVar: "PRIME_API_KEY",
-    keyFile: { path: "~/.prime/config.json", field: "api_key" },
+    keyFile: { path: PRIME_CONFIG, field: "api_key" },
+    // The field the row above already names, now actually read. Source-established
+    // rather than vendor-documented (docs.primeintellect.ai has no prime-agent page
+    // at all), so it is read as narrowly as every other: this one field, this one
+    // path, and a miss degrades the row to no-key rather than throwing.
+    valueFile: { path: PRIME_CONFIG, read: (text) => JSON.parse(text)?.api_key || null },
     // PRIME_API_KEY is prime's OWN key (Prime Inference), and it is the only one
     // recorded, but it is not the only one prime accepts: its shipped
     // docs/providers.md tables about twenty provider variables — ANTHROPIC_API_KEY,
@@ -432,7 +465,7 @@ export function remedyFor(id, hostVar = null) {
  *
  * Null is the answer for `base`, for a template somebody configured themselves, and
  * for a harness this table does not know. All three mean the same thing to a caller
- * — there is no variable to name — and naming one anyway is the guess ADR 0006
+ * — there is no variable to name — and naming one anyway is the guess ADR 0009
  * forbids.
  */
 export function harnessForTemplate(template) {
@@ -450,7 +483,7 @@ export function harnessForTemplate(template) {
  * `state` answers a narrower question than "does the harness work": it is whether
  * this plugin can authenticate a BOX from what is on this machine. A harness signed
  * in with a subscription works fine and is still `no-key`, because its token is not
- * something ADR 0006 lets us borrow.
+ * something ADR 0009 lets us borrow.
  *
  *   authenticated — a credential exists that a box can be given
  *   no-key        — the harness is installed and nothing borrowable was found
