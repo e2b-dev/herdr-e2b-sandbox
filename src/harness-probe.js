@@ -66,6 +66,38 @@ export function runProbe(bin, args, { timeoutMs = PROBE_TIMEOUT_MS, env = proces
 }
 
 /**
+ * The file tie-break: a probe that says "signed in" without saying HOW is not the
+ * last word.
+ *
+ * Three harnesses answer that way while keeping a plain key in their own config
+ * file. Codex names which credential it used, so its parse rule decides alone; amp
+ * and prime do not, so the file has to be consulted before a row can be called
+ * `no-key`. Separate from `interpretProbe` because that one is pure over a probe
+ * RESULT and must stay runnable with no filesystem; separate from `probeHarness`
+ * because that one spawns binaries and this needs testing without them.
+ *
+ * Only ever an upgrade, and only from `login`. A row that already resolved from the
+ * environment keeps `env` — that is the surface the user controls most directly, and
+ * relabelling it would misreport where a box's credential came from. A harness with
+ * no reader is untouched, which is what keeps droid and claude out.
+ *
+ * @param {object} row              a row as interpretProbe returns it, plus `id`
+ * @param {object} opts             { readFile }
+ */
+export function resolveFromFile(row, { readFile = readHarnessFile } = {}) {
+  const h = HARNESSES[row.id]
+  if (!h?.valueFile || row.state !== "no-key" || row.source !== "login") return row
+  let value = null
+  try {
+    const text = readFile(h.valueFile.path)
+    value = text == null ? null : h.valueFile.read(text)
+  } catch {
+    value = null // malformed is the same as absent — never a guess, never a throw
+  }
+  return value ? { ...row, state: "authenticated", source: "file" } : row
+}
+
+/**
  * Probe one harness: is the binary here, and what does its auth probe say.
  *
  * The version probe is what answers "installed" — a missing binary fails at spawn
@@ -80,7 +112,7 @@ export async function probeHarness(id, { timeoutMs = PROBE_TIMEOUT_MS, env = pro
   if (version.notFound) return { id, ...interpretProbe(id, { notFound: true, env }) }
 
   const auth = await runProbe(h.bin, h.authArgs, { timeoutMs, env })
-  const row = { id, ...interpretProbe(id, { ...auth, env }) }
+  const row = resolveFromFile({ id, ...interpretProbe(id, { ...auth, env }) }, { readFile })
   // A borrowed session has a clock on it, and the report has to show it. Only the
   // EXPIRY is attached — never the payload, which is a live account credential and
   // has no business on a row that gets passed around and formatted.

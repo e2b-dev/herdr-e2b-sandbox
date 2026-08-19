@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { runProbe, probeAll, formatRow } from "../src/harness-probe.js"
+import { runProbe, probeAll, resolveFromFile, formatRow } from "../src/harness-probe.js"
 import { HARNESSES, interpretProbe } from "../src/harnesses.js"
 
 // --- the two probe properties that are not optional ---------------------------
@@ -111,5 +111,41 @@ test("formatRow: every other row still names the variable to set", () => {
     if (!h.hostVar) continue
     const row = formatRow({ id, installed: true, state: "no-key", source: null, hostVar: h.hostVar })
     assert.match(row, new RegExp(h.hostVar), id)
+  }
+})
+
+// ── the file tie-break: a probe that says "signed in" is not the last word ─────
+// probeHarness does the IO, so the reader is injected and none of this needs amp,
+// prime or codex installed.
+
+const loginRow = (id) => ({ id, installed: true, state: "no-key", source: "login" })
+
+test("a login-only probe is upgraded to `file` when the config file holds a key", () => {
+  const r = resolveFromFile(loginRow("prime"), { readFile: () => '{"api_key":"pk-from-the-file"}' })
+  assert.equal(r.state, "authenticated")
+  assert.equal(r.source, "file")
+})
+
+test("an empty config file leaves the row exactly as the probe found it", () => {
+  assert.equal(resolveFromFile(loginRow("prime"), { readFile: () => '{"api_key":""}' }).state, "no-key")
+  assert.equal(resolveFromFile(loginRow("prime"), { readFile: () => null }).state, "no-key")
+})
+
+test("a malformed config file is absent, not a crash", () => {
+  assert.equal(resolveFromFile(loginRow("prime"), { readFile: () => "not json at all" }).state, "no-key")
+})
+
+test("a row that already resolved from the environment is left alone", () => {
+  // The env rung is checked first and must stay first: it is the surface the user
+  // controls most directly, and re-labelling it `file` would misreport where a box's
+  // credential actually came from.
+  const envRow = { id: "prime", installed: true, state: "authenticated", source: "env" }
+  assert.deepEqual(resolveFromFile(envRow, { readFile: () => '{"api_key":"x"}' }), envRow)
+})
+
+test("a harness with no reader is never upgraded, whatever the file says", () => {
+  // droid and claude keep their credential in a store this plugin does not open.
+  for (const id of ["droid", "claude"]) {
+    assert.notEqual(resolveFromFile(loginRow(id), { readFile: () => '{"api_key":"nope"}' }).source, "file")
   }
 })

@@ -83,6 +83,8 @@ export const readHarnessFile = (p) => {
   }
 }
 
+const AMP_SECRETS = "~/.local/share/amp/secrets.json"
+const PRIME_CONFIG = "~/.prime/config.json"
 const CODEX_AUTH_JSON = "~/.codex/auth.json"
 const CODEX_KEY_FIELD = "OPENAI_API_KEY"
 
@@ -339,10 +341,26 @@ export const HARNESSES = {
     authArgs: ["usage"],
     hostVar: "AMP_API_KEY",
     boxVar: "AMP_API_KEY",
-    // ~/.local/share/amp/secrets.json exists but is undocumented, and ADR 0006 limits
-    // file reads to a harness's own DOCUMENTED location. The environment is the only
-    // borrowable surface.
-    keyFile: null,
+    // ~/.local/share/amp/secrets.json — a plaintext key in amp's own data dir, keyed
+    // by the server it belongs to (`apiKey@https://ampcode.com/`). Undocumented by
+    // the vendor, which is why ADR 0006 originally left it alone; ADR 0007 restated
+    // the boundary as credential-STORE versus file, and a plain JSON file the user
+    // owns is the same category as codex's auth.json, not the same as a Keychain.
+    //
+    // The URL suffix is the wrinkle: amp's server is configurable, so the key name is
+    // not fixed. Exact match on the default server first, then a sole `apiKey@` entry
+    // — and nothing at all when several are present, because picking one of two
+    // servers' keys is the guess this table does not make.
+    keyFile: { path: AMP_SECRETS, field: "apiKey@https://ampcode.com/" },
+    valueFile: {
+      path: AMP_SECRETS,
+      read: (text) => {
+        const j = JSON.parse(text)
+        if (typeof j?.["apiKey@https://ampcode.com/"] === "string") return j["apiKey@https://ampcode.com/"]
+        const keys = Object.keys(j || {}).filter((k) => k.startsWith("apiKey@") && typeof j[k] === "string")
+        return keys.length === 1 ? j[keys[0]] : null
+      },
+    },
     parse: ({ stdout, stderr }) => {
       if (/^Signed in as /m.test(stripAnsi(stdout))) return { state: "no-key", source: "login" }
       if (/Invalid or missing API key/.test(stripAnsi(stderr))) return { state: "no-key", source: null }
@@ -383,7 +401,12 @@ export const HARNESSES = {
     authArgs: ["model", "list"],
     hostVar: "PRIME_API_KEY",
     boxVar: "PRIME_API_KEY",
-    keyFile: { path: "~/.prime/config.json", field: "api_key" },
+    keyFile: { path: PRIME_CONFIG, field: "api_key" },
+    // The field the row above already names, now actually read. Source-established
+    // rather than vendor-documented (docs.primeintellect.ai has no prime-agent page
+    // at all), so it is read as narrowly as every other: this one field, this one
+    // path, and a miss degrades the row to no-key rather than throwing.
+    valueFile: { path: PRIME_CONFIG, read: (text) => JSON.parse(text)?.api_key || null },
     // PRIME_API_KEY is prime's OWN key (Prime Inference), and it is the only one
     // recorded, but it is not the only one prime accepts: its shipped
     // docs/providers.md tables about twenty provider variables — ANTHROPIC_API_KEY,

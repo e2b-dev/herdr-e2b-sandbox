@@ -474,3 +474,45 @@ test("interpretProbe: neither of the two unsafe probes is in the table", () => {
   assert.deepEqual(HARNESSES.amp.authArgs, ["usage"])
   assert.deepEqual(HARNESSES.prime.authArgs, ["model", "list"])
 })
+
+// ── amp and prime keep a plain key in their own config file ───────────────────
+// Both probes answer "signed in" without saying how, so the FILE is the tie-break.
+// Fixtures, not this machine: the reader is the thing under test.
+
+test("amp reads its key from the default server's entry", () => {
+  const f = HARNESSES.amp.valueFile
+  assert.equal(f.read('{"apiKey@https://ampcode.com/":"amp-key"}'), "amp-key")
+})
+
+test("amp falls back to a sole entry when the server is not the default one", () => {
+  // amp's server is configurable, so the key name is not fixed.
+  assert.equal(HARNESSES.amp.valueFile.read('{"apiKey@https://amp.internal/":"self-hosted"}'), "self-hosted")
+})
+
+test("amp refuses to choose between two servers' keys", () => {
+  // Picking one of two is the guess this table does not make — and handing a box the
+  // wrong server's key fails at authentication, far from its cause.
+  const two = '{"apiKey@https://amp.internal/":"a","apiKey@https://other/":"b"}'
+  assert.equal(HARNESSES.amp.valueFile.read(two), null)
+  // ...unless one of them IS the default, which is not a guess.
+  const withDefault = '{"apiKey@https://ampcode.com/":"a","apiKey@https://other/":"b"}'
+  assert.equal(HARNESSES.amp.valueFile.read(withDefault), "a")
+})
+
+test("amp ignores non-key entries in the same file", () => {
+  assert.equal(HARNESSES.amp.valueFile.read('{"deviceId":"d","somethingElse":1}'), null)
+})
+
+test("prime reads api_key, and treats an empty one as absent", () => {
+  assert.equal(HARNESSES.prime.valueFile.read('{"api_key":"pk-1","team_id":"t"}'), "pk-1")
+  assert.equal(HARNESSES.prime.valueFile.read('{"api_key":"","team_id":"t"}'), null)
+  assert.equal(HARNESSES.prime.valueFile.read('{"team_id":"t"}'), null)
+})
+
+test("droid and claude have no file reader, and must not grow one by accident", () => {
+  // Both keep their credential in a store this plugin does not open — droid's is
+  // encrypted beside its own key file, claude's is the macOS Keychain. ADR 0007
+  // moved the OAuth line and deliberately left this one where it was.
+  assert.equal(HARNESSES.droid.valueFile, undefined)
+  assert.equal(HARNESSES.claude.valueFile, undefined)
+})
