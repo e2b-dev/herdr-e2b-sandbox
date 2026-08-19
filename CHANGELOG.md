@@ -8,6 +8,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `e2b-box auth` reports which coding harnesses are installed on your machine and
+  whether a box can borrow their credentials, so the variable a template needs stops
+  being something you have to look up. Read-only for now — it prints and exits.
+- That report now covers all seven harnesses behind a shipped template — `claude`,
+  `codex`, `grok`, `opencode`, `amp`, `droid` and `prime` — each read by a rule
+  written against its own binary's real output. A harness this plugin does not know
+  is left alone rather than guessed at.
 - **Pick a region by name.** `[sandbox] region = "us" | "eu"` is the only way to
   say where a box runs (see `docs/adr/0007`). `us` is the default and needs no
   configuration at all — it resolves to the SDK's own default,
