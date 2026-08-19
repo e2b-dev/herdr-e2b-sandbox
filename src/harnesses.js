@@ -338,6 +338,25 @@ export function remedyFor(id, hostVar = null) {
 }
 
 /**
+ * The harness a template ships, as `{id, ...row}` — or null for a template no row
+ * claims. The only reverse lookup over this table: everything else asks "what did
+ * this harness find", and a fleet asks "what does this member's box want".
+ *
+ * Null is the answer for `base`, for a template somebody configured themselves, and
+ * for a harness this table does not know. All three mean the same thing to a caller
+ * — there is no variable to name — and naming one anyway is the guess ADR 0006
+ * forbids.
+ */
+export function harnessForTemplate(template) {
+  const t = String(template ?? "").trim()
+  if (!t) return null
+  for (const [id, h] of Object.entries(HARNESSES)) {
+    if (h.template === t) return { id, ...h }
+  }
+  return null
+}
+
+/**
  * Read one harness's probe result.
  *
  * `state` answers a narrower question than "does the harness work": it is whether

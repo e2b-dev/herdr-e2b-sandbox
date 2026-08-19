@@ -84,6 +84,15 @@ _Avoid_: Team (E2B's former name for it, still visible in older APIs), org,
 workspace (that word is already herdr's), and *project path* — the directory the
 worktree is uploaded to inside a box — which is a different thing entirely
 
+**Unauthenticated member**:
+A fleet member whose box will be created with no credential in it, so its agent comes
+up on a sign-in screen — the one question a fleet member cannot answer for itself,
+since nobody is sitting in front of it. Decided by what `resolveEnv` would inject and
+not by what `e2b-box auth` discovered, so a key you pasted into `config.toml` counts.
+A member with no agent at all, and one whose template no harness ships, are not
+unauthenticated — they have nothing to authenticate.
+_Avoid_: Broken member, failed member, keyless box
+
 ### Worktrees and fleets
 
 **Worktree**:

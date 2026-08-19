@@ -521,6 +521,68 @@ out=$(fleet --slug login-fix -t claude -n); rc=$?
   && ok "a dirty invoking tree warns with the count and continues" || bad "dirty warning (rc=$rc, out=$out)"
 rm -f "$FREPO/untracked.txt"
 
+echo "── fleet: a member that will land on a sign-in screen is named first ──"
+# The one place a missing credential actually costs something. In `open` it is an
+# annoyance — the user is sitting in front of the box and can sign in. In a fleet it
+# is a member that never starts work, discovered minutes later in a pane that is now
+# stuck. So it is said BEFORE launch, once, naming the member, its template and the
+# exact variable — and then the fleet flies (ADR 0003's shape, as for a dirty tree).
+AUTHCFG="$TMP/fleet-auth-cfg"; mkdir -p "$AUTHCFG"
+authfleet() { ( cd "$FREPO" && HERDR_E2B_FLEET_RAND=ab12 HERDR_PLUGIN_CONFIG_DIR="$AUTHCFG" "$FLEET" "$@" 2>&1 ); }
+
+rm -f "$AUTHCFG/config.toml" "$AUTHCFG/auth.toml"
+out=$(authfleet --slug signin -t claude -t codex -t base -n); rc=$?
+{ [ "$rc" -eq 0 ] \
+  && printf '%s\n' "$out" | grep -qE "signin-claude +claude +ANTHROPIC_API_KEY" \
+  && printf '%s\n' "$out" | grep -qE "signin-codex +codex +OPENAI_API_KEY" \
+  && printf '%s\n' "$out" | grep -q '\[templates.claude.env\]' \
+  && printf '%s' "$out" | grep -q "nothing was created"; } \
+  && ok "an unauthenticated member is named with its template and its box variable" \
+  || bad "fleet auth warning content (rc=$rc, out=$out)"
+
+# One warning for the batch. Three members, two of them affected, and the block is
+# emitted once — a roster of seven scrolling past as seven warnings is how a warning
+# stops being read. `base` is not in it: a plain image has no agent to sign in.
+{ [ "$(printf '%s\n' "$out" | grep -c 'will start unauthenticated')" -eq 1 ] \
+  && printf '%s\n' "$out" | grep -q '2 members will start unauthenticated' \
+  && ! printf '%s\n' "$out" | grep -q 'signin-base .*_API_KEY'; } \
+  && ok "one warning for the roster, and a template needing no credential is left out" \
+  || bad "fleet auth warning shape (out=$out)"
+
+# A credential the user wrote by hand IS a credential — the check is what reaches
+# Sandbox.create, not what `e2b-box auth` happened to discover. Printing the remedy
+# at somebody who already took it is how a warning becomes noise.
+printf '[templates.claude.env]\nANTHROPIC_API_KEY = "sk-ant-x"\n[templates.codex.env]\nOPENAI_API_KEY = "sk-oai-x"\n' > "$AUTHCFG/config.toml"
+out=$(authfleet --slug allset -t claude -t codex -n); rc=$?
+{ [ "$rc" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'will start unauthenticated'; } \
+  && ok "a fully authenticated roster says nothing at all" \
+  || bad "authenticated roster warned anyway (rc=$rc, out=$out)"
+
+# What `e2b-box auth` generated counts too, and it is the same check: auth.toml is
+# merged UNDER config.toml by the loader, so both arrive as one resolved env.
+rm -f "$AUTHCFG/config.toml"
+printf '[templates.claude.env]\nANTHROPIC_API_KEY = "sk-ant-discovered"\n' > "$AUTHCFG/auth.toml"
+out=$(authfleet --slug found -t claude -n); rc=$?
+rm -f "$AUTHCFG/auth.toml"
+{ [ "$rc" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'will start unauthenticated'; } \
+  && ok "a credential discovered into auth.toml authenticates the member too" \
+  || bad "discovered credential warned anyway (rc=$rc, out=$out)"
+
+# NOTHING on this path may spawn a harness binary. That is the whole reason `auth` is
+# a subcommand you run on purpose, and a fleet creates several boxes at once — a
+# probe here would put the cost back exactly where it was designed out of. Proved
+# mechanically rather than by reading the code, because the failure is invisible.
+PROBEDIR="$TMP/fleet-no-probe"; mkdir -p "$PROBEDIR"
+for b in claude codex grok opencode amp droid prime; do
+  printf '#!/bin/sh\necho "%s" >> "%s/spawned"\n' "$b" "$PROBEDIR" > "$PROBEDIR/$b"
+  chmod +x "$PROBEDIR/$b"
+done
+out=$( cd "$FREPO" && PATH="$PROBEDIR:$PATH" HERDR_E2B_FLEET_RAND=ab12 \
+       HERDR_PLUGIN_CONFIG_DIR="$AUTHCFG" "$FLEET" --slug noprobe -t claude -t codex -n 2>&1 ); rc=$?
+{ [ "$rc" -eq 0 ] && [ ! -f "$PROBEDIR/spawned" ]; } \
+  && ok "the fleet path spawns no harness binary" \
+  || bad "the fleet probed: $(cat "$PROBEDIR/spawned" 2>/dev/null)"
+
 # [fleet] base and prefix come from config, so the branch namespace and the ref
 # members fork from are both the user's to choose.
 FCFG="$TMP/fleet-home/.config/herdr/plugins/config/e2b-dev.herdr-e2b"; mkdir -p "$FCFG"
@@ -1008,6 +1070,17 @@ out=$(spawn herdr-ok --slug ok-run -t claude -t codex); rc=$?
   && ok "every member up → one line each + '2/2 up' + exit 0" \
   || bad "all-members-up report (rc=$rc, out=$out)"
 
+# …and the live path launches after saying it. The warning is not a gate: the user
+# may be about to configure that credential, or may not care about that member.
+rm -f "$PROBEDIR/spawned"
+out=$(PATH="$PROBEDIR:$PATH" spawn herdr-ok --slug unauth -t claude); rc=$?
+{ [ "$rc" -eq 0 ] \
+  && printf '%s\n' "$out" | grep -qE "unauth-claude +claude +ANTHROPIC_API_KEY" \
+  && printf '%s\n' "$out" | grep -qx "1/1 up" \
+  && [ ! -f "$PROBEDIR/spawned" ]; } \
+  && ok "a member with no credential is named, the fleet launches anyway, and nothing probed" \
+  || bad "unauthenticated member blocked the launch (rc=$rc, probed=$(cat "$PROBEDIR/spawned" 2>/dev/null), out=$out)"
+
 out=$(spawn herdr-fail --slug bad-run -t claude -t codex); rc=$?
 { [ "$rc" -ne 0 ] \
   && printf '%s\n' "$out" | grep -q "✗ bad-run-claude" \
@@ -1360,6 +1433,15 @@ for _ in $(seq 1 50); do grep -q 'done (rc=' "$FLEET_LOG" 2>/dev/null && break; 
   && grep -q "done (rc=0)" "$FLEET_LOG"; } \
   && ok "the per-member report lands in the fleet log behind the board" \
   || bad "fleet log (log=$(cat "$FLEET_LOG" 2>/dev/null))"
+
+# …and so does the unauthenticated-member warning. The pane carried it a moment
+# before the exec, but the board then owns the screen for the whole provisioning
+# run — which is precisely the window in which "this member will never start work"
+# is worth reading. Behind the board, the log is the pane.
+{ grep -q "will start unauthenticated" "$FLEET_LOG" \
+  && grep -qE "boarded-claude +claude +ANTHROPIC_API_KEY" "$FLEET_LOG"; } \
+  && ok "the sign-in warning reaches the fleet log too, not only the pane the board covers" \
+  || bad "fleet log auth warning (log=$(cat "$FLEET_LOG" 2>/dev/null))"
 
 echo "── bench: the launcher's refusals, and members found by branch ──"
 # The Rust binary has its own tests; these cover the shell wrapper and the two

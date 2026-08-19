@@ -38,6 +38,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or a base image that needs none. The picker reads the generated file only and
   spawns no probe, and a template it found nothing for is drawn with no mark rather
   than a misleading one.
+- `e2b-fleet` now warns before it launches a member that will come up on a sign-in
+  screen. One warning for the whole roster, naming each affected member, its
+  template and the exact variable to set, followed by the block you can paste
+  straight into your own `config.toml`. Then it launches: this is a warning and not
+  a gate, the same way a dirty worktree is (ADR 0003) — you may be about to
+  configure that credential, or may not care about that member. A member you
+  configured by hand counts as authenticated, and a member with nothing to
+  authenticate — a plain image, a template of your own, an agentless control arm —
+  is left out of it. Nothing on that path spawns a harness binary.
   (Nothing reads `auth.toml` yet; boxes start using it in the next change.)
 - **Pick a region by name.** `[sandbox] region = "us" | "eu"` is the only way to
   say where a box runs (see `docs/adr/0007`). `us` is the default and needs no
