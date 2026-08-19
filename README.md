@@ -43,6 +43,13 @@ Needs **herdr ≥ 0.7.0**, **Node ≥ 22**, **jq**, the `e2b` CLI on PATH, and a
 in the plugin config (`~/.config/herdr/plugins/config/e2b-dev.herdr-e2b/config.toml`), or
 in `E2B_API_KEY`, which wins if both are set.
 
+On first run the installer also runs `e2b-box auth` once — it reports which coding
+harnesses are installed on this machine and records the credentials a box may
+borrow, so your first box comes up authenticated instead of on the agent's own
+sign-in screen. It asks for no harness credential and cannot fail the install: a
+machine with no harnesses installed just gets a report. Install a new harness
+later and re-run `e2b-box auth` yourself; nothing probes on its own.
+
 Bind the three verbs you press (`prefix+e` is herdr's own `edit_scrollback` —
 stay off it):
 

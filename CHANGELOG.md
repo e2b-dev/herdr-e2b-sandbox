@@ -47,6 +47,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   configured by hand counts as authenticated, and a member with nothing to
   authenticate — a plain image, a template of your own, an agentless control arm —
   is left out of it. Nothing on that path spawns a harness binary.
+- `install.sh` now runs that discovery once on a fresh install, so a first box comes
+  up authenticated without anyone reading the config reference. It shells out to
+  `e2b-box auth --yes` — one discovery implementation, a second entry point into it
+  — and passes the flag because `herdr plugin install` has no terminal and a
+  scripted install must not stall on a question. It prompts for no harness
+  credential, and it cannot fail the install: no harness installed, every probe
+  timing out, or no Node >= 22 yet each produce a report and a successful install.
+  A machine that already has a generated `auth.toml` is left alone, and every run
+  says how to refresh it after installing a new harness.
   (Nothing reads `auth.toml` yet; boxes start using it in the next change.)
 - **Pick a region by name.** `[sandbox] region = "us" | "eu"` is the only way to
   say where a box runs (see `docs/adr/0007`). `us` is the default and needs no
