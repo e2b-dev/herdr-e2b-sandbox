@@ -661,3 +661,23 @@ test("describeRegion: a host that names no region is printed as itself", () => {
   // worse than the host.
   assert.equal(describeRegion("your-own-e2b-host.example"), "your-own-e2b-host.example")
 })
+
+// --- US is one environment reachable at two hostnames -----------------------
+// api.e2b.app is the current production host and the SDK's default; api.e2b.dev
+// is the older name kept on a compatibility path. Both answer, and both are the
+// same environment — not two regions. So pinning either by hand is still US, and
+// must still select the US key.
+
+test("resolveCredentials: pinning a US hostname still selects the US key", () => {
+  const secrets = { e2b_api_key_us: "e2b_us", e2b_api_key_eu: "e2b_eu", e2b_api_key: "e2b_plain" }
+  for (const domain of ["e2b.app", "e2b.dev"]) {
+    const r = resolveCredentials({ sandbox: { domain }, secrets })
+    assert.equal(r.apiKey, "e2b_us", `${domain} is US production, so the US key applies`)
+    assert.equal(r.domain, domain, "an explicitly pinned host is still honoured verbatim")
+  }
+})
+
+test("describeRegion: a US hostname is named as US, not printed raw", () => {
+  assert.equal(describeRegion("e2b.app"), "US (e2b.app)")
+  assert.equal(describeRegion("e2b.dev"), "US (e2b.dev)")
+})

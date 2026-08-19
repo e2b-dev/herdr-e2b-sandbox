@@ -325,12 +325,26 @@ export function readCliConfig(file = CLI_CONFIG_PATH) {
  */
 const REGIONS = Object.freeze({ us: null, eu: "e2b-juliett.dev" })
 
-/** The same table read backwards, for a config that pins a `domain` instead of
- * naming a region. Only regions with a domain appear — `us` is absent because
- * its domain is absent, which is the point of it. */
-const REGION_BY_DOMAIN = Object.freeze(
-  Object.fromEntries(Object.entries(REGIONS).filter(([, d]) => d).map(([r, d]) => [d, r])),
-)
+/**
+ * Which region a pinned `domain` belongs to, for a config that names a host
+ * instead of a region.
+ *
+ * Written out rather than derived by reversing REGIONS, because the two tables
+ * are not inverses of each other: a region resolves to ONE canonical domain,
+ * but a region can be reached at more than one host. US production is served at
+ * `api.e2b.app` — the current hostname and the SDK's default — and at
+ * `api.e2b.dev`, the older name kept on a compatibility path. Both answer, and
+ * both are the same environment, not two regions.
+ *
+ * Deriving this from REGIONS also silently dropped `us` altogether, since its
+ * canonical domain is deliberately absent — so anyone pinning a US host by hand
+ * got no region, and with it no `e2b_api_key_us`.
+ */
+const REGION_BY_DOMAIN = Object.freeze({
+  "e2b.app": "us",
+  "e2b.dev": "us",
+  "e2b-juliett.dev": "eu",
+})
 
 /**
  * How to name a region in a message. A wrong-region request fails as

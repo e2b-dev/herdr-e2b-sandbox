@@ -22,10 +22,12 @@ the two loses information in both directions:
 
 ## Consequences
 
-- `region = "us"` leaves the domain **unset** rather than setting `e2b.dev`. The
-  SDK defaults to `e2b.app` and the CLI to `e2b.dev`; no single string is correct
-  for both, so absent is the only correct value for the default region. `eu` maps
-  to `e2b-juliett.dev`, which has no such conflict.
+- `region = "us"` leaves the domain **unset** rather than naming a host. US
+  production answers at `e2b.app` (current, and the SDK's default) and at
+  `e2b.dev` (an older name kept on a compatibility path) — one environment, two
+  names — while the `e2b` CLI defaults to the latter. Pinning either would make
+  one of the two tools disagree with its own default for no gain, so absent is
+  the right value. `eu` maps to `e2b-juliett.dev`, which has no such history.
 - Exactly two region names ship. Anything else is spelled as a `domain`.
 - A template name is only unique *within* a region — the same project name can
   exist in both, owning different templates — so a `[sandbox] templates` list is

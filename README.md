@@ -159,6 +159,10 @@ E2B's minimal image — fine for trying the flow, tight on disk for real work. F
 that, [build a custom template](https://e2b.dev/docs/sandbox-template) with your
 toolchain and roomier resources, and point `[sandbox].template` at it.
 
+> **US is a region, not a hostname.** It answers at both `e2b.app` (current, and
+> the SDK's default) and `e2b.dev` (an older name on a compatibility path) — the
+> same environment either way. `region = "us"` therefore pins no host at all.
+
 #### Your own project's templates
 
 A template you build lands in your E2B **project**, and E2B names it

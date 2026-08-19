@@ -35,9 +35,11 @@
 # The region your boxes run in: "us" (the default) or "eu". This is the key to
 # reach for — `domain` below is the mechanical value it resolves to.
 #
-#   us  -> the default region. Deliberately resolves to NO domain: the E2B SDK
-#          defaults to e2b.app and the `e2b` CLI to e2b.dev, so no single value
-#          is correct for both, and absent is.
+#   us  -> the default region. Deliberately resolves to NO domain. US production
+#          answers at e2b.app (current, and the SDK's default) and at e2b.dev
+#          (an older name on a compatibility path) — one environment, two names,
+#          and the `e2b` CLI defaults to the second. Naming either would put one
+#          tool at odds with its own default for nothing, so absent is right.
 #   eu  -> e2b-juliett.dev
 #
 # Only these two names exist (see docs/adr/0006). A region you have not heard of
