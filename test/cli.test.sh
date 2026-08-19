@@ -1757,6 +1757,121 @@ else
   skip "chooser pty coverage — no usable python3 (a fresh Mac's /usr/bin/python3 is a CLT stub)"
 fi
 
+echo "── connect_shell: the client's exit codes drive the branches ──"
+# src/attach.js reports what happened by exit code — 0 clean · 10 never attached
+# · 11 box gone · 12 attached-then-lost — replacing the old two-second stopwatch.
+# Each branch is asserted offline with the same fabricated-toolchain lever the
+# discovery tests use: HERDR_E2B_NODE aimed at a fake node that intercepts
+# attach.js (and provision.js, so the reprovision branch runs without a network),
+# driven through a real pty because connect_shell only attaches to one.
+if PY=$(pty_python); then
+  ASTATE="$TMP/attach-state"; mkdir -p "$ASTATE/boxes" "$TMP/attach-wd"
+  printf '%s\n' '{"key":"attachbox","label":"attachbox","status":"ready","sandboxId":"sbx_stub123","projectPath":"/home/user/project"}' \
+    > "$ASTATE/boxes/attachbox.json"
+  FAKE_NODE="$TMP/attach-node/node"; mkdir -p "$TMP/attach-node"
+  cat > "$FAKE_NODE" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do case "\$a" in
+  */attach.js)    echo "[attach-stub]"; exit "\${STUB_ATTACH_RC:-0}" ;;
+  */provision.js) exit 0 ;;
+esac; done
+exec "$REAL_NODE" "\$@"
+EOF
+  chmod +x "$FAKE_NODE"
+  cat > "$TMP/ptyattach.py" <<'PYATTACH'
+import os, pty, select, sys, time
+
+BASH, CMD = sys.argv[1], sys.argv[2]
+
+def drain(fd, quiet=0.2, limit=8.0):
+    end, last = time.time() + limit, time.time()
+    while time.time() < end:
+        r, _, _ = select.select([fd], [], [], 0.03)
+        if r:
+            try:
+                chunk = os.read(fd, 65536)
+            except OSError:
+                return
+            if not chunk:
+                return
+            sys.stdout.write(chunk.decode("utf-8", "replace"))
+            last = time.time()
+        elif time.time() - last > quiet:
+            return
+
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(BASH, [BASH, "-c", CMD])
+drain(fd)
+# Answer the close prompt if one came up; canonical-mode ptys buffer the input,
+# so sending it when there is no prompt is harmless.
+try:
+    os.write(fd, b"L\r")
+except OSError:
+    pass
+deadline, status = time.time() + 20, None
+while time.time() < deadline:
+    p, st = os.waitpid(pid, os.WNOHANG)
+    if p:
+        status = st
+        break
+    drain(fd, quiet=0.3, limit=1.0)
+try:
+    os.close(fd)
+except OSError:
+    pass
+if status is None:
+    try:
+        os.kill(pid, 9)
+        _, status = os.waitpid(pid, 0)
+    except OSError:
+        status = 0
+print("\n[rc=%d]" % (os.WEXITSTATUS(status) if os.WIFEXITED(status) else 128))
+PYATTACH
+  attach_case() { # $1 = the stub's exit code; output on stdout
+    "$PY" "$TMP/ptyattach.py" "$BASH" \
+      "cd \"$TMP/attach-wd\" && STUB_ATTACH_RC=$1 WAIT_MAX_ITERS=3 \
+       HERDR_E2B_NODE=\"$FAKE_NODE\" HERDR_PLUGIN_STATE_DIR=\"$ASTATE\" \
+       KEY=attachbox \"$E2B\" connect" 2>&1 | tr -d '\r'
+  }
+
+  out=$(attach_case 0)
+  case "$out" in
+    *"[attach-stub]"*) ok "the shell is attached by the plugin's client, not the e2b CLI" ;;
+    *) bad "attach.js never ran (got: $(printf '%s' "$out" | tail -3))" ;;
+  esac
+  case "$out" in
+    *"left sandbox 'attachbox'"*"left running"*) ok "clean exit → the unchanged pull/kill/leave prompt" ;;
+    *) bad "clean exit didn't reach the close prompt (got: $(printf '%s' "$out" | tail -3))" ;;
+  esac
+
+  out=$(attach_case 12)
+  case "$out" in
+    *"stopped — paused, or it hit its idle timeout"*"left running"*)
+      ok "attached-then-lost → the disconnect notice, then the close prompt" ;;
+    *) bad "lost-underneath branch (got: $(printf '%s' "$out" | tail -4))" ;;
+  esac
+
+  out=$(attach_case 11)
+  case "$out" in
+    *"is gone (killed)"*) ok "box gone → the gone message" ;;
+    *) bad "box-gone branch (got: $(printf '%s' "$out" | tail -3))" ;;
+  esac
+  case "$out" in
+    *reprovisioning*|*"left sandbox"*) bad "a gone box must not reprovision or offer the close prompt" ;;
+    *"[rc=0]"*) ok "box gone → says so and exits cleanly, no reprovision" ;;
+    *) bad "box-gone exit (got: $(printf '%s' "$out" | tail -3))" ;;
+  esac
+
+  out=$(attach_case 10)
+  case "$out" in
+    *"wasn't reachable — reprovisioning"*) ok "never attached → the reprovision branch, no stopwatch" ;;
+    *) bad "never-attached branch (got: $(printf '%s' "$out" | tail -4))" ;;
+  esac
+else
+  skip "connect_shell exit-code coverage — no usable python3"
+fi
+
 echo "── fleet: answering the pickers is what asks for the board ──"
 # The board used to be a flag only the pane entrypoint passed. It is now inferred:
 # somebody who answered a picker screen is sitting here watching, so the pane

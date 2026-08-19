@@ -262,76 +262,24 @@ async function main() {
     )
   }
 
-  // A pause freezes the VM, so whatever is running keeps running — but the shell
-  // you were attached to hangs off a connection that dies with the pause, and a
-  // later `connect` opens a NEW terminal. Without a multiplexer the agent you had
-  // on screen is still alive in there with nobody attached to its tty. tmux is the
-  // fix: every interactive shell joins ONE session, so reconnecting after a pause
-  // (or a dropped laptop) puts you back in the same screen, mid-scrollback.
-  // ~2s to install on `base`; free on templates that ship it.
-  if (cfg.tmux) {
-    // Check first, install second: most agent templates already ship tmux, and a
-    // step nobody needs is a line of spinner noise plus a wasted round trip.
-    const hasTmux = await sandbox.commands
-      .run("command -v tmux")
-      .then(() => true)
-      .catch(() => false)
-    if (!hasTmux) {
-      await step("installing tmux")
-      await sandbox.commands
-        .run("sudo apt-get install -y -q tmux >/dev/null 2>&1 || true", { timeoutMs: 180000 })
-        .catch(() => {})
-    }
-
-    // The tmux in a box is PLUMBING, not a UI: its whole job is that a reconnect
-    // lands back in the screen you left. Its status bar advertises a multiplexer
-    // the user never asked for, on the one line of the pane the agent's own
-    // footer wants, and herdr is already the thing drawing session furniture —
-    // two status bars stacked is one too many. So the session runs headless.
-    //
-    // Our own config file rather than `~/.tmux.conf`, for the same no-clobber
-    // reason the seeding has: a template may ship one. `-f` replaces the default
-    // load, so theirs is sourced first and ours only overrides the bar.
-    await sandbox.files.write(
-      "/home/user/.herdr-e2b.tmux.conf",
-      "# herdr-e2b — the sandbox's tmux is plumbing, so it draws nothing.\n" +
-        "source-file -q ~/.tmux.conf\n" +
-        "set -g status off\n" +
-        // Agent TUIs read modified Enter (shift/alt/ctrl+Enter) through the
-        // kitty-keyboard/xterm "extended keys" encoding, and tmux drops those to
-        // a plain CR unless this is on. Prime Agent says so on its own splash —
-        // "tmux extended-keys is off. Modified Enter keys may not work" — and a
-        // fleet member showed the effect exactly: the task arrived in the prompt
-        // and the Enter after it never submitted (observed live, fleet t-16).
-        "set -g extended-keys on\n",
-    )
-    // A box created before this change already has a server running with the bar
-    // on, and the config above is only read when a server starts. Turning it off
-    // live costs one round trip and saves the user a `down`/`open` cycle. No
-    // server yet → tmux exits non-zero, which is why the failure is swallowed.
-    await sandbox.commands.run("tmux set -g status off 2>/dev/null || true").catch(() => {})
-  }
-
-  // Shell personalization — a cyan [e2b:label] prompt, HERDR_E2B markers, landing
-  // in the project dir, and the tmux hand-off above. Rewritten on EVERY connect
-  // (one cheap file write) so a box created before a change picks it up; only the
-  // one-time `.bashrc` hook is skipped for a sandbox that already has it.
+  // No multiplexer goes into the box (ADR-0008). A pause with a memory snapshot
+  // already freezes every process — the plugin's own terminal client
+  // (src/attach.js) is what attaches a shell, and nothing in the box needs to
+  // hold a session for it. The box stays as thin as its template.
+  //
+  // Shell personalization — a cyan [e2b:label] prompt, HERDR_E2B markers, and
+  // landing in the project dir. Rewritten on EVERY connect (one cheap file
+  // write) so a box created before a change picks it up; only the one-time
+  // `.bashrc` hook is skipped for a sandbox that already has it. This is also
+  // what strips the tmux hand-off out of a box provisioned before ADR-0008 —
+  // a leftover `exec tmux` in this file would swallow the new client's shell.
   await step("personalizing shell")
   const rc =
     "# herdr-e2b\n" +
     "export HERDR_E2B=1\n" +
     `export HERDR_E2B_BRANCH='${displayLabel}'\n` +
     `PS1='\\[\\033[1;36m\\][e2b:${displayLabel}]\\[\\033[0m\\] \\w \\$ '\n` +
-    `cd '${projectPath}' 2>/dev/null || true\n` +
-    // Interactive shells only ($- has `i`, stdin is a tty): `commands.run` uses a
-    // non-interactive login shell and must never be swallowed by tmux. `-A`
-    // attaches to the session if it exists, creates it otherwise.
-    (cfg.tmux
-      ? "case $- in *i*)\n" +
-        '  [ -z "$TMUX" ] && [ -t 0 ] && command -v tmux >/dev/null 2>&1 && ' +
-        "exec tmux -f ~/.herdr-e2b.tmux.conf new-session -A -s herdr\n" +
-        ";; esac\n"
-      : "")
+    `cd '${projectPath}' 2>/dev/null || true\n`
   await sandbox.files.write("/home/user/.herdr-e2b.sh", rc)
   if (created) {
     await sandbox.commands

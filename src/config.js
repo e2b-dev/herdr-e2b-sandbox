@@ -118,7 +118,6 @@ const DEFAULTS = {
   autoPause: true, // onTimeout: pause (not kill) the sandbox; state preserved
   keepMemory: true, // only when autoPause: pause with a full memory snapshot (vs filesystem-only)
   autoResume: true, // only when autoPause: wake the sandbox on connect (vs explicit resume)
-  tmux: true, // attach shells to one tmux session, so pause/resume keeps them
   projectPath: "/home/user/project", // E2B's conventional working dir
   serverPort: 3000,
   batchSize: 40,
@@ -502,7 +501,6 @@ export function loadConfig() {
     autoPause: sandbox.auto_pause ?? DEFAULTS.autoPause,
     keepMemory: sandbox.keep_memory ?? DEFAULTS.keepMemory,
     autoResume: sandbox.auto_resume ?? DEFAULTS.autoResume,
-    tmux: sandbox.tmux !== false,
     projectPath: sandbox.project_path ?? DEFAULTS.projectPath,
     serverPort: posInt(sandbox.server_port, DEFAULTS.serverPort),
     batchSize: posInt(upload.batch_size, DEFAULTS.batchSize),

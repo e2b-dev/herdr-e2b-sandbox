@@ -182,32 +182,3 @@ EOF
 # Back-compat alias — older call sites only ever wanted the key.
 ensure_e2b_key() { ensure_e2b_env "$@"; }
 
-# Filter for the `e2b` CLI's stderr. A paused or expired sandbox is an ordinary
-# outcome here — we detect it and reprovision — but the CLI reports it as an
-# unhandled rejection: eight frames of SDK/commander internals through Homebrew
-# paths, which buries the one line that says what happened and reads like a
-# crash in this plugin. Keep the cause, drop the frames.
-#
-# awk, not sed: this filters a LIVE stream feeding an interactive shell, and it
-# has to flush per line rather than block-buffer.
-e2b_quiet_stderr() {
-  awk '
-    # Stack frames: "    at Function.connectSandbox (/opt/homebrew/...)".
-    /^[[:space:]]*at [A-Za-z_$]/     { next }
-    /^[[:space:]]*at async /         { next }
-    # A pause pulls the terminal out from under the CLI, which reports it as a
-    # crash: "TimeoutError: … The sandbox was killed or reached its end of life …",
-    # or the terser "2: [unknown] terminated". Both are wrong (a paused box is
-    # frozen, not killed) and alarming. Drop them; disconnect_notice in e2b-box
-    # says what actually happened and how to get back.
-    /\[unknown\] terminated/ { next }
-    # The error line, in either shape the CLI produces:
-    #   "SandboxNotFoundError: Paused sandbox i… not found"
-    #   "tr [SandboxNotFoundError]: Paused sandbox i… not found"  (wrapped form)
-    # Keep only the human half, in our own voice.
-    match($0, /[A-Za-z]+Error\]?:[[:space:]]*/) {
-      print "  ! " substr($0, RSTART + RLENGTH); fflush(); next
-    }
-    { print; fflush() }
-  '
-}
