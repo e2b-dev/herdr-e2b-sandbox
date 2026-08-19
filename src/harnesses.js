@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs"
+import os from "node:os"
+import path from "node:path"
+
 // What is installed on THIS machine, and which of its credentials a box may borrow.
 //
 // A **harness** is the coding CLI installed locally (`claude`, `codex`, …). A
@@ -61,8 +65,80 @@ const firstLine = (s) =>
 // once as the documented location the report points at, once as the file
 // `e2b-box auth` actually opens when a probe says the credential is in a file.
 // Two literals would be two things to keep in step.
+/**
+ * Read one of the documented config paths in this table, tilde and all.
+ *
+ * Lives here beside the paths it reads so there is exactly one implementation of
+ * "the narrowest read ADR 0006 allows" — the probe needs it for a session's expiry
+ * and the write plan needs it for the payload, and two readers would be two places
+ * for the boundary to drift. Absent or unreadable is null, never a throw: a file
+ * that is not there is an answer.
+ */
+export const readHarnessFile = (p) => {
+  try {
+    const abs = p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p
+    return readFileSync(abs, "utf8")
+  } catch {
+    return null
+  }
+}
+
 const CODEX_AUTH_JSON = "~/.codex/auth.json"
 const CODEX_KEY_FIELD = "OPENAI_API_KEY"
+
+/**
+ * What goes where a borrowed session's refresh token used to be (ADR 0007).
+ *
+ * The refresh token is single-use: two holders that both rotate invalidate each
+ * other, so a copy that carried the real one could log the user out of their own
+ * machine. Nothing in a box reads it while the access token is live — but the field
+ * cannot simply be dropped, because codex requires it to deserialize the file at all
+ * (`missing field refresh_token`, before any network call).
+ *
+ * So it is present, obviously fake, and says so in its own value: whoever opens a
+ * borrowed auth.json must not spend a minute wondering whether this is live.
+ */
+const REFRESH_PLACEHOLDER = "herdr-e2b-placeholder-not-a-real-refresh-token"
+
+/** A JWT's `exp`, as an ISO string. Null for anything that is not a readable JWT —
+ * an unreadable expiry is not an excuse to treat a token as immortal, so callers
+ * refuse the session rather than guess. Signature is NOT verified: the box's own
+ * request is what validates the token, and this only needs to know when to stop
+ * offering it. */
+const jwtExpiry = (token) => {
+  try {
+    const claims = JSON.parse(Buffer.from(String(token).split(".")[1], "base64url").toString())
+    return Number.isFinite(claims?.exp) ? new Date(claims.exp * 1000).toISOString() : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * A Codex subscription login, read out of the file it already sits in, ready to be
+ * handed to a box (ADR 0007).
+ *
+ * Returns null for every shape that is not a live borrowable session — an API-key
+ * file, a missing access token, an expiry that cannot be read — because a partial
+ * session is worse than none: it authenticates nothing and reports as though it did.
+ *
+ * @returns {{value: string, expires: string}|null} value is the file a box should get
+ */
+const readCodexSession = (text) => {
+  let j
+  try {
+    j = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (j?.auth_mode !== "chatgpt" || !j?.tokens?.access_token) return null
+  const expires = jwtExpiry(j.tokens.access_token)
+  if (!expires) return null
+  return {
+    value: JSON.stringify({ ...j, tokens: { ...j.tokens, refresh_token: REFRESH_PLACEHOLDER } }),
+    expires,
+  }
+}
 const OPENCODE_AUTH_JSON = "~/.local/share/opencode/auth.json"
 
 export const HARNESSES = {
@@ -118,6 +194,12 @@ export const HARNESSES = {
     // narrowest read ADR 0006 allows, and the reason a value may be written down at
     // all: it is already sitting in a plaintext file this user owns.
     valueFile: { path: CODEX_AUTH_JSON, read: (text) => JSON.parse(text)?.[CODEX_KEY_FIELD] || null },
+    // The `session` counterpart of valueFile, and the only row that has one. Same
+    // file, same ADR-0006-narrow read; a different shape comes out because a box
+    // authenticated by a subscription needs the FILE, not a variable — so `boxVar`
+    // here names the variable that CARRIES that file, which src/fleet-seed.js writes
+    // into ~/.codex/auth.json inside the box.
+    sessionFile: { path: CODEX_AUTH_JSON, boxVar: "CODEX_AUTH_JSON", read: readCodexSession },
     // Every branch goes to STDERR — `eprintln!` throughout codex-rs/cli/src/login.rs
     // — so a stdout-only capture reads a working install as logged out. The exit
     // code is meaningful too (0/1), but the text is stricter and already implies it.
@@ -130,9 +212,15 @@ export const HARNESSES = {
       if (/^Logged in using an API key\b/m.test(out)) {
         return { state: "authenticated", source: "file" }
       }
-      // "Logged in using ChatGPT" — a subscription. Its token is in auth.json too,
-      // but ADR 0006 defers OAuth entirely, and inside a fleet OpenAI documents that
-      // this file must not be shared across concurrent jobs. Not borrowable.
+      // "Logged in using ChatGPT" — a subscription, and borrowable since ADR 0007.
+      // Its access token is in the same auth.json, is a fixed-expiry bearer, and
+      // rotates nothing once its refresh half is replaced by a placeholder. OpenAI's
+      // "not across concurrent jobs" rule guards the rotating half, which is exactly
+      // the half `readCodexSession` refuses to copy.
+      if (/^Logged in using ChatGPT\b/m.test(out)) {
+        return { state: "authenticated", source: "session" }
+      }
+      // Some other login this table has no reader for — say so rather than guess.
       if (/^Logged in using /m.test(out)) return { state: "no-key", source: "login" }
       if (/^Not logged in\b/m.test(out)) return { state: "no-key", source: null }
       return null

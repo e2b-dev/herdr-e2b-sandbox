@@ -1346,10 +1346,33 @@ seed_out=$(seed_run "$SEED_CODEX" "$SHOME/codex-key" OPENAI_API_KEY="sk-oai-insi
   || bad "codex seeding (out=$seed_out, file=$(cat "$SHOME/codex-key/.codex/auth.json" 2>/dev/null))"
 
 seed_out=$(seed_run "$SEED_CODEX" "$SHOME/codex-nokey")
-{ printf '%s\n' "$seed_out" | grep -q "no OPENAI_API_KEY in this box" \
+{ printf '%s\n' "$seed_out" | grep -q "no codex credential in this box" \
   && [ ! -e "$SHOME/codex-nokey/.codex/auth.json" ]; } \
-  && ok "codex with no key writes no auth file at all — it just says it is unauthenticated" \
+  && ok "codex with no credential writes no auth file at all — it just says it is unauthenticated" \
   || bad "keyless codex seeding (out=$seed_out)"
+
+# ADR 0007: a borrowed session goes in verbatim, and it OUTRANKS the api-key branch.
+# Both variables are set here on purpose — that is the case where the precedence is
+# the whole behaviour, and the one a fallback written the other way round would pass.
+SESSION_JSON='{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"access_token":"at-borrowed","refresh_token":"herdr-e2b-placeholder-not-a-real-refresh-token","account_id":"acc"}}'
+seed_out=$(seed_run "$SEED_CODEX" "$SHOME/codex-session" CODEX_AUTH_JSON="$SESSION_JSON" OPENAI_API_KEY="$SEED_KEY")
+{ [ -f "$SHOME/codex-session/.codex/auth.json" ] \
+  && jq -e '.auth_mode == "chatgpt" and .tokens.access_token == "at-borrowed"' "$SHOME/codex-session/.codex/auth.json" >/dev/null \
+  && ! grep -q 'secret-head' "$SHOME/codex-session/.codex/auth.json"; } \
+  && ok "a borrowed session is seeded verbatim and beats the api key beside it" \
+  || bad "session seeding (out=$seed_out, file=$(cat "$SHOME/codex-session/.codex/auth.json" 2>/dev/null))"
+[ "$(stat -f '%Lp' "$SHOME/codex-session/.codex/auth.json" 2>/dev/null || stat -c '%a' "$SHOME/codex-session/.codex/auth.json" 2>/dev/null)" = "600" ] \
+  && ok "a seeded session file is written at restrictive permissions" \
+  || bad "session auth.json mode is not 600"
+
+# A resumed box already signed in with a session has no OPENAI_API_KEY string in its
+# auth.json, so the old "does this file mention the key" guard would have overwritten
+# a live login on every reconnect. The guard is now "is there a file at all".
+seed_out=$(seed_run "$SEED_CODEX" "$SHOME/codex-session" CODEX_AUTH_JSON='{"auth_mode":"chatgpt","tokens":{"access_token":"at-SECOND-RUN"}}')
+{ printf '%s\n' "$seed_out" | grep -q "already authenticated" \
+  && jq -e '.tokens.access_token == "at-borrowed"' "$SHOME/codex-session/.codex/auth.json" >/dev/null; } \
+  && ok "a box already holding a session is left alone on the second run" \
+  || bad "session seeding clobbered an existing login (out=$seed_out)"
 
 # opencode's problem is an updater, not a wizard: it updates itself in the background
 # and drops a modal over the pane whenever a release lands, which can be long after

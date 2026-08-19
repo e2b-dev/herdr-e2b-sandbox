@@ -9,7 +9,7 @@
 // will change.
 import { spawn } from "node:child_process"
 
-import { HARNESSES, interpretProbe, remedyFor } from "./harnesses.js"
+import { HARNESSES, interpretProbe, readHarnessFile, remedyFor } from "./harnesses.js"
 
 // A ceiling rather than a guess: ticket 07 has the installer calling this, and an
 // installer that appears to stall is an installer people kill.
@@ -72,7 +72,7 @@ export function runProbe(bin, args, { timeoutMs = PROBE_TIMEOUT_MS, env = proces
  * with ENOENT, which is the spawn-probe rule ADR 0006 asks for and is why no
  * file-existence check appears anywhere in this file.
  */
-export async function probeHarness(id, { timeoutMs = PROBE_TIMEOUT_MS, env = process.env } = {}) {
+export async function probeHarness(id, { timeoutMs = PROBE_TIMEOUT_MS, env = process.env, readFile = readHarnessFile } = {}) {
   const h = HARNESSES[id]
   if (!h) return { id, ...interpretProbe(id, { env }) }
 
@@ -80,7 +80,15 @@ export async function probeHarness(id, { timeoutMs = PROBE_TIMEOUT_MS, env = pro
   if (version.notFound) return { id, ...interpretProbe(id, { notFound: true, env }) }
 
   const auth = await runProbe(h.bin, h.authArgs, { timeoutMs, env })
-  return { id, ...interpretProbe(id, { ...auth, env }) }
+  const row = { id, ...interpretProbe(id, { ...auth, env }) }
+  // A borrowed session has a clock on it, and the report has to show it. Only the
+  // EXPIRY is attached — never the payload, which is a live account credential and
+  // has no business on a row that gets passed around and formatted.
+  if (row.source === "session" && h.sessionFile) {
+    const text = readFile(h.sessionFile.path)
+    row.expires = (text == null ? null : h.sessionFile.read(text))?.expires ?? null
+  }
+  return row
 }
 
 /**
@@ -108,8 +116,30 @@ export function formatRow(r) {
 // table, so this report and the write plan next door cannot disagree about it.
 const remedy = (r) => remedyFor(r.id, r.hostVar)
 
+/** "in 9 days" / "in 4 hours" / "expired". Coarse on purpose: the exact second a
+ * borrowed session dies is not a thing anyone acts on, and a countdown that reads
+ * like a precise promise invites treating it as one. */
+export function untilExpiry(iso, now = Date.now()) {
+  const ms = new Date(iso).getTime() - now
+  if (!Number.isFinite(ms)) return "expiry unknown"
+  if (ms <= 0) return "expired"
+  const hours = Math.floor(ms / 3600000)
+  if (hours < 1) return "expires in under an hour"
+  if (hours < 48) return `expires in ${hours} hour${hours === 1 ? "" : "s"}`
+  return `expires in ${Math.floor(hours / 24)} days`
+}
+
 function describe(r) {
   if (r.state === "authenticated") {
+    // A borrowed SESSION is not a key and must not read as one: it expires, and it
+    // is the whole account rather than a scoped credential (ADR 0007). Saying when
+    // it dies is the difference between a report and a promise.
+    if (r.source === "session") {
+      const when = r.expires ? untilExpiry(r.expires) : "expiry unknown"
+      return when === "expired"
+        ? ["[   ]", `signed in, but the borrowed session EXPIRED — sign in again, then re-run this command`]
+        : ["[ok ]", `signed-in session (${when})`]
+    }
     // A key with no local harness is still a key. The box needs the credential, not
     // the binary — so say the credential is usable and mention the absence as an
     // aside, rather than reporting the row as nothing.

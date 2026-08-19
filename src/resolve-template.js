@@ -64,5 +64,9 @@ const choices = [resolved, ...templateChoices(cfg).filter((t) => t !== resolved)
 // fields apart without a special case — `cut -f2` on a line with no tab hands back
 // the whole line, which would print the template's own name as its annotation.
 const sources = discoveredSources(cfg)
-const rows = choices.map((t) => `${t}\t${sources[t] ? `key (${sources[t]})` : ""}`)
+// A session is not a key and an expired one is not a credential at all, so the
+// three tags read as three different sentences rather than one with a suffix.
+const mark = (src) =>
+  src === "session" ? "signed-in session" : src === "session-expired" ? "session EXPIRED" : `key (${src})`
+const rows = choices.map((t) => `${t}\t${sources[t] ? mark(sources[t]) : ""}`)
 process.stdout.write(`${decided}\t${resolved}\n${rows.join("\n")}\n`)
