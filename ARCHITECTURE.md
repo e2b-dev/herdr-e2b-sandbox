@@ -228,8 +228,11 @@ fleet still isn't (`docs/adr/0005`). The member list is never stored.
 ## Invariants worth checking in review
 
 - **No orphaned billable boxes.** A failed kill keeps the record (retryable);
-  `provision_from_cwd` carries `sandboxId` (and `template`) across its wholesale
-  record rewrite; a transient reconnect error never creates a second box.
+  `provision_from_cwd` carries `sandboxId`, `template` and the terminal fields
+  (`terminalPid`/`terminalCols`/`terminalRows` — a paused box reopens through it,
+  and losing the pid there means a fresh terminal instead of a reattach) across
+  its wholesale record rewrite; a transient reconnect error never creates a
+  second box.
 - **`pull` never escapes the worktree.** `relIsUnsafe` (traversal/absolute) +
   `safeDest` (won't follow a dest symlink; realpath-parent must stay within the
   root). Covered by `test/download.test.js`.

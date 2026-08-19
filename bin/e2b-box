@@ -99,7 +99,7 @@ miss() {
 # Marks the record "provisioning" but PRESERVES a known sandboxId so the worker
 # can reconnect to (and resume) an existing sandbox instead of always creating fresh.
 provision_from_cwd() {
-  local k="$1" op="${2:-ensure}" want="${3:-}" b p l sid tpl payload node_bin
+  local k="$1" op="${2:-ensure}" want="${3:-}" b p l sid tpl tpid tcols trows payload node_bin
   b=""; at_repo_root && b=$(git_branch); [ "$b" = "HEAD" ] && b=""
   p=$(box_root)
   l=$(label_from_cwd)
@@ -108,6 +108,13 @@ provision_from_cwd() {
   # or drops the resolved template (empties the dashboard/list column).
   sid=$(field "$k" sandboxId)
   tpl=$(field "$k" template)
+  # The terminal is identity too: reopening a PAUSED box always comes through
+  # here, and dropping terminalPid meant every pause → reopen silently created
+  # a fresh terminal instead of reattaching — found live, fleet accept05. The
+  # geometry rides along so the reattach picks the right repaint nudge.
+  tpid=$(field "$k" terminalPid)
+  tcols=$(field "$k" terminalCols)
+  trows=$(field "$k" terminalRows)
   # An explicit choice ($3, from --template / the picker) is for a box that
   # doesn't exist yet, so it names the template the record should show while it
   # boots. A tracked box keeps the template it was built from — you can't
@@ -116,16 +123,24 @@ provision_from_cwd() {
   node_bin=$(e2b_node) || node_bin=""
   if [ -z "$node_bin" ]; then
     jq -cn --arg k "$k" --arg b "$b" --arg p "$p" --arg l "$l" --arg sid "$sid" --arg tpl "$tpl" \
+       --arg tpid "$tpid" --arg tcols "$tcols" --arg trows "$trows" \
       '{key:$k, label:$l, status:"failed", step:"needs Node >= 22 (set HERDR_E2B_NODE)", branch:$b, worktreePath:$p, workspaceId:""}
          + (if $sid != "" then {sandboxId:$sid} else {} end)
-         + (if $tpl != "" then {template:$tpl} else {} end)' \
+         + (if $tpl != "" then {template:$tpl} else {} end)
+         + (if ($tpid | test("^[0-9]+$")) then {terminalPid: ($tpid | tonumber)} else {} end)
+         + (if ($tcols | test("^[0-9]+$")) then {terminalCols: ($tcols | tonumber)} else {} end)
+         + (if ($trows | test("^[0-9]+$")) then {terminalRows: ($trows | tonumber)} else {} end)' \
       > "$BOXES_DIR/$k.json"
     return 1
   fi
   jq -cn --arg k "$k" --arg b "$b" --arg p "$p" --arg l "$l" --arg sid "$sid" --arg tpl "$tpl" \
+     --arg tpid "$tpid" --arg tcols "$tcols" --arg trows "$trows" \
     '{key:$k, label:$l, status:"provisioning", step:"queued", branch:$b, worktreePath:$p, workspaceId:""}
        + (if $sid != "" then {sandboxId:$sid} else {} end)
-       + (if $tpl != "" then {template:$tpl} else {} end)' \
+       + (if $tpl != "" then {template:$tpl} else {} end)
+       + (if ($tpid | test("^[0-9]+$")) then {terminalPid: ($tpid | tonumber)} else {} end)
+       + (if ($tcols | test("^[0-9]+$")) then {terminalCols: ($tcols | tonumber)} else {} end)
+       + (if ($trows | test("^[0-9]+$")) then {terminalRows: ($trows | tonumber)} else {} end)' \
     > "$BOXES_DIR/$k.json"
   payload=$(jq -cn --arg k "$k" --arg b "$b" --arg p "$p" --arg l "$l" --arg op "$op" --arg t "$want" \
     '{key:$k, label:$l, branch:$b, worktreePath:$p, workspaceId:"", op:$op}

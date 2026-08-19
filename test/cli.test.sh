@@ -1776,19 +1776,12 @@ else
   skip "chooser pty coverage — no usable python3 (a fresh Mac's /usr/bin/python3 is a CLT stub)"
 fi
 
-echo "── connect_shell: the client's exit codes drive the branches ──"
-# src/attach.js reports what happened by exit code — 0 clean · 10 never attached
-# · 11 box gone · 12 attached-then-lost — replacing the old two-second stopwatch.
-# Each branch is asserted offline with the same fabricated-toolchain lever the
-# discovery tests use: HERDR_E2B_NODE aimed at a fake node that intercepts
-# attach.js (and provision.js, so the reprovision branch runs without a network),
-# driven through a real pty because connect_shell only attaches to one.
-if PY=$(pty_python); then
-  ASTATE="$TMP/attach-state"; mkdir -p "$ASTATE/boxes" "$TMP/attach-wd"
-  printf '%s\n' '{"key":"attachbox","label":"attachbox","status":"ready","sandboxId":"sbx_stub123","projectPath":"/home/user/project"}' \
-    > "$ASTATE/boxes/attachbox.json"
-  FAKE_NODE="$TMP/attach-node/node"; mkdir -p "$TMP/attach-node"
-  cat > "$FAKE_NODE" <<EOF
+# A fake node that intercepts the plugin's own entry points — attach.js exits
+# with a chosen code, provision.js does nothing — and hands everything else to
+# the real node (so e2b_node's version gate still passes). The same
+# fabricated-toolchain lever the discovery tests use.
+FAKE_NODE="$TMP/attach-node/node"; mkdir -p "$TMP/attach-node"
+cat > "$FAKE_NODE" <<EOF
 #!/usr/bin/env bash
 for a in "\$@"; do case "\$a" in
   */attach.js)    echo "[attach-stub]"; exit "\${STUB_ATTACH_RC:-0}" ;;
@@ -1796,7 +1789,36 @@ for a in "\$@"; do case "\$a" in
 esac; done
 exec "$REAL_NODE" "\$@"
 EOF
-  chmod +x "$FAKE_NODE"
+chmod +x "$FAKE_NODE"
+
+echo "── provisioning: the record rewrite carries the terminal forward ──"
+# provision_from_cwd REPLACES the record wholesale, and reopening a PAUSED box
+# always comes through it — dropping terminalPid there meant every pause →
+# reopen silently created a fresh terminal instead of reattaching (found live,
+# fleet accept05). Fabricate a paused record with a terminal, let `up`
+# reprovision through the stubbed provision.js, and the terminal must survive.
+ASTATE2="$TMP/carry-state"; mkdir -p "$ASTATE2/boxes" "$TMP/carry-wd"
+printf '%s\n' '{"key":"carrybox","label":"carrybox","status":"paused","sandboxId":"sbx_carry1","template":"base","terminalPid":42,"terminalCols":120,"terminalRows":30}' \
+  > "$ASTATE2/boxes/carrybox.json"
+out=$(cd "$TMP/carry-wd" && HERDR_E2B_NODE="$FAKE_NODE" HERDR_PLUGIN_STATE_DIR="$ASTATE2" \
+      KEY=carrybox "$E2B" up 2>&1); rc=$?
+if jq -e '.terminalPid == 42 and .terminalCols == 120 and .terminalRows == 30 and .sandboxId == "sbx_carry1"' \
+     "$ASTATE2/boxes/carrybox.json" >/dev/null 2>&1; then
+  ok "reprovisioning keeps terminalPid + geometry alongside sandboxId"
+else
+  bad "record rewrite dropped the terminal (rc=$rc, record=$(cat "$ASTATE2/boxes/carrybox.json" 2>/dev/null))"
+fi
+rm -rf "$ASTATE2"
+
+echo "── connect_shell: the client's exit codes drive the branches ──"
+# src/attach.js reports what happened by exit code — 0 clean · 10 never attached
+# · 11 box gone · 12 attached-then-lost — replacing the old two-second stopwatch.
+# Each branch is asserted offline with the fake node above, driven through a
+# real pty because connect_shell only attaches to one.
+if PY=$(pty_python); then
+  ASTATE="$TMP/attach-state"; mkdir -p "$ASTATE/boxes" "$TMP/attach-wd"
+  printf '%s\n' '{"key":"attachbox","label":"attachbox","status":"ready","sandboxId":"sbx_stub123","projectPath":"/home/user/project"}' \
+    > "$ASTATE/boxes/attachbox.json"
   cat > "$TMP/ptyattach.py" <<'PYATTACH'
 import os, pty, select, sys, time
 
