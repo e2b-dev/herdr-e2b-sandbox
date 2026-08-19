@@ -10,6 +10,14 @@
 // the in-box tmux (src/provision.js:216-286) is redundant. If it doesn't, tmux stays.
 // See .scratch/sbx-memory/research.md.
 //
+// Two follow-up questions live here too:
+//   q7 --no-disconnect : pause while a PTY subscriber is STILL LIVE. envd gates its
+//                        pump on HasSubscribers(); a subscriber whose TCP died under
+//                        the pause could leave the pump writing into a dead channel
+//                        and wedge the agent. Does it?
+//   q8 --resize-to WxH : reconnect from a DIFFERENT terminal size, one one-way resize
+//                        instead of the there-and-back nudge. Is one paint enough?
+//
 //   node src/prototype-pty-reattach-repaint.mjs up    [--template claude]
 //   node src/prototype-pty-reattach-repaint.mjs back            # re-attach + nudge
 //   node src/prototype-pty-reattach-repaint.mjs run   [--template claude]   # up + back
@@ -40,6 +48,10 @@ const CONTROL_CMD =
   `node -e 'process.stdout.write("CTRL-READY\\n");` +
   `process.on("SIGWINCH",()=>process.stdout.write("CTRL-SIGWINCH "+process.stdout.columns+"x"+process.stdout.rows+"\\n"));` +
   `setInterval(()=>{},1e9)'`
+
+// Pausing with a live subscriber kills the gRPC stream under the SDK's feet. That is
+// the thing being measured, so the client must survive it rather than die of it.
+process.on("unhandledRejection", (e) => console.log(`  [unhandledRejection] ${e?.message || e}`))
 
 mkdirSync(OUT, { recursive: true })
 const enc = new TextEncoder()
@@ -165,21 +177,42 @@ async function up() {
   await settle(agent, 6000, 240000)
   const before = report("A2-poem-rendered", agent.mark())
 
-  // Drop the clients exactly as closing a laptop would.
-  console.log("disconnecting clients…")
-  await agentPty.disconnect().catch(() => {})
-  await ctrlPty.disconnect().catch(() => {})
+  // Drop the clients exactly as closing a laptop would — unless we are measuring what
+  // happens when nobody does that (q7).
+  const keepAttached = process.argv.includes("--no-disconnect")
+  if (keepAttached) {
+    console.log("NOT disconnecting — pausing with live subscribers (q7)…")
+  } else {
+    console.log("disconnecting clients…")
+    await agentPty.disconnect().catch(() => {})
+    await ctrlPty.disconnect().catch(() => {})
+  }
   await sleep(1000)
 
   console.log("pausing with keepMemory: true…")
-  const paused = await sbx.pause({ keepMemory: true })
-  console.log(`  pause() → ${paused}`)
+  const tPause = Date.now()
+  let paused, pauseErr = null
+  try {
+    paused = await sbx.pause({ keepMemory: true })
+  } catch (e) {
+    pauseErr = e.message
+    paused = false
+  }
+  console.log(`  pause() → ${paused} in ${Date.now() - tPause}ms${pauseErr ? ` (ERROR: ${pauseErr})` : ""}`)
 
   const st = stateFile()
   writeFileSync(
     st,
     JSON.stringify(
-      { sandboxId: sbx.sandboxId, template, agentPid: agentPty.pid, controlPid: ctrlPty.pid, overflow, before },
+      {
+        sandboxId: sbx.sandboxId,
+        template,
+        agentPid: agentPty.pid,
+        controlPid: ctrlPty.pid,
+        overflow,
+        keepAttached,
+        before,
+      },
       null,
       2,
     ),
@@ -219,16 +252,34 @@ async function back() {
   const b = report("B-reattach-no-nudge", agent.mark())
   report("B-control-no-nudge", ctrl.mark())
 
-  // Phase C: the nudge. Resize away and back, so the final geometry is unchanged.
-  console.log("nudging: resize → SIGWINCH…")
-  await sbx.pty.resize(st.agentPid, { cols: COLS, rows: ROWS - 1 })
-  await sbx.pty.resize(st.controlPid, { cols: COLS, rows: ROWS - 1 })
-  await sleep(1500)
-  await sbx.pty.resize(st.agentPid, { cols: COLS, rows: ROWS })
-  await sbx.pty.resize(st.controlPid, { cols: COLS, rows: ROWS })
+  // Phase C: the nudge. Either the there-and-back (geometry unchanged) or a single
+  // one-way resize to a different size, which is what a real reconnect from another
+  // terminal actually looks like (q8).
+  const resizeTo = arg("resize-to", null)
+  if (resizeTo) {
+    const [c2, r2] = resizeTo.split("x").map(Number)
+    console.log(`nudging: ONE one-way resize ${COLS}x${ROWS} → ${c2}x${r2} (q8)…`)
+    await sbx.pty.resize(st.agentPid, { cols: c2, rows: r2 })
+    await sbx.pty.resize(st.controlPid, { cols: c2, rows: r2 })
+  } else {
+    console.log("nudging: resize → SIGWINCH…")
+    await sbx.pty.resize(st.agentPid, { cols: COLS, rows: ROWS - 1 })
+    await sbx.pty.resize(st.controlPid, { cols: COLS, rows: ROWS - 1 })
+    await sleep(1500)
+    await sbx.pty.resize(st.agentPid, { cols: COLS, rows: ROWS })
+    await sbx.pty.resize(st.controlPid, { cols: COLS, rows: ROWS })
+  }
   await sleep(5000)
   const c = report("C-after-nudge", agent.mark())
   const cc = report("C-control-after-nudge", ctrl.mark())
+
+  // Liveness probe: one keystroke into the agent's input box. If envd's pump were
+  // wedged (the q7 risk) the TUI would go silent here even though the pid is alive.
+  console.log("probing liveness with one keystroke…")
+  await sbx.pty.sendInput(st.agentPid, enc.encode("x"))
+  await sleep(2500)
+  const probe = report("D-probe-keystroke", agent.mark())
+  await sbx.pty.sendInput(st.agentPid, enc.encode("\u007f")).catch(() => {})
 
   await agentPty.disconnect().catch(() => {})
   await ctrlPty.disconnect().catch(() => {})
@@ -238,11 +289,17 @@ async function back() {
   console.log(`bare re-attach gave a frame         : ${b.printableChars > 40 ? "YES" : "NO"}`)
   console.log(`nudge produced a repaint            : ${c.printableChars > 40 ? "YES" : "NO"}`)
   console.log(`repaint contained the poem (${MARKER})   : ${c.markerHits > 0 ? `YES (x${c.markerHits})` : "NO"}`)
+  console.log(`agent still accepts input           : ${probe.bytes > 0 ? "YES" : "NO"}`)
+  console.log(`paused with a live subscriber       : ${st.keepAttached ? "YES (q7)" : "no"}`)
   console.log(`\ncompare: pre-pause frame had ${MARKER}x${st.before.markerHits}, ${st.before.printableChars} printable chars`)
   console.log(`dumps in ${OUT}`)
   writeFileSync(
     path.join(OUT, `verdict-${TAG}.json`),
-    JSON.stringify({ before: st.before, bareReattach: b, afterNudge: c, control: cc }, null, 2),
+    JSON.stringify(
+      { before: st.before, bareReattach: b, afterNudge: c, control: cc, probe, keepAttached: !!st.keepAttached, resizeTo: arg("resize-to", null) },
+      null,
+      2,
+    ),
   )
 }
 
@@ -261,6 +318,9 @@ else if (cmd === "run") {
   await back()
 } else if (cmd === "kill") await kill()
 else {
-  console.log("usage: prototype-pty-reattach-repaint.mjs up|back|run|kill [--template claude] [--wait 60] [--overflow]")
+  console.log(
+    "usage: prototype-pty-reattach-repaint.mjs up|back|run|kill [--template claude]" +
+      " [--wait 60] [--overflow] [--no-disconnect] [--resize-to 100x40]",
+  )
   process.exit(1)
 }
