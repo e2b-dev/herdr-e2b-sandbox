@@ -18,9 +18,18 @@ Two worktrees can never share a key; the same worktree always resolves to the sa
 _Avoid_: Box id, sandbox id (the sandbox id is E2B's, and changes when the box is recreated)
 
 **Record**:
-The on-disk facts about a box — status, sandbox id, preview URL. The only thing the
-CLI, the worker, and the dashboard agree on.
+The on-disk facts about a box — status, sandbox id, preview URL, and which terminal to
+reattach to. The only thing the CLI, the worker, and the dashboard agree on.
 _Avoid_: State file, cache
+
+**Terminal**:
+The one live pseudo-terminal inside a box that survives a pause and that reconnecting
+reattaches to. A box has at most one. It is the box's *screen*, not its shell: what runs
+in it may be a shell or may be the coding agent directly, and either way the terminal
+outlives the client attached to it. Reattaching restores the terminal's current frame,
+never the history that scrolled past while nobody was watching.
+_Avoid_: Session (herdr's word for its own), shell (a terminal need not be running one),
+tty, pane (herdr draws panes; a terminal is remote)
 
 **Template**:
 The E2B image a box boots from, and therefore which toolchain and coding agent it
