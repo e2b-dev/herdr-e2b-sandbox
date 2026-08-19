@@ -159,11 +159,15 @@ async function main() {
     const template = input.template || resolveTemplate(branch, cfg)
     let usedTemplate = template
     await step(`creating sandbox (${template})`)
+    // Resolved once and recorded below: the lifecycle is fixed at create time,
+    // so the record — not the config file as it reads later — is what e2b-box's
+    // closing messages must describe.
+    const lifecycle = resolveLifecycle(cfg)
     const opts = {
       ...conn,
       timeoutMs: cfg.sandboxTimeoutMs,
       metadata,
-      lifecycle: resolveLifecycle(cfg),
+      lifecycle,
     }
     // Why the template can't be booted, once known — set either by the probe
     // below or by a create that failed. One reason, one fallback, so both routes
@@ -215,6 +219,12 @@ async function main() {
     await writeRecord(key, {
       sandboxId: sandbox.sandboxId,
       template: usedTemplate,
+      // What this box does at its idle timeout ("pause" or "kill"), and for a
+      // pause which snapshot kind — set at create time and immutable, so
+      // e2b-box's leave/pull messages read it from here rather than guessing
+      // from the current config.
+      onTimeout: typeof lifecycle.onTimeout === "string" ? lifecycle.onTimeout : lifecycle.onTimeout.action,
+      ...(typeof lifecycle.onTimeout === "object" ? { keepMemory: lifecycle.onTimeout.keepMemory !== false } : {}),
       // Remember a downgrade. Templates are PER-CLUSTER, so asking for one that
       // only exists on another cluster is an easy mistake with a quiet result:
       // a `base` box that looks fine until the agent you wanted isn't installed.

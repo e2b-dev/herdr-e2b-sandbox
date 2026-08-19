@@ -115,8 +115,9 @@ const DEFAULTS = {
   },
   fleetSeeds: {}, // template → command that seeds its agent's first-run state ("" = none)
   sandboxTimeoutMs: 60 * 60 * 1000, // 1h
-  autoPause: false, // onTimeout: pause (not kill) the sandbox; state preserved
-  autoResume: true, // only when autoPause: wake the sandbox on connect (vs cold-boot)
+  autoPause: true, // onTimeout: pause (not kill) the sandbox; state preserved
+  keepMemory: true, // only when autoPause: pause with a full memory snapshot (vs filesystem-only)
+  autoResume: true, // only when autoPause: wake the sandbox on connect (vs explicit resume)
   tmux: true, // attach shells to one tmux session, so pause/resume keeps them
   projectPath: "/home/user/project", // E2B's conventional working dir
   serverPort: 3000,
@@ -498,7 +499,8 @@ export function loadConfig() {
     dashboardTheme: dashboard.theme ?? "",
     template: sandbox.template ?? DEFAULTS.template,
     sandboxTimeoutMs: posInt(sandbox.timeout_ms, DEFAULTS.sandboxTimeoutMs),
-    autoPause: sandbox.auto_pause === true,
+    autoPause: sandbox.auto_pause ?? DEFAULTS.autoPause,
+    keepMemory: sandbox.keep_memory ?? DEFAULTS.keepMemory,
     autoResume: sandbox.auto_resume ?? DEFAULTS.autoResume,
     tmux: sandbox.tmux !== false,
     projectPath: sandbox.project_path ?? DEFAULTS.projectPath,
@@ -544,13 +546,31 @@ export function loadConfig() {
 
 /**
  * Map config to the SDK's `lifecycle` create option.
- * - autoPause off → { onTimeout: "kill" } (SDK default; sandbox dies at timeout)
- * - autoPause on  → { onTimeout: "pause", autoResume } (state preserved; connect
- *   auto-resumes when autoResume is true, else the sandbox must be resumed explicitly)
+ * - default        → { onTimeout: { action: "pause", keepMemory: true }, autoResume: true }
+ *   (the box pauses at the idle timeout with its memory intact, and the next
+ *   connect wakes it — walking away costs nothing)
+ * - auto_pause off → { onTimeout: "kill" } (sandbox dies at the timeout)
+ * - keep_memory off → a filesystem-only snapshot: resuming cold-boots from disk,
+ *   so it cannot be combined with auto_resume — the API refuses the pair, and we
+ *   refuse it here with a message that names the keys instead of an HTTP error.
+ *
+ * The snapshot kind is always stated explicitly on the pause branch. The SDK's
+ * default happens to be keepMemory: true today, but surviving a pause is the
+ * feature here, so it is spelled out rather than inherited.
  */
 export function resolveLifecycle(cfg) {
-  if (!cfg.autoPause) return { onTimeout: "kill" }
-  return { onTimeout: "pause", autoResume: cfg.autoResume !== false }
+  if (cfg.autoPause === false) return { onTimeout: "kill" }
+  const keepMemory = cfg.keepMemory !== false
+  const autoResume = cfg.autoResume !== false
+  if (!keepMemory && autoResume) {
+    throw new Error(
+      "keep_memory = false takes a filesystem-only snapshot, which resumes by cold-booting " +
+        "from disk — it cannot be woken automatically, so it cannot be combined with " +
+        "auto_resume. Set auto_resume = false alongside keep_memory = false in " +
+        `${CONFIG_PATH}, or drop keep_memory to keep full memory snapshots.`,
+    )
+  }
+  return { onTimeout: { action: "pause", keepMemory }, autoResume }
 }
 
 /** Resolve the E2B template for a branch: first matching rule, else default. */

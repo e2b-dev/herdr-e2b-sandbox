@@ -205,7 +205,9 @@ Credentials therefore live in `$CONFIG_DIR/config.toml` (mode `0600`), never in
 `HERDR_PLUGIN_ROOT` — that is a managed source checkout. The record is the contract between the writer
 (`provision.js`), the reader (`e2b-box` spinner / `status` / `list`), and the
 dashboard. Key fields: `key`, `label`, `status` (`provisioning`/`ready`/`failed`),
-`step`, `sandboxId`, `template`, `url`, `projectPath`, `worktreePath`, `files`.
+`step`, `sandboxId`, `template`, `url`, `projectPath`, `worktreePath`, `files`,
+`onTimeout` + `keepMemory` (the box's create-time lifecycle — what it does at its
+idle timeout, which the close-time messages read instead of the current config).
 Writes are atomic so a concurrent poll never reads a half-written file.
 
 Grading adds the one other thing on disk: `$STATE_DIR/bench/<slug>/` with a

@@ -357,10 +357,10 @@ auto-pause, per-template env, fleet roster, agents and seeds.
 - **One box per checkout**, keyed by the folder's absolute path — no git needed;
   a plain folder works too.
 - **Removing a worktree kills its box.** Cost control, intentional.
-- **Boxes idle-time-out** after `[sandbox].timeout_ms` (default 1h, the free-tier
-  cap); `open` reprovisions a dead one. `[sandbox].auto_pause = true` pauses
-  instead of killing and works on the free tier — the best way to keep in-box
-  work past the cap.
+- **Boxes pause at the idle timeout** (`[sandbox].timeout_ms`, default 1h — the
+  free-tier cap): a full memory snapshot, so billing stops and `open` puts you
+  back with everything still running. Works on the free tier.
+  `[sandbox].auto_pause = false` restores kill-at-timeout for throwaway boxes.
 
 ## License
 

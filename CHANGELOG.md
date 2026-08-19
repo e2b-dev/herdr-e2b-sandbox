@@ -58,6 +58,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a TOML table key, that template names are per-region and so not portable
   between them, and that the EU listing omits public templates — absence there is
   not evidence a template is missing.
+- **Boxes now pause at the idle timeout by default** (`auto_pause = true`) instead
+  of being killed: a full memory snapshot, so the running agent and everything in
+  memory are still there when `e2b-box open` wakes it. Set `auto_pause = false`
+  for the old kill-at-timeout behaviour. A new `[sandbox] keep_memory` key picks
+  the snapshot kind; `keep_memory = false` (filesystem-only, cold-boots on
+  resume) must be paired with `auto_resume = false` and is otherwise rejected
+  with an error naming both keys before anything reaches the API. The closing
+  messages after you leave a box now describe what that box will actually do at
+  its timeout, read from its record.
 - The suggested keybindings are now the full set of three — `prefix+shift+e`
   (open), `prefix+shift+f` (fleet) and `prefix+shift+d` (dashboard) — and the
   README, the manifest and `install.sh` all say that `prefix+shift+d` takes over
