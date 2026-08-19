@@ -57,6 +57,14 @@ const firstLine = (s) =>
  * Only the first two are borrowable, which is why `login` is `no-key` and not
  * `authenticated`: reporting otherwise would promise a box a value we cannot hand it.
  */
+// Two paths are named rather than inlined because they are read TWICE below —
+// once as the documented location the report points at, once as the file
+// `e2b-box auth` actually opens when a probe says the credential is in a file.
+// Two literals would be two things to keep in step.
+const CODEX_AUTH_JSON = "~/.codex/auth.json"
+const CODEX_KEY_FIELD = "OPENAI_API_KEY"
+const OPENCODE_AUTH_JSON = "~/.local/share/opencode/auth.json"
+
 export const HARNESSES = {
   claude: {
     template: "claude",
@@ -103,7 +111,13 @@ export const HARNESSES = {
     // the first-run seed runs for every box, not only fleet members. Leave it alone.
     hostVar: "CODEX_API_KEY",
     boxVar: "OPENAI_API_KEY",
-    keyFile: { path: "~/.codex/auth.json", field: "OPENAI_API_KEY" },
+    keyFile: { path: CODEX_AUTH_JSON, field: CODEX_KEY_FIELD },
+    // `source: "file"` above is a claim about WHERE the credential is; this is how
+    // it is fetched from there. Read only when the probe already said `file`, only
+    // from this documented path, and only for the field named in `keyFile` — the
+    // narrowest read ADR 0006 allows, and the reason a value may be written down at
+    // all: it is already sitting in a plaintext file this user owns.
+    valueFile: { path: CODEX_AUTH_JSON, read: (text) => JSON.parse(text)?.[CODEX_KEY_FIELD] || null },
     // Every branch goes to STDERR — `eprintln!` throughout codex-rs/cli/src/login.rs
     // — so a stdout-only capture reads a working install as logged out. The exit
     // code is meaningful too (0/1), but the text is stricter and already implies it.
@@ -174,15 +188,32 @@ export const HARNESSES = {
     boxVar: "OPENCODE_AUTH_CONTENT",
     keyFile: { path: "~/.config/opencode/opencode.json", field: "provider.<id>.options.apiKey" },
     // Two different files, and the distinction matters. `keyFile` above is the
-    // documented plain-key CONFIG file; `authFile` is opencode's own credential
-    // store, and it is the one `auth list` counts and the one `boxVar` forwards
-    // inline. Recording only `keyFile` would point ticket 03 at a file the probe
-    // never looked in.
-    authFile: "~/.local/share/opencode/auth.json",
+    // documented plain-key CONFIG file; this is opencode's own credential store,
+    // and it is the one `auth list` counts and the one `boxVar` forwards inline.
+    // Recording only `keyFile` would point the writer at a file the probe never
+    // looked in.
+    //
+    // The odd one out in a second way: `boxVar` is not a key, it is a whole
+    // auth.json, so the "value" read out of the file is a FILE — rebuilt here
+    // rather than copied, because an entry opencode labels `oauth` is a token
+    // cache and ADR 0006 will not carry one. Forwarding the file whole would put
+    // an access/refresh pair into auth.toml and then into a box the moment ONE
+    // api-kind entry sat beside it, which is the refresh race the ADR exists to
+    // refuse. Providers dropped here are simply unauthenticated in the box.
+    valueFile: {
+      path: OPENCODE_AUTH_JSON,
+      read: (text) => {
+        const all = JSON.parse(text)
+        const api = Object.fromEntries(
+          Object.entries(all).filter(([, cred]) => cred && cred.type === "api"),
+        )
+        return Object.keys(api).length ? JSON.stringify(api) : null
+      },
+    },
     // The report has nowhere to point the user, so it says what to do instead.
     // Names auth.json rather than the `keyFile` above on purpose: they are two
     // different files, and auth.json is the one `boxVar` forwards.
-    advice: "sign in with `opencode auth login` — a box is handed that auth.json whole",
+    advice: "sign in with `opencode auth login` using an API key — a box is handed those entries",
     // Exit code says nothing, and the output is coloured, so it is stripped first.
     // The two counts say how much there is; the per-credential lines say what KIND,
     // and the kind is what decides borrowability — opencode labels each entry `api`
@@ -287,6 +318,23 @@ export const HARNESSES = {
       return null
     },
   },
+}
+
+/**
+ * What to tell the user to do about a harness with no borrowable key.
+ *
+ * Normally "set <VAR>", but opencode resolves providers from a registry of ~190
+ * names and has no single variable to name, so its row carries a sentence of its
+ * own. Lives here rather than in either caller because the report and the write
+ * plan both need it and had drifted into opposite precedence — one preferring the
+ * advice, the other the variable — which stays invisible only while opencode is
+ * the sole row with advice AND no variable.
+ */
+export function remedyFor(id, hostVar = null) {
+  const h = HARNESSES[id]
+  if (h?.advice) return h.advice
+  const v = hostVar || h?.hostVar
+  return v ? `set ${v}` : "no credential variable is known for this harness"
 }
 
 /**

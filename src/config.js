@@ -18,6 +18,12 @@ const CONFIG_DIR =
  * plugin will actually read, not the one it used to hardcode. */
 export const CONFIG_PATH = path.join(CONFIG_DIR, "config.toml")
 
+/** The file `e2b-box auth` GENERATES, beside the one the user writes. Two files
+ * with one writer each is the whole point: this one is regenerated wholesale by
+ * that command and merged UNDER config.toml, so a hand-written value always wins
+ * (ADR 0006). Nothing but `e2b-box auth` may write it. */
+export const AUTH_PATH = path.join(CONFIG_DIR, "auth.toml")
+
 // Where the `e2b` CLI keeps its login (@e2b/cli USER_CONFIG_PATH — hardcoded
 // there, no env override, no XDG). The SDK itself reads NOTHING from disk, so
 // this file is our only fallback source for a key, and the only one that also

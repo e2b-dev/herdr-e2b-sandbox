@@ -571,8 +571,9 @@ inspect
   logs                        follow the provisioning log
   wait [--timeout-ms N]       block until the box is ready (exit 1 on timeout)
   doctor                      check node, the e2b CLI, credentials and state
-  auth                        which coding harnesses are installed here, and
-                              whether a box can borrow their credentials
+  auth [-y|--yes]             which coding harnesses are installed here, and
+                              whether a box can borrow their credentials; asks
+                              once, then writes what it found (--yes: don't ask)
 
 fleet                         several boxes off one checkout, one per template
   fleet                       pickers: name it, pick the roster, watch the board
@@ -868,17 +869,22 @@ case "$cmd" in
     exit 0
     ;;
   auth)
-    # Which coding harnesses are installed HERE, and whether this plugin can borrow
-    # their credentials for a box. Read-only: it prints and exits. Writing what it
-    # found is a separate step, so this is safe to run at any time.
+    # Which coding harnesses are installed HERE, whether this plugin can borrow
+    # their credentials for a box, and — after ONE confirmation for the whole
+    # batch — a generated auth.toml beside your config.toml recording what it
+    # found. Your own config.toml is never written by this or any other verb.
     #
     # An explicit verb rather than something `open` does for you — probing spawns
     # binaries, and a fleet creates several boxes at once. Keeping it out of that path
     # is the whole reason it is a command you type.
+    #
+    # `--yes` skips the question, which is how install.sh calls it. Without a
+    # terminal and without that flag it reports and writes nothing: consent
+    # inferred from a pipe is not consent.
     node_bin=$(e2b_node) || { echo "e2b-box auth: needs Node >= 22 (set HERDR_E2B_NODE=/path/to/node)" >&2; exit 1; }
-    # No arguments forwarded: the report takes none, and passing them on would let
-    # `auth --typo` look like it did something.
-    exec "$node_bin" "$PLUGIN_DIR/src/harness-probe.js"
+    # Only `--yes` is forwarded, and the node side rejects anything else — passing
+    # the rest on would let `auth --typo` look like it did something.
+    exec "$node_bin" "$PLUGIN_DIR/src/harness-auth.js" ${1+"$@"}
     ;;
   list)
     shopt -s nullglob

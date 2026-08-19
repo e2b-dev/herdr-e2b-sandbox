@@ -17,9 +17,11 @@ layers, the data flow, the state model, and the invariants worth checking).
 - `node --test test/*.test.js` — pure helpers: config resolution
   (`resolveTemplate` / `resolveLifecycle`), the attach-or-create decision
   (`planAttach`), the `pull` path-safety guards
-  (`isIgnored` / `relIsUnsafe`), and harness probe interpretation
+  (`isIgnored` / `relIsUnsafe`), harness probe interpretation
   (`interpretProbe`), which runs from captured probe output and so needs no
-  coding CLI installed.
+  coding CLI installed, and what `e2b-box auth` would then write (`buildPlan` /
+  `renderAuthToml`), which takes its file reader as an argument for the same
+  reason.
 - `test/cli.test.sh` — `bash -n` / `node --check` lint across the scripts, plus
   offline `e2b-box` behavior (the `no sandbox tracked` messages and the
   non-interactive `pull` abort-without-clobber path).
