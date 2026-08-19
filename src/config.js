@@ -3,6 +3,8 @@ import path from "node:path"
 import os from "node:os"
 import TOML from "@iarna/toml"
 
+import { HARNESSES, readHarnessFile } from "./harnesses.js"
+
 // Plugin config dir. Prefer herdr's own HERDR_PLUGIN_CONFIG_DIR — the docs call
 // it the place for "user-editable config such as .env files", and it is the only
 // value herdr actually promises; the XDG path below is where it points today, not
@@ -314,18 +316,56 @@ export function unresolvedForwards(cfg, template, env = {}) {
 /**
  * The top rung: a borrowed session, or nothing.
  *
- * Nothing in three cases, and they are not the same case. No session was found;
- * the user opted out with `prefer = "env"`; or the session expired. Only the last
- * is a problem, and it is one the report and the fleet warning surface — this
+ * auth.toml holds a POINTER, so the payload is read HERE, at the one moment it is
+ * needed. That is what keeps a borrowed session from ever being staler than the
+ * login it came from, and what keeps a live credential from existing twice on disk.
+ * `readFile` is injected so the whole ladder stays testable without one.
+ *
+ * Nothing in five cases, and they are not the same case: no session recorded; the
+ * user opted out with `prefer = "env"`; this build has no reader for that harness;
+ * the file is gone or unreadable because the user signed out; or the session
+ * expired. Only the last two are problems, and both are surfaced elsewhere — this
  * function's job is simply never to inject a credential that has stopped working.
  */
-function sessionValue(cfg, template, now) {
+/**
+ * A key read, at create time, from the file auth.toml points at.
+ *
+ * Same rung as a stored discovered value and the same precedence — the only thing
+ * that changed is that the credential is fetched now rather than copied earlier. A
+ * file that has gone, or a key the user rotated out, resolves to nothing rather than
+ * to a stale copy that fails inside the box.
+ */
+function fileValue(cfg, template, readFile) {
+  const f = cfg?.envFile?.[template]
+  if (!f) return {}
+  const read = HARNESSES[f.harness]?.valueFile?.read
+  if (!read) return {}
+  try {
+    const text = readFile(f.path)
+    const v = text == null ? null : read(text)
+    return v ? { [f.var]: v } : {}
+  } catch {
+    return {}
+  }
+}
+
+function sessionValue(cfg, template, now, readFile) {
   const s = cfg?.envSession?.[template]
   if (!s) return {}
   if (cfg?.templatePrefer?.[template] === "env") return {}
-  const exp = new Date(s.expires).getTime()
+  const read = HARNESSES[s.harness]?.sessionFile?.read
+  if (!read) return {} // a harness this build does not know — never a guess
+  let session = null
+  try {
+    const text = readFile(s.path)
+    session = text == null ? null : read(text)
+  } catch {
+    session = null // signed out, moved, malformed — all "no session", never a throw
+  }
+  if (!session) return {}
+  const exp = new Date(session.expires).getTime()
   if (!Number.isFinite(exp) || exp <= now) return {}
-  return { [s.var]: s.value }
+  return { [s.var]: session.value }
 }
 
 /**
@@ -364,8 +404,8 @@ function sessionValue(cfg, template, now) {
  * written to the box record and must not be logged — the record is world-readable
  * state and the log is `herdr plugin log list`.
  */
-export function resolveEnv(cfg, template, env = {}, now = Date.now()) {
-  const session = sessionValue(cfg, template, now)
+export function resolveEnv(cfg, template, env = {}, now = Date.now(), readFile = readHarnessFile) {
+  const session = sessionValue(cfg, template, now, readFile)
   const merged = {
     ...(cfg?.templateEnvDefaults?.[template] || {}),
     // The discovered rung has two halves, and forwarding wins between them: a name
@@ -375,6 +415,7 @@ export function resolveEnv(cfg, template, env = {}, now = Date.now()) {
     // harness, so today this decides nothing — it is written down so that a future
     // harness offering both does not resolve it by accident.
     ...(cfg?.envDiscovered?.[template] || {}),
+    ...fileValue(cfg, template, readFile),
     ...forwardedValues(cfg?.envForward?.[template], env),
     ...(cfg?.envShared || {}),
     ...(cfg?.envByTemplate?.[template] || {}),
@@ -408,6 +449,7 @@ export function resolveEnv(cfg, template, env = {}, now = Date.now()) {
  */
 export function resolveAuthConfig(parsed = {}) {
   const envDiscovered = {}
+  const envFile = {}
   const envForward = {}
   const envSession = {}
   const templates = parsed?.templates
@@ -415,8 +457,15 @@ export function resolveAuthConfig(parsed = {}) {
     for (const [template, section] of Object.entries(templates)) {
       const name = String(template).trim()
       if (!name) continue
+      // Legacy: an auth.toml written before pointers held values inline. Still read
+      // so an existing file keeps working, but nothing writes it any more.
       const env = envTable(section?.env)
       if (Object.keys(env).length) envDiscovered[name] = env
+      // The pointer form: a key in a harness's own config file, read at create time.
+      const fv = String(section?.file?.var ?? "").trim()
+      const fp = String(section?.file?.path ?? "").trim()
+      const fh = String(section?.file?.harness ?? "").trim()
+      if (fv && fp && fh) envFile[name] = { var: fv, path: fp, harness: fh }
       const forward = nameTable(section?.forward)
       if (Object.keys(forward).length) envForward[name] = forward
       // A borrowed session: one variable, one payload, one expiry. All three or
@@ -425,13 +474,18 @@ export function resolveAuthConfig(parsed = {}) {
       // the risk of and required this field to close.
       const sess = section?.session
       const v = String(sess?.var ?? "").trim()
-      if (v && typeof sess?.value === "string" && sess.value && typeof sess?.expires === "string") {
+      // A pointer, and all of it or nothing: the variable to set, the file to read,
+      // and which harness row owns the transform. A session missing any of the three
+      // cannot be resolved at create time, and half a pointer is worse than none.
+      const path = String(sess?.path ?? "").trim()
+      const harness = String(sess?.harness ?? "").trim()
+      if (v && path && harness) {
         const sup = String(sess?.supersedes ?? "").trim()
-        envSession[name] = { var: v, value: sess.value, expires: sess.expires, ...(sup ? { supersedes: sup } : {}) }
+        envSession[name] = { var: v, path, harness, ...(sup ? { supersedes: sup } : {}) }
       }
     }
   }
-  return { envDiscovered, envForward, envSession }
+  return { envDiscovered, envFile, envForward, envSession }
 }
 
 /**
@@ -445,7 +499,7 @@ export function readAuthConfig(file = AUTH_PATH) {
   try {
     return resolveAuthConfig(TOML.parse(readFileSync(file, "utf8")))
   } catch {
-    return { envDiscovered: {}, envForward: {}, envSession: {} }
+    return { envDiscovered: {}, envFile: {}, envForward: {}, envSession: {} }
   }
 }
 
@@ -469,16 +523,21 @@ export function readAuthConfig(file = AUTH_PATH) {
  * resolveEnv already makes — the mark names the source of the value that would
  * actually reach the box.
  */
-export function discoveredSources(cfg) {
+export function discoveredSources(cfg, readFile = readHarnessFile) {
   const out = {}
   for (const t of Object.keys(cfg?.envDiscovered || {})) out[t] = "file"
+  for (const t of Object.keys(cfg?.envFile || {})) out[t] = "file"
   for (const t of Object.keys(cfg?.envForward || {})) out[t] = "env"
-  // Last, because it is what actually reaches the box — and told apart from a live
-  // one, since a mark that says "authenticated" over a dead session is the lie this
-  // whole annotation exists to prevent.
-  for (const [t, s] of Object.entries(cfg?.envSession || {})) {
-    const exp = new Date(s?.expires).getTime()
-    out[t] = Number.isFinite(exp) && exp > Date.now() ? "session" : "session-expired"
+  // Last, because it is what actually reaches the box — and told apart from a dead
+  // one, since a mark saying "authenticated" over an expired session is the lie this
+  // annotation exists to prevent.
+  //
+  // Resolved the same way the box's own env is, through `sessionValue`, so the mark
+  // and the credential can never disagree. That means reading the pointed-at file —
+  // cheap, read-only, and still not a PROBE: no binary is spawned, which is the rule
+  // the picker actually has to keep.
+  for (const t of Object.keys(cfg?.envSession || {})) {
+    out[t] = Object.keys(sessionValue(cfg, t, Date.now(), readFile)).length ? "session" : "session-expired"
   }
   return out
 }
@@ -757,6 +816,9 @@ export function loadConfig() {
     // a variable to forward from this process's own environment at create time.
     // Both lose to the two tables above; see resolveEnv for the whole ladder.
     envDiscovered: auth.envDiscovered,
+    // The pointer form of the rung above: a path to a key in a harness's own config
+    // file, read at create time so auth.toml holds no secret and no stale copy.
+    envFile: auth.envFile,
     envForward: auth.envForward,
     // A borrowed signed-in session (ADR 0007). Unlike the two above it OUTRANKS the
     // user's own tables, so it is the one discovered thing that can override a

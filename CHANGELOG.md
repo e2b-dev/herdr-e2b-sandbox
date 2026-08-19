@@ -68,6 +68,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   expired session as expired; an expired one is never injected, so a box falls back
   to whatever credential still works instead of to a sign-in screen. Claude is
   untouched — its credential is in the Keychain, which ADR 0007 does not reopen.
+- **The generated `auth.toml` holds no credentials at all.** Every discovered
+  credential is recorded as a pointer — the variable to set and the file to read — and
+  resolved when a box is created. No copy of a key or a token exists there, nothing
+  goes stale, a credential you rotate in the harness is picked up with no re-run, and
+  the file stops being something that has to be guarded.
+- `amp` no longer flickers between `key found (file)` and `probe did not answer`: when
+  its probe exceeds the timeout but its config file plainly holds a key, the file
+  settles it. A credential that is there does not become uncertain because a binary
+  was slow.
 - When a borrowed session authenticates a box, the **API key it replaces is no longer
   sent** — whichever rung supplied it, including your own `[templates.<name>.env]`. A
   box signed in by the session cannot use the key, and an unusable credential in a

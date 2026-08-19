@@ -86,7 +86,14 @@ export function runProbe(bin, args, { timeoutMs = PROBE_TIMEOUT_MS, env = proces
  */
 export function resolveFromFile(row, { readFile = readHarnessFile } = {}) {
   const h = HARNESSES[row.id]
-  if (!h?.valueFile || row.state !== "no-key" || row.source !== "login") return row
+  if (!h?.valueFile) return row
+  // `login` is the ordinary case: the probe answered "signed in" without saying how.
+  // `unknown` is the one that used to flicker — amp's probe intermittently exceeds
+  // the timeout, so the same machine reported `key found (file)` on one run and
+  // `probe did not answer` on the next, while the key sat in its config file the
+  // whole time. A credential that is plainly there does not become uncertain because
+  // a binary was slow, so the file settles it.
+  if (!(row.state === "no-key" && row.source === "login") && row.state !== "unknown") return row
   let value = null
   try {
     const text = readFile(h.valueFile.path)

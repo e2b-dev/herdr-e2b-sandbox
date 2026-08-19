@@ -50,25 +50,29 @@ half that can revoke the user's own session, and nothing in a box needs it. The 
 written must be visibly fake, so that whoever opens the file next cannot mistake it for a
 live credential.
 
-**A discovered session is copied into `auth.toml`** as a third entry kind beside `env`
-(a value) and `forward` (a name), following 0006's existing rule that a value already
-sitting in a plaintext file the user owns may be written to another file the user owns.
+**Nothing in `auth.toml` is a credential.** Every file-sourced entry — a session and a
+plain key alike — is recorded as a **pointer**: the variable to set, the path to read,
+and which harness row owns the transform. The file is read when a box is created.
 
-This one has a cost 0006's other entries do not, and it is accepted deliberately rather
-than overlooked: **a stored session expires.** A copy taken today is dead in ten days,
-and a box created after that boots to a sign-in screen with nothing saying why. So the
-expiry is recorded alongside the payload, and every surface that reports a discovered
-credential — the `auth` report, the template chooser's mark, the fleet's
-unauthenticated-member warning — reports an expired session as expired, naming
-`e2b-box auth` as the refresh. An expiring credential that reports itself is a chore; one
-that does not is a bug filed against the box.
+This reverses an earlier draft of this ADR, which copied the payload in and argued that
+"copying is an existing mechanism where a pointer is a new one". That was true and it
+was the wrong trade. Copying meant a live access token existed twice on disk, a
+recorded expiry that disagreed with the file an hour later, and a generated file that
+had to be guarded as tightly as the credentials it held. Pointing costs one injected
+reader and removes all three:
 
-The alternative — recording a pointer and re-reading the file at create time, so the
-payload is always fresh and never duplicated — was considered and rejected: it is a new
-mechanism where copying is an existing one.
+- no second copy of a live credential exists anywhere;
+- nothing can go stale, because there is no snapshot to age — the expiry is computed
+  from the file at the moment it is used, so the report, the chooser's mark and the box
+  itself cannot disagree;
+- a credential the user rotates in the harness is picked up with no re-run;
+- `auth.toml` stops being a secrets file: paths and variable names only.
 
-**The box receives it the way it receives everything else.** The payload arrives as an
-environment variable at `Sandbox.create`, and `src/fleet-seed.js` writes it into
+What a pointer cannot survive is the user signing out or moving the file, which
+resolves to no credential — correctly, since there is no longer one to borrow.
+
+**The box receives it the way it receives everything else.** The payload — read from
+the pointer moments earlier — arrives as an environment variable at `Sandbox.create`, and `src/fleet-seed.js` writes it into
 `~/.codex/auth.json` inside the box. The seeded command carries the variable's **name**
 and never its value, unchanged from today — so nothing secret enters a pane, the
 scrollback, or herdr's session files.
