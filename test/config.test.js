@@ -430,8 +430,8 @@ test("resolveCredentials: region 'us' means NO domain, and does not borrow the C
 })
 
 test("resolveCredentials: an explicit domain outranks a region", () => {
-  const r = resolveCredentials({ sandbox: { region: "eu", domain: "e2b-staging.dev" } })
-  assert.equal(r.domain, "e2b-staging.dev")
+  const r = resolveCredentials({ sandbox: { region: "eu", domain: "your-own-e2b-host.example" } })
+  assert.equal(r.domain, "your-own-e2b-host.example")
 })
 
 test("resolveCredentials: an unknown region fails, naming the valid ones", () => {
@@ -540,10 +540,10 @@ test("resolveCredentials: a domain that names a region picks that region's key",
 })
 
 test("resolveCredentials: a domain naming no region borrows no region's key", () => {
-  // staging / e2b.pro / BYOC. Silently reaching for the US key here would send a
+  // A host outside the two regions. Silently reaching for the US key would send a
   // credential to a cluster it has no business on.
   const r = resolveCredentials({
-    sandbox: { domain: "e2b-staging.dev" },
+    sandbox: { domain: "your-own-e2b-host.example" },
     secrets: { e2b_api_key_us: "e2b_us", e2b_api_key: "e2b_plain" },
   })
   assert.equal(r.apiKey, "e2b_plain")
@@ -657,7 +657,7 @@ test("describeRegion: no domain is the default region, said out loud", () => {
 })
 
 test("describeRegion: a host that names no region is printed as itself", () => {
-  // staging / e2b.pro / BYOC have no name to give, and inventing one would be
+  // A host outside the two regions has no name to give, and inventing one would be
   // worse than the host.
-  assert.equal(describeRegion("e2b-staging.dev"), "e2b-staging.dev")
+  assert.equal(describeRegion("your-own-e2b-host.example"), "your-own-e2b-host.example")
 })

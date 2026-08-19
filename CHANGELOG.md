@@ -11,8 +11,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Pick a region by name.** `[sandbox] region = "us" | "eu"` decides where a box
   runs, instead of having to know that a region is spelled as a domain. It is
   sugar over `domain` (see `docs/adr/0006`): every other part of the plugin keeps
-  speaking domains, box records are unchanged, and `e2b-staging.dev`, `e2b.pro`
-  and BYOC hosts stay reachable by setting `domain` directly. `us` deliberately
+  speaking domains, box records are unchanged, and any other deployment stays
+  reachable by setting `domain` directly. `us` deliberately
   resolves to *no* domain — the SDK defaults to `e2b.app` and the `e2b` CLI to
   `e2b.dev`, so no single value is correct for both. An unrecognised region is an
   error naming the two, never a silent fallthrough.

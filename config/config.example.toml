@@ -28,9 +28,8 @@
 # e2b_api_key_eu = "e2b_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 #
 # Pinning a `domain` instead of naming a region works the same way when that
-# domain belongs to a named region. A domain that does not (e2b-staging.dev,
-# e2b.pro, a BYOC host) uses the plain `e2b_api_key` — no region key is borrowed
-# for a cluster it was not issued for.
+# domain belongs to a named region. A domain that does not uses the plain
+# `e2b_api_key` — no region key is borrowed for a host it was not issued for.
 
 [sandbox]
 # The region your boxes run in: "us" (the default) or "eu". This is the key to
@@ -48,8 +47,8 @@
 # them: a name that exists in one region can be missing in the other.
 # region = "eu"
 
-# The E2B cluster host, and the escape hatch for any region that has no name —
-# e2b-staging.dev, e2b.pro, a BYOC host. Setting this OUTRANKS `region`.
+# The E2B API host, and the escape hatch for a deployment that has no region
+# name of its own. Setting this OUTRANKS `region`.
 #
 # Leave both unset and the plugin resolves the host in this order:
 # $E2B_DOMAIN → this key → the region your `e2b auth login` is on (read from
@@ -61,7 +60,7 @@
 # — the same verb would provision in a different region depending on how you
 # invoked it. Whatever resolves here is stored on the box record, so a box always
 # stays in the region that created it, even if you switch regions afterwards.
-# domain = "e2b-staging.dev"
+# domain = "your-own-e2b-host.example"
 
 # E2B template. "base" (default) is minimal and always available — fine to try
 # the flow, but tight on disk/tools for real work.

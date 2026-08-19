@@ -15,8 +15,8 @@ the two loses information in both directions:
   life, and existing records already hold `domain`. Rewriting them to hold a
   region would mean inventing a region name for every domain ever recorded,
   including ones the map has never heard of.
-- **Two names cannot cover every host.** `e2b-staging.dev`, `e2b.pro` and any
-  BYOC host are reachable today by setting `domain` directly. A region enum that
+- **Two names cannot cover every host.** Any other deployment is reachable today
+  by setting `domain` directly. A region enum that
   replaced `domain` would either have to grow a case per host — claiming support
   the project does not test — or lock those users out.
 

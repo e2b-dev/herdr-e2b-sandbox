@@ -316,8 +316,8 @@ export function readCliConfig(file = CLI_CONFIG_PATH) {
  */
 /**
  * The regions a user may name, and the domain each one means. Exactly two, by
- * decision (ADR-0006): anything else — staging, e2b.pro, a BYOC host — is spelled
- * as a `[sandbox] domain`, which stays supported and untouched.
+ * decision (ADR-0006): any other host — a BYOC deployment, say — is spelled as a
+ * `[sandbox] domain`, which stays supported and untouched.
  *
  * `us` maps to **null**, not to "e2b.dev". The SDK defaults to `e2b.app` and the
  * `e2b` CLI to `e2b.dev`; no single string is correct for both, so absent is the
@@ -337,8 +337,8 @@ const REGION_BY_DOMAIN = Object.freeze(
  * `template 'x' not found`, which reads as a missing template — so anything
  * reporting that has to say WHERE it looked.
  *
- * A domain with no region name is printed as itself: staging, e2b.pro and BYOC
- * hosts have no name to give, and inventing one would be worse than the host.
+ * A domain with no region name is printed as itself: such a host has no name to
+ * give, and inventing one would be worse than the host.
  */
 export function describeRegion(domain) {
   if (!domain) return "US (the default region)" // US resolves to no domain at all
@@ -369,7 +369,7 @@ export function resolveCredentials({ env = {}, secrets = {}, sandbox = {}, cli =
     throw new Error(
       `Unknown [sandbox] region '${cfgRegion}' in ${CONFIG_PATH}. ` +
         `Valid regions: ${Object.keys(REGIONS).join(", ")}. ` +
-        "For any other cluster (staging, e2b.pro, a BYOC host) set [sandbox] domain instead.",
+        "For any other host, set [sandbox] domain instead.",
     )
   }
 
@@ -377,8 +377,8 @@ export function resolveCredentials({ env = {}, secrets = {}, sandbox = {}, cli =
   // `domain` that names one, else the default region. Deliberately NOT from the
   // resolved domain — that would be circular, since the resolved domain can come
   // from the CLI login and whether that login is usable depends on which key we
-  // just picked. A `domain` that names no region (staging, e2b.pro, BYOC) has no
-  // per-region key at all rather than silently borrowing the US one.
+  // just picked. A `domain` that names no region has no per-region key at all,
+  // rather than silently borrowing the US one.
   const activeRegion = cfgRegion ?? (cfgDomain ? (REGION_BY_DOMAIN[cfgDomain] ?? null) : "us")
   // Only the ACTIVE region's key is ever read, so the other region's credential
   // is never handed to a subprocess or an SDK call.
