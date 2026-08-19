@@ -52,8 +52,20 @@ _Avoid_: Local agent, toolchain, credential source
 **Discovered value**:
 A credential `e2b-box auth` found on this machine and wrote to the generated
 `auth.toml`. It is merged *under* everything in `config.toml`, so it is a default
-and never an override — a value you wrote by hand always beats it.
+and never an override — a value you wrote by hand always beats it. The one exception
+is a *discovered session*, which outranks it (ADR 0007).
 _Avoid_: Detected key, auto-config, inherited credential
+
+**Discovered session**:
+A subscription login the plugin borrowed out of a harness's own config file rather
+than a pasted key — today only Codex's `~/.codex/auth.json` under
+`auth_mode = "chatgpt"`. Unlike a *discovered value* it **expires**, and unlike every
+other discovered thing it outranks the user's own `[templates.<name>.env]`
+(ADR 0007), because the machine's live session beats a key typed months ago. Its
+single-use refresh token is never copied — a visible placeholder goes in its place, so
+a borrowed copy can never revoke the login it came from. A session held in the OS
+credential store is not borrowable at all.
+_Avoid_: OAuth key, subscription token, borrowed login
 
 **Forwarded variable**:
 A discovered credential the plugin records by NAME rather than by value, because it

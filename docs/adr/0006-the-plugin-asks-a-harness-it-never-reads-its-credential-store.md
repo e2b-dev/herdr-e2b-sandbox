@@ -1,5 +1,9 @@
 # The plugin asks a harness, it never reads its credential store
 
+**Amended by:** [0007 — a session in a file is borrowable](0007-a-session-in-a-file-is-borrowable-amending-0006.md)
+— which overturns the deferral of subscription OAuth and the fleet refusal below. The
+Keychain rule, the probe-don't-scrape rule, and the limits on what may be read all stand.
+
 `e2b-box auth` finds out which harnesses are installed by spawning each binary and
 asking it — a version or whoami probe — never by parsing a credential file, and never
 by touching the macOS Keychain. Where it needs a value it reads environment variables
