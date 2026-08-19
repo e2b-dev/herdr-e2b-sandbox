@@ -522,8 +522,8 @@ fn main() -> std::io::Result<()> {
                             KeyCode::Char('k') | KeyCode::Char('K') => {
                                 app.run = Some((label, key, "kill", wt));
                             }
-                            // Go back in. `open` resumes a paused box on the way, and
-                            // the sandbox's tmux session hands back the screen you left.
+                            // Go back in. `open` resumes a paused box on the way and
+                            // attaches a shell through the plugin's terminal client.
                             KeyCode::Char('o') | KeyCode::Char('O') | KeyCode::Char('z') => {
                                 app.run = Some((label, key, "open", wt));
                             }

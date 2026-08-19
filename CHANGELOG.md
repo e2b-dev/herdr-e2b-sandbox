@@ -67,6 +67,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with an error naming both keys before anything reaches the API. The closing
   messages after you leave a box now describe what that box will actually do at
   its timeout, read from its record.
+- **The plugin owns the terminal; the in-box tmux is gone** (ADR-0008). Opening
+  a box attaches through the plugin's own PTY client (`src/attach.js`) instead
+  of `e2b sandbox connect`: raw mode end to end, so shift/ctrl/alt+Enter reach
+  the agent byte-for-byte, and no multiplexer is installed into (or configured
+  in) any box. The terminal is stamped `HERDR_E2B_TERMINAL=<box key>` and its
+  pid recorded on the box record. The client reports outcomes by exit code
+  (clean · never attached · box gone · attached-then-lost), replacing the old
+  two-second timing heuristic; the undocumented `[sandbox] tmux` opt-out key is
+  removed along with the mechanism it gated. Reconnecting gives a fresh shell
+  for now — reattaching to the terminal you left lands next.
 - The suggested keybindings are now the full set of three — `prefix+shift+e`
   (open), `prefix+shift+f` (fleet) and `prefix+shift+d` (dashboard) — and the
   README, the manifest and `install.sh` all say that `prefix+shift+d` takes over

@@ -42,8 +42,9 @@ reads the same state and delegates actions back to `e2b-box`.
 2. `e2b-box` resolves the worktree (from `$PWD`, or `HERDR_PLUGIN_CONTEXT_JSON`'s
    focused-pane cwd) and computes the **box key** = `<folder>-<sha8(abs path)>`.
 3. **Optimistic connect** (only with a TTY): if a `ready` record already has a
-   sandbox id, attach immediately via `e2b sandbox connect` — the connect attempt is
-   itself the liveness check; a fast failure falls through to (4).
+   sandbox id, attach immediately via the plugin's terminal client
+   (`src/attach.js`) — its connect attempt is itself the liveness check; a
+   "never attached" exit falls through to (4).
 4. Otherwise `provision_from_cwd` launches `src/provision.js` (detached, logging to
    the record's `.log`) with `op=ensure`:
    - reconnect to the tracked sandbox (auto-resumes a paused one), **or** create a
@@ -52,9 +53,12 @@ reads the same state and delegates actions back to `e2b-box`.
    - `git init` + shell personalization; write `status: ready` + preview URL.
 5. `spin_until_ready` polls the record (spinner on a TTY; quiet when headless) until
    `ready` / `failed` / timeout.
-6. `connect_shell` prints the box details and `e2b sandbox connect <id>`. On exit it
-   offers **[p]ull / [k]ill / [L]eave**. Headless callers get instructions and exit
-   (never a bare local shell).
+6. `connect_shell` prints the box details and attaches through `src/attach.js` —
+   a raw PTY the client stamps with `HERDR_E2B_TERMINAL=<box key>` and records as
+   `terminalPid`. The client reports what happened by exit code (0 clean · 10
+   never attached → reprovision · 11 box gone · 12 attached-then-lost), and on a
+   clean exit `e2b-box` offers **[p]ull / [k]ill / [L]eave**. Headless callers
+   get instructions and exit (never a bare local shell).
 
 `worktree.removed` (herdr event) → `bin/teardown-worktree` → `src/kill.js` (kills the
 box; keeps the record if the kill fails, so nothing billable is silently orphaned).
@@ -150,7 +154,7 @@ when the other two never ran. Rubrics, LLM judging and ranking stay out
 | `e2b-dash` | Launcher for the Rust dashboard: resolves the prebuilt/built binary, seeds the theme, guards on a TTY, execs it. |
 | `e2b-bench` | Launcher for the grader, thin on purpose: finds the binary and resolves the credentials the same way every other verb does, then execs it. No TTY guard — a grade is a report meant to be piped and run from CI. |
 | `teardown-worktree` | `worktree.removed` handler — kills the box for the removed path (matched by stored `worktreePath`). |
-| `lib/paths.sh` | Shared helpers: state-dir resolution, `e2b_node` (find Node ≥22), `ensure_e2b_path`/`ensure_e2b_key`, `sdk_kill`, `box_key`, `e2b_quiet_stderr`. |
+| `lib/paths.sh` | Shared helpers: state-dir resolution, `e2b_node` (find Node ≥22), `ensure_e2b_path`/`ensure_e2b_key`, `sdk_kill`, `box_key`. |
 | `lib/chooser.sh` | The full-screen pickers. `ask_template_tty` — one template for one box: arrows/`j`/`k`, number-jump, enter, `q` takes the default. `ask_slug_tty` — one line of text, with a caller-supplied validator function (so ref rules stay in `src/fleet-name.js`), esc aborts; asked for a third argument it also draws the optional **fleet task** field (tab/arrows switch, enter always launches) and prints slug and task as two lines.  `ask_roster_tty` — the multi-select roster: space toggles, number toggles, enter launches, an empty roster can't, `q`/esc abort. Self-contained bash — no state dir, no node — so any verb can source it. Finds the human in two steps: `/dev/tty`, else duplicated stdin (a herdr pane may run on a pty that isn't the controlling terminal). |
 | `lib/pane.sh` | Pane plumbing shared by `e2b-box-open`, `e2b-fleet-open` and `e2b-dash-toggle`: `pane_herdr`, `pane_node`, `pane_query`, `pane_procs`, `pane_is_idle` (fails safe — unknown counts as busy). |
 
@@ -163,6 +167,7 @@ when the other two never ran. Rubrics, LLM judging and ranking stay out
 | `kill.js` | `Sandbox.kill` (bounded), idempotent — "already gone" vs "killed". |
 | `exec.js` | One command inside a tracked box → one JSON object on stdout (`{ok, exitCode, stdout, stderr, error}`). Started in the background and awaited by hand, because the SDK's `requestTimeoutMs` bounds the handshake, not the run; on the bound the process is **killed**. Draws the line the grader depends on: `ok:false` = never measured, `ok:true` = the command's own exit code. |
 | `lifecycle.js` | `pause` / `resume` for a tracked box — `Sandbox.pause` (files + memory snapshot) and `Sandbox.connect` (the resume path; there is no separate resume call). Owns the record's `paused` / `ready` status for both. |
+| `attach.js` | The terminal client (ADR-0008): a raw-mode PTY into the box, stamped `HERDR_E2B_TERMINAL=<box key>` and recorded as `terminalPid`. The plugin's only long-lived TTY-owning process. Reports by exit code: 0 clean · 10 never attached · 11 box gone · 12 attached-then-lost — the contract `connect_shell` branches on. |
 | `store.js` | The record model: atomic (temp+rename) shallow-merge `writeRecord`, `readRecord`, `listRecords`. Defines `BOXES_DIR`. |
 | `config.js` | `loadConfig` (TOML over defaults, `posInt`-clamped), `resolveTemplate` (per-branch rules), `templateRuleMatches`/`templateChoices` (the chooser's menu; `templates` defaults ship the public agent templates), `resolveLifecycle` (auto_pause → SDK lifecycle), `resolveEnvConfig`/`resolveEnv` (`[sandbox.env]` + `[templates.<name>.env]` → the `envs` one box is created with; per-template so a box only ever holds its own agent's credential), `resolveCredentials` (key + cluster as a pair: env → config → `e2b` CLI login), `readCliConfig` (`~/.e2b/config.json`, defensive). |
 | `shared.js` | `requireApiKey`, best-effort `notify` (herdr desktop notification). |
@@ -207,7 +212,8 @@ Credentials therefore live in `$CONFIG_DIR/config.toml` (mode `0600`), never in
 dashboard. Key fields: `key`, `label`, `status` (`provisioning`/`ready`/`failed`),
 `step`, `sandboxId`, `template`, `url`, `projectPath`, `worktreePath`, `files`,
 `onTimeout` + `keepMemory` (the box's create-time lifecycle — what it does at its
-idle timeout, which the close-time messages read instead of the current config).
+idle timeout, which the close-time messages read instead of the current config),
+`terminalPid` (the box's terminal, written by `attach.js` when it creates one).
 Writes are atomic so a concurrent poll never reads a half-written file.
 
 Grading adds the one other thing on disk: `$STATE_DIR/bench/<slug>/` with a

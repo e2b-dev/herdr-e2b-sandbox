@@ -279,8 +279,8 @@ on_close_prompt() {
   read -r ans
   case "${ans:-L}" in
     r|R|resume)
-      # Re-exec rather than recurse: `open` resumes the box and reattaches, and
-      # the sandbox's tmux session hands back the screen you were on.
+      # Re-exec rather than recurse: `open` resumes the box on the way in and
+      # gives you a shell into it.
       echo "  resuming '$lbl' …"
       KEY="$k" exec "$0" open
       ;;
@@ -318,9 +318,9 @@ on_close_prompt() {
 }
 
 # Why the attached shell dropped, and how to get back. A pause FREEZES the VM —
-# every process (your agent included) is still there, and with tmux in the sandbox
-# `e2b-box open` puts you back in the same screen. A kill removes the record, so an
-# empty status means the box is really gone.
+# every process (your agent included) is still there; `e2b-box open` resumes it
+# and gives you a shell into it. A kill removes the record, so an empty status
+# means the box is really gone.
 disconnect_notice() {
   local k="$1" lbl="$2" st
   st=$(field "$k" status)
@@ -358,34 +358,46 @@ connect_shell() {
     want=$(field "$k" requestedTemplate)
     [ -n "$want" ] && echo "  ! '$want' isn't built on ${dom:-this cluster} — this box is '$(field "$k" template)'."
   fi
-  ensure_e2b_path   # get a good node + the e2b CLI onto PATH (herdr may be on old node)
-  # Point the CLI at the cluster that holds THIS box, so the shell you attach to
-  # is the sandbox the SDK just created — not a same-named box on another cluster.
-  ensure_e2b_env "$dom"
-  if ! command -v e2b >/dev/null 2>&1; then
-    echo "  ! e2b CLI not found — 'npm i -g @e2b/cli'. Then: e2b sandbox connect $sid" >&2
+  local node_bin
+  if ! node_bin=$(e2b_node); then
+    echo "  ! needs Node >= 22 to attach (set HERDR_E2B_NODE=/path/to/node)" >&2
+    echo "    or attach by hand:  e2b sandbox connect $sid" >&2
     # The box is ready; only an interactive caller (that wanted to attach now) should
     # see this as a failure. Headless callers got the box + instructions → exit 0.
     { [ -t 0 ] && [ -t 1 ]; } && exit 1 || exit 0
   fi
-  # The sandbox was just ensured live (reconnected/resumed) by provision.js, so
-  # `e2b sandbox connect` can attach directly — no separate resume needed.
-  # `e2b sandbox connect` needs a raw TTY; without one it crashes and would take
-  # the pane with it. Guard so we show instructions instead of dying silently.
+  # The plugin's own terminal client (src/attach.js) does the attaching — not
+  # `e2b sandbox connect`, which always opens a brand-new PTY and re-encodes
+  # nothing but also reattaches to nothing (ADR-0006). The client resumes a
+  # paused box on the way in, stamps the terminal with the box key, and reports
+  # what happened through its exit code instead of leaving us to guess.
+  # It needs a raw TTY; without one, show instructions instead of dying silently.
   if [ -t 0 ] && [ -t 1 ]; then
     [ "${E2B_DASH:-}" != 1 ] && { echo "  attaching a shell in the sandbox — type 'exit' when done, then you'll pick: [p]ull changes · [k]ill · [L]eave running"; echo; }
-    local start=$SECONDS
-    # stderr only — stdin/stdout stay bound to the terminal, so the interactive
-    # shell is untouched; we just strip the CLI's stack traces on the way out.
-    e2b sandbox connect "$sid" 2> >(e2b_quiet_stderr >&2); local rc=$?   # blocks until you exit the shell
-    # A fast non-zero exit means we never attached (box idle-timed-out / paused) —
-    # not that your shell exited badly. Signal the caller so it can reprovision.
-    if [ "$rc" -ne 0 ] && [ "$((SECONDS - start))" -lt 2 ]; then return 2; fi
-    # The shell didn't end because you typed `exit` — the sandbox went away under
-    # it (paused from the dashboard / `e2b-box pause`, or the idle timeout). Say
-    # what happened and how to get back, instead of leaving the CLI's
-    # "sandbox was killed" line as the last thing on screen.
-    [ "$rc" -ne 0 ] && disconnect_notice "$k" "$lbl"
+    "$node_bin" "$PLUGIN_DIR/src/attach.js" "$k"; local rc=$?   # blocks until you exit the shell
+    # The client's exit code says what actually happened — no more inferring
+    # "never attached" from a stopwatch:
+    #   0  clean exit            → the close prompt below
+    #   10 never attached        → return 2, the caller reprovisions and retries
+    #   11 the box is gone       → say so; there is nothing to pull or kill
+    #   12 attached, then lost   → it paused / timed out underneath the session
+    case "$rc" in
+      10) return 2 ;;
+      11)
+        echo
+        echo "■  '$lbl' is gone (killed) — 'e2b-box open' boots a fresh sandbox from this worktree."
+        [ "${E2B_DASH:-}" = 1 ] && exit 0
+        return 0
+        ;;
+      0) ;;
+      12) disconnect_notice "$k" "$lbl" ;;
+      *)
+        # Not one of the client's codes — it crashed rather than reported. Say
+        # so before the notice, instead of passing a crash off as a pause.
+        echo "  ! the terminal client exited unexpectedly (code $rc) — see: e2b-box logs" >&2
+        disconnect_notice "$k" "$lbl"
+        ;;
+    esac
     [ "${E2B_DASH:-}" = 1 ] && exit 0 # dashboard owns the post-exit pull/kill/leave
     on_close_prompt "$k" "$sid"
     return 0
@@ -464,7 +476,7 @@ boot_and_connect() {
   # paused) connect_shell returns non-zero and we fall through to provision +
   # resume below (which also auto-heals a dead box).
   #
-  # ONLY with a TTY: the real `e2b sandbox connect` attempt IS the liveness check
+  # ONLY with a TTY: the client's real connect attempt IS the liveness check
   # here. With no TTY connect_shell can't attach and just prints instructions — so
   # a stale `ready` record would have it point at a dead box without reconciling.
   # Headless callers therefore skip this and go through `ensure` below (an SDK
@@ -805,7 +817,7 @@ case "$cmd" in
     if n=$(e2b_node 2>/dev/null); then row "[ok]" "node >= 22" "$n"
     else row "[warn]" "node >= 22" "not found — fix: install Node 22+, or set HERDR_E2B_NODE=/path/to/node"; warn=1; fi
     if ensure_e2b_path && command -v e2b >/dev/null 2>&1; then row "[ok]" "e2b cli" "$(command -v e2b)"
-    else row "[warn]" "e2b cli" "not found — fix: npm i -g @e2b/cli   (only 'shell' needs it)"; warn=1; fi
+    else row "[warn]" "e2b cli" "not found — fix: npm i -g @e2b/cli   (only 'connect <sandbox-id>' on an untracked box needs it)"; warn=1; fi
     ensure_e2b_env >/dev/null 2>&1
     if [ -n "${E2B_API_KEY:-}" ]; then row "[ok]" "api key" "set (${#E2B_API_KEY} chars)"
     else row "[warn]" "api key" "missing — fix: e2b auth login, or set E2B_API_KEY"; warn=1; fi
@@ -966,11 +978,11 @@ case "$cmd" in
     # that's this worktree's box, the everyday case.
     #
     # With a sandbox id it's the one you point at — the id `e2b-box list` prints
-    # in the SANDBOX column, and the same id `e2b sandbox connect` takes, because
-    # that is literally what runs underneath. Going through the record when we
-    # have one matters: the record carries the CLUSTER the box lives on, and
-    # attaching to the right id on the wrong cluster reports "not found" while
-    # the real box keeps running.
+    # in the SANDBOX column. Going through the record when we have one matters
+    # twice over: the record carries the CLUSTER the box lives on (attaching to
+    # the right id on the wrong cluster reports "not found" while the real box
+    # keeps running), and it is what the plugin's own client attaches by. An
+    # untracked id has no record, so it falls back to the E2B CLI below.
     if [ $# -gt 0 ]; then
       want_sid="$1"; shift
       [ $# -eq 0 ] || { echo "e2b-box connect: one sandbox at a time — got '$want_sid' and '$1'" >&2; exit 2; }

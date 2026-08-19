@@ -55,7 +55,7 @@ case ":$PATH:" in
      echo "      echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc   # (or ~/.bashrc), then restart your shell" ;;
 esac
 
-command -v e2b >/dev/null 2>&1 || echo "  ! e2b CLI not found — 'npm i -g @e2b/cli' (needed for the sandbox shell)"
+command -v e2b >/dev/null 2>&1 || echo "  ! e2b CLI not found — 'npm i -g @e2b/cli' (only needed to attach to untracked sandbox ids)"
 
 # Optional dashboard TUI (Rust/Ratatui). Source first when a toolchain exists,
 # else the binary this checkout's version published to its GitHub Release, else
