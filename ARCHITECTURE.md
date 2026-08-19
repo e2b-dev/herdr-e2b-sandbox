@@ -167,7 +167,8 @@ when the other two never ran. Rubrics, LLM judging and ranking stay out
 | `kill.js` | `Sandbox.kill` (bounded), idempotent — "already gone" vs "killed". |
 | `exec.js` | One command inside a tracked box → one JSON object on stdout (`{ok, exitCode, stdout, stderr, error}`). Started in the background and awaited by hand, because the SDK's `requestTimeoutMs` bounds the handshake, not the run; on the bound the process is **killed**. Draws the line the grader depends on: `ok:false` = never measured, `ok:true` = the command's own exit code. |
 | `lifecycle.js` | `pause` / `resume` for a tracked box — `Sandbox.pause` (files + memory snapshot) and `Sandbox.connect` (the resume path; there is no separate resume call). Owns the record's `paused` / `ready` status for both. |
-| `attach.js` | The terminal client (ADR-0008): a raw-mode PTY into the box, stamped `HERDR_E2B_TERMINAL=<box key>` and recorded as `terminalPid`. The plugin's only long-lived TTY-owning process. Reports by exit code: 0 clean · 10 never attached · 11 box gone · 12 attached-then-lost — the contract `connect_shell` branches on. |
+| `attach.js` | The terminal client (ADR-0008): reattaches to the box's recorded terminal when `attach-plan.js` proves it is the box's own (then nudges a repaint via resize), else creates a fresh raw-mode PTY stamped `HERDR_E2B_TERMINAL=<box key>` — pid + geometry recorded on the box record. The plugin's only long-lived TTY-owning process. Reports by exit code: 0 clean · 10 never attached · 11 box gone · 12 attached-then-lost — the contract `connect_shell` branches on. |
+| `attach-plan.js` | The attach-or-create decision, pure: record's terminal fields + process listing + pane size → `{action: "attach", pid, resize}` or `{action: "create", reason}`. Validates the marker before trusting a pid (pids get recycled), and picks the repaint nudge: one resize when geometry differs, away-and-back when it doesn't. Covered by `test/attach-plan.test.js`. |
 | `store.js` | The record model: atomic (temp+rename) shallow-merge `writeRecord`, `readRecord`, `listRecords`. Defines `BOXES_DIR`. |
 | `config.js` | `loadConfig` (TOML over defaults, `posInt`-clamped), `resolveTemplate` (per-branch rules), `templateRuleMatches`/`templateChoices` (the chooser's menu; `templates` defaults ship the public agent templates), `resolveLifecycle` (auto_pause → SDK lifecycle), `resolveEnvConfig`/`resolveEnv` (`[sandbox.env]` + `[templates.<name>.env]` → the `envs` one box is created with; per-template so a box only ever holds its own agent's credential), `resolveCredentials` (key + cluster as a pair: env → config → `e2b` CLI login), `readCliConfig` (`~/.e2b/config.json`, defensive). |
 | `shared.js` | `requireApiKey`, best-effort `notify` (herdr desktop notification). |
@@ -213,7 +214,8 @@ dashboard. Key fields: `key`, `label`, `status` (`provisioning`/`ready`/`failed`
 `step`, `sandboxId`, `template`, `url`, `projectPath`, `worktreePath`, `files`,
 `onTimeout` + `keepMemory` (the box's create-time lifecycle — what it does at its
 idle timeout, which the close-time messages read instead of the current config),
-`terminalPid` (the box's terminal, written by `attach.js` when it creates one).
+`terminalPid` + `terminalCols`/`terminalRows` (the box's terminal and its last
+drawn size, written by `attach.js`; what `attach-plan.js` decides reattach from).
 Writes are atomic so a concurrent poll never reads a half-written file.
 
 Grading adds the one other thing on disk: `$STATE_DIR/bench/<slug>/` with a

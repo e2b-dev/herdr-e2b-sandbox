@@ -24,6 +24,7 @@
 // These are internal to connect_shell; e2b-box's external exit codes don't change.
 import { Sandbox, NotFoundError, CommandExitError } from "e2b"
 
+import { planAttach, TERMINAL_MARKER } from "./attach-plan.js"
 import { loadConfig } from "./config.js"
 import { sdkConn, warnCredentials } from "./shared.js"
 import { readRecord, writeRecord } from "./store.js"
@@ -72,28 +73,96 @@ try {
 }
 
 const dims = () => ({ cols: process.stdout.columns || 80, rows: process.stdout.rows || 24 })
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+// One-line notices about which terminal you're getting. The dashboard owns its
+// own chrome, so it gets none of them — same rule as connect_shell's banner.
+const say = (line) => {
+  if (process.env.E2B_DASH !== "1") process.stdout.write(`${line}\n`)
+}
+const onData = (data) => process.stdout.write(data)
 
-let handle
-try {
-  handle = await sandbox.pty.create({
-    ...dims(),
-    // 0 = the PTY has no lifetime of its own (the default reaps it after 60s).
-    // Its shell must outlive this client — surviving a pause is the point.
-    timeoutMs: 0,
-    envs: { HERDR_E2B_TERMINAL: key },
-    // Land in the project dir; the sourced ~/.herdr-e2b.sh cd's there too, but
-    // the PTY's own cwd shouldn't depend on shell personalization having run.
-    ...(rec.projectPath ? { cwd: rec.projectPath } : {}),
-    onData: (data) => process.stdout.write(data),
-  })
-} catch (e) {
-  process.stderr.write(`attach.js: couldn't open a terminal: ${e?.message || e}\n`)
-  process.exit(NEVER_ATTACHED)
+// Attach or create? Decided over data (src/attach-plan.js), not here: the
+// listing is fetched only when a terminal is on record at all. A listing that
+// can't be fetched reads as an empty one — creating a fresh terminal when the
+// old one might have been fine is recoverable; attaching unverified is not.
+const pane = dims()
+let plan = { action: "create", reason: "none" }
+if (rec.terminalPid) {
+  const procs = await sandbox.commands.list().catch(() => [])
+  plan = planAttach(rec, procs, pane, key)
 }
 
-// The record remembers which terminal is the box's. Written after create so a
-// failed create can't leave a pid on record that never existed.
-await writeRecord(key, { terminalPid: handle.pid })
+let handle
+if (plan.action === "attach") {
+  // Say it before the frame lands: what comes back below is the CURRENT frame —
+  // the scrollback above it was never stored anywhere, and a fake would have
+  // holes exactly where the box worked unattended.
+  say("  ⟳ reattaching to the terminal you left — its current frame comes back; the scrollback above it does not.")
+  try {
+    handle = await sandbox.pty.connect(plan.pid, { onData, timeoutMs: 0 })
+  } catch {
+    // The terminal died between the listing and the connect — the same loss as
+    // finding it absent, so fall through to the same answer.
+    plan = { action: "create", reason: "died" }
+  }
+  if (handle) {
+    // The repaint nudge: a reattach alone produces zero bytes, ever. Each
+    // resize delivers one SIGWINCH; full-screen programs redraw their frame in
+    // response (research q4/q8: one signal, one complete frame). The
+    // away-and-back pair (geometry unchanged) needs a beat between the two, or
+    // a program that only samples its final size would see nothing change and
+    // skip the repaint.
+    //
+    // Best-effort ON PURPOSE: we are attached — the one terminal this box has —
+    // and a failed nudge is a missing repaint, not a lost terminal. Falling
+    // back to create here would abandon a live subscription (its onData keeps
+    // streaming) and stand up a SECOND terminal beside a possibly healthy one.
+    // A blank frame self-heals: the next pane resize retries, and if the
+    // stream really died, wait() below reports it as attached-then-lost.
+    try {
+      for (const [i, size] of plan.resize.entries()) {
+        if (i > 0) await sleep(500)
+        await sandbox.pty.resize(plan.pid, size)
+      }
+    } catch {
+      // nothing — see above
+    }
+  }
+}
+
+if (!handle) {
+  if (plan.reason !== "none") {
+    // There WAS a terminal and this isn't it — say so, or a fresh shell where
+    // an agent used to be reads as the agent having vanished.
+    say(
+      plan.reason === "recycled"
+        ? "  ✚ the terminal on record isn't this box's own anymore (its pid was recycled) — starting a fresh one."
+        : "  ✚ the terminal you left is gone — starting a fresh one.",
+    )
+  }
+  try {
+    handle = await sandbox.pty.create({
+      ...pane,
+      // 0 = the PTY has no lifetime of its own (the default reaps it after 60s).
+      // Its shell must outlive this client — surviving a pause is the point.
+      timeoutMs: 0,
+      envs: { [TERMINAL_MARKER]: key },
+      // Land in the project dir; the sourced ~/.herdr-e2b.sh cd's there too, but
+      // the PTY's own cwd shouldn't depend on shell personalization having run.
+      ...(rec.projectPath ? { cwd: rec.projectPath } : {}),
+      onData,
+    })
+  } catch (e) {
+    process.stderr.write(`attach.js: couldn't open a terminal: ${e?.message || e}\n`)
+    process.exit(NEVER_ATTACHED)
+  }
+}
+
+// The record remembers which terminal is the box's, and at what size it was
+// last drawn — the size is what lets the next reattach pick the one-resize or
+// away-and-back nudge. Written after create/attach so a failure can't leave a
+// pid on record that never carried this box's marker.
+await writeRecord(key, { terminalPid: handle.pid, terminalCols: pane.cols, terminalRows: pane.rows })
 
 // Raw mode: every byte — including modified Enter (^[[13;2u and friends), ^C,
 // ^Z — belongs to the box, not to this client. This is the property the in-box
@@ -111,9 +180,12 @@ process.stdin.on("data", (data) => {
 })
 
 // The pane resized → the box's terminal follows. The SIGWINCH this delivers is
-// also what makes full-screen agents redraw.
+// also what makes full-screen agents redraw. The record follows too, so the
+// next reattach compares against the size the terminal actually ended up at.
 process.stdout.on("resize", () => {
-  sandbox.pty.resize(handle.pid, dims()).catch(() => {})
+  const size = dims()
+  sandbox.pty.resize(handle.pid, size).catch(() => {})
+  writeRecord(key, { terminalCols: size.cols, terminalRows: size.rows }).catch(() => {})
 })
 
 let code = 0
