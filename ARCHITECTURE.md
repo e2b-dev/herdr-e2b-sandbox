@@ -219,7 +219,9 @@ Credentials therefore live in `$CONFIG_DIR/config.toml` (mode `0600`), never in
 `HERDR_PLUGIN_ROOT` — that is a managed source checkout. The record is the contract between the writer
 (`provision.js`), the reader (`e2b-box` spinner / `status` / `list`), and the
 dashboard. Key fields: `key`, `label`, `status` (`provisioning`/`ready`/`failed`/`paused`),
-`step`, `sandboxId`, `template`, `url`, `projectPath`, `worktreePath`, `files`,
+`step`, `sandboxId`, `template` (+ `requestedTemplate`, set only when the
+requested template was unavailable and `base` booted instead — the dashboard's
+`TEMPLATE` column marks that box `base ⚠`), `url`, `projectPath`, `worktreePath`, `files`,
 `onTimeout` + `keepMemory` (the box's create-time lifecycle — what it does at its
 idle timeout, which the close-time messages read instead of the current config),
 `terminalPid` + `terminalCols`/`terminalRows` (the box's terminal and its last
