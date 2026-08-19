@@ -636,6 +636,12 @@ const REGION_BY_DOMAIN = Object.freeze({
  * A domain with no region name is printed as itself: such a host has no name to
  * give, and inventing one would be worse than the host.
  */
+const SOURCE_NAMES = {
+  env: "the environment",
+  config: "config.toml",
+  cli: "`e2b auth login`",
+}
+
 export function regionForDomain(domain) {
   return (domain && REGION_BY_DOMAIN[domain]) || null
 }
@@ -701,11 +707,44 @@ export function resolveCredentials({ env = {}, secrets = {}, sandbox = {}, cli =
   // Which key the config actually gave us, so a warning can name the line to edit.
   const cfgKeyName = cfgRegionKey ? `[secrets].${regionKeyName}` : "[secrets].e2b_api_key"
 
+  // A source that names BOTH halves settles the question outright.
+  //
+  // A key belongs to exactly one region, so key and domain must never be taken
+  // from sources that disagree. Two independent tier lists let exactly that
+  // happen: a bare exported key with a region in the config produced the US key
+  // aimed at the EU cluster, rejected as `Invalid API key … Cannot get the team`
+  // — a message that blames the credential when only the pairing is wrong.
+  //
+  // So look for a complete pair first. `env` counts when E2B_DOMAIN is exported
+  // beside the key, which is what moving regions in a shell already does.
+  // `config` counts when a region is named and the file also holds a key, since
+  // one file authored both halves together. The `e2b` CLI login is inherently a
+  // pair. Half a decision never splits a whole one.
+  // Only these two are promoted, and the `e2b` CLI login deliberately is NOT.
+  // Its file holds a key AND a domain, so it looks like a pair, but adopting it
+  // would swap the ACCOUNT a config key pinned. Borrowing a cluster is a repair;
+  // borrowing someone's whole login is a different box than the one you asked
+  // for. The existing rule stands: a config key never takes the CLI's cluster.
+  const envPair = envKey && envDomain ? { apiKey: envKey, domain: envDomain } : null
+  const cfgPair = cfgRegion && cfgKey ? { apiKey: cfgKey, domain: REGIONS[cfgRegion] } : null
+  // The daemon's env is frozen at launch, so it cannot outrank a fresh file.
+  const [pair, pairSource] = fromDaemon
+    ? cfgPair
+      ? [cfgPair, "config"]
+      : [null, null]
+    : envPair
+      ? [envPair, "env"]
+      : cfgPair
+        ? [cfgPair, "config"]
+        : [null, null]
+
   // Tier order: fresh sources first when the env can't be trusted to be fresh.
   const keyTiers = fromDaemon
     ? [[cfgKey, "config"], [cli.apiKey, "cli"], [envKey, "env"]]
     : [[envKey, "env"], [cfgKey, "config"], [cli.apiKey, "cli"]]
-  const [apiKey, keySource] = keyTiers.find(([v]) => v) ?? [null, null]
+  const [apiKey, keySource] = pair
+    ? [pair.apiKey, pairSource]
+    : (keyTiers.find(([v]) => v) ?? [null, null])
 
   // The CLI's cluster is only trustworthy for the key we actually resolved.
   const cliDomainUsable = Boolean(cli.domain) && (keySource === "cli" || !apiKey || apiKey === cli.apiKey)
@@ -729,11 +768,23 @@ export function resolveCredentials({ env = {}, secrets = {}, sandbox = {}, cli =
         [cfgDomainResolved, "config", cfgDecided],
         [cliDomain, "cli", Boolean(cliDomain)],
       ]
-  const [domain, domainSourceFound] = domainTiers.find(([, , decided]) => decided) ?? [null, null]
+  const [domainFound, domainSourceFound] = pair
+    ? [pair.domain, pairSource]
+    : (domainTiers.find(([, , decided]) => decided) ?? [null, null])
+  const domain = domainFound
   const domainSource = domainSourceFound ?? "sdk-default"
 
   let warning = null
-  if (domainSource !== "env" && envDomain && envDomain !== domain) {
+  const verifiedCliDomain = domainSource === "cli" && cliDomainUsable
+  if (!pair && !verifiedCliDomain && apiKey && domain && keySource !== domainSource) {
+    // Nothing named both halves, so they came from different places and may
+    // belong to different regions. This is the 401 that reads as a bad key.
+    warning =
+      `The E2B key (from ${SOURCE_NAMES[keySource]}) and the region (from ` +
+      `${SOURCE_NAMES[domainSource]}) came from different sources, and a key belongs to ` +
+      `exactly one region. If ${describeRegion(domain)} is not where that key lives, the ` +
+      "API will reject it as an invalid key. Set both in one place to be sure.";
+  } else if (domainSource !== "env" && envDomain && envDomain !== domain) {
     warning =
       `Ignoring a stale E2B_DOMAIN (${envDomain}) inherited from the herdr server — ` +
       `it is frozen at the value herdr launched with. Using ${domain ?? "the SDK default"} ` +

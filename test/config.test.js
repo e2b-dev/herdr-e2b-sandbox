@@ -778,11 +778,12 @@ test("resolveCredentials: the other region's key is never used, for any input", 
   assert.equal(resolveCredentials({ secrets }).apiKey, "e2b_us")
 })
 
-test("resolveCredentials: env E2B_API_KEY still beats every config key", () => {
+test("resolveCredentials: env E2B_API_KEY beats a config key when no region is named", () => {
+  // Without a region the config names only half, so the export is the whole
+  // decision and wins, exactly as before.
   const r = resolveCredentials({
     env: { E2B_API_KEY: "e2b_env" },
-    sandbox: { region: "eu" },
-    secrets: { e2b_api_key_eu: "e2b_eu", e2b_api_key: "e2b_plain" },
+    secrets: { e2b_api_key: "e2b_plain" },
   })
   assert.equal(r.apiKey, "e2b_env")
   assert.equal(r.keySource, "env")
@@ -856,17 +857,25 @@ test("resolveCredentials: region 'us' under the daemon says so in the warning", 
   assert.match(r.credWarning, /the SDK default/)
 })
 
-test("resolveCredentials: outside the daemon, an exported E2B_DOMAIN still beats a region", () => {
-  // A shell export in a command you just typed is a decision you just made, and
-  // stays above the config file — the demotion applies only to herdr's snapshot.
-  const r = resolveCredentials({
+test("resolveCredentials: an exported E2B_DOMAIN beats a region only when a key comes with it", () => {
+  // Domain alone is half a decision, and half a decision must not split the
+  // config's whole one — that split is what produced a US key on the EU cluster.
+  const both = resolveCredentials({
+    env: { E2B_DOMAIN: "e2b.dev", E2B_API_KEY: "e2b_env" },
+    sandbox: { region: "eu" },
+    secrets: { e2b_api_key: "e2b_cfg" },
+  })
+  assert.equal(both.domain, "e2b.dev")
+  assert.equal(both.apiKey, "e2b_env")
+  assert.equal(both.domainSource, "env")
+
+  const domainOnly = resolveCredentials({
     env: { E2B_DOMAIN: "e2b.dev" },
     sandbox: { region: "eu" },
     secrets: { e2b_api_key: "e2b_cfg" },
   })
-  assert.equal(r.domain, "e2b.dev")
-  assert.equal(r.domainSource, "env")
-  assert.equal(r.credWarning, null)
+  assert.equal(domainOnly.domain, "e2b-juliett.dev", "the config named both halves")
+  assert.equal(domainOnly.apiKey, "e2b_cfg")
 })
 
 test("resolveCredentials: no region and no inherited domain is unchanged", () => {
@@ -1095,4 +1104,50 @@ test("a session with no `supersedes` recorded drops nothing", () => {
   const cfg = supersedingCfg()
   delete cfg.envSession.codex.supersedes
   assert.equal(envFor(cfg, inDays(9)).OPENAI_API_KEY, "sk-hand-written")
+})
+
+// --- key and domain must move as a PAIR ------------------------------------
+// A key belongs to exactly one region, so the two halves may never come from
+// sources that disagree. Two independent tier lists could each answer half:
+// a bare exported key with a region in the config yielded the US key aimed at
+// the EU cluster, which the API rejects as `Invalid API key … Cannot get the
+// team` — a message that blames the credential when only the pairing is wrong.
+
+test("resolveCredentials: a bare env key does not split a configured region", () => {
+  const r = resolveCredentials({
+    env: { E2B_API_KEY: "e2b_us_from_shell" }, // no E2B_DOMAIN beside it
+    sandbox: { region: "eu" },
+    secrets: { e2b_api_key_eu: "e2b_eu" },
+  })
+  assert.equal(r.apiKey, "e2b_eu", "the config names both halves, so it supplies both")
+  assert.equal(r.domain, "e2b-juliett.dev")
+})
+
+test("resolveCredentials: env still wins when it names BOTH halves", () => {
+  const r = resolveCredentials({
+    env: { E2B_API_KEY: "e2b_env", E2B_DOMAIN: "e2b-juliett.dev" },
+    sandbox: { region: "us" },
+    secrets: { e2b_api_key_us: "e2b_us" },
+  })
+  assert.equal(r.apiKey, "e2b_env", "a complete override is a decision just made")
+  assert.equal(r.domain, "e2b-juliett.dev")
+})
+
+test("resolveCredentials: a region with no key of its own still uses the single key", () => {
+  const r = resolveCredentials({
+    sandbox: { region: "eu" },
+    secrets: { e2b_api_key: "e2b_plain" },
+  })
+  assert.equal(r.apiKey, "e2b_plain", "one file authored both halves together")
+  assert.equal(r.domain, "e2b-juliett.dev")
+})
+
+test("resolveCredentials: a split pair that survives is warned about", () => {
+  // Config names a region but has no key at all, so the key must come from
+  // elsewhere. That is a real split and the user should hear about it.
+  const r = resolveCredentials({
+    env: { E2B_API_KEY: "e2b_us_from_shell" },
+    sandbox: { region: "eu" },
+  })
+  assert.match(r.credWarning, /different sources|does not belong/i)
 })
