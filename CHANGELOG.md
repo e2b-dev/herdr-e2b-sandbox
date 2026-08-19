@@ -8,14 +8,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Pick a region by name.** `[sandbox] region = "us" | "eu"` decides where a box
-  runs, instead of having to know that a region is spelled as a domain. It is
-  sugar over `domain` (see `docs/adr/0006`): every other part of the plugin keeps
-  speaking domains, box records are unchanged, and `e2b-staging.dev`, `e2b.pro`
-  and BYOC hosts stay reachable by setting `domain` directly. `us` deliberately
-  resolves to *no* domain — the SDK defaults to `e2b.app` and the `e2b` CLI to
-  `e2b.dev`, so no single value is correct for both. An unrecognised region is an
-  error naming the two, never a silent fallthrough.
+- **Pick a region by name.** `[sandbox] region = "us" | "eu"` is the only way to
+  say where a box runs (see `docs/adr/0007`). `us` is the default and needs no
+  configuration at all — it resolves to the SDK's own default,
+  `https://api.e2b.app`; `eu` resolves to `https://api.e2b-juliett.dev`. An
+  unrecognised region is an error naming the two, never a silent fallthrough.
+  `us` deliberately pins no host: US also answers at `e2b.dev`, an older name for
+  the same environment that the `e2b` CLI still defaults to, so naming either
+  would put one tool at odds with its own default for nothing.
 - **One API key per region.** `[secrets] e2b_api_key_us` / `e2b_api_key_eu` may
   sit beside the single `e2b_api_key`, so changing region moves the credential
   with it. A key belongs to exactly one region, and the mismatch reports as
@@ -26,6 +26,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   It fails open: anything short of a definite "no" falls through to the create,
   because the check is stricter than creating is and must never cost a box that
   would have booted.
+
+### Removed
+
+- **`[sandbox] domain` is gone.** A region is what you choose; the host it
+  resolves to is the plugin's business. An old `domain` key is now an **error**
+  naming the region to replace it with, rather than an ignored line — silently
+  dropping it would have moved an EU user's boxes to US without a word. Box
+  records still carry a domain (internal state pinning a box to where it was
+  born), and `E2B_DOMAIN` plus the domain inferred from `e2b auth login` still
+  work, since neither is part of this plugin's config surface.
 
 ### Changed
 

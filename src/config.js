@@ -302,7 +302,7 @@ export function readCliConfig(file = CLI_CONFIG_PATH) {
  *
  *   1. env             `E2B_API_KEY` / `E2B_DOMAIN`   (explicit — always wins)
  *   2. plugin config   `[secrets].e2b_api_key_<region>`, else `[secrets].e2b_api_key`
- *                      / `[sandbox].region`, else `[sandbox].domain`
+ *                      / `[sandbox].region`
  *   3. `e2b` CLI login `~/.e2b/config.json`           (key + cluster, together)
  *
  * A key belongs to exactly one cluster, so key and domain must never be taken
@@ -315,9 +315,9 @@ export function readCliConfig(file = CLI_CONFIG_PATH) {
  * Pure — callers pass the sources in, so this is testable without touching disk.
  */
 /**
- * The regions a user may name, and the domain each one means. Exactly two, by
- * decision (ADR-0006): anything else — staging, e2b.pro, a BYOC host — is spelled
- * as a `[sandbox] domain`, which stays supported and untouched.
+ * The regions a user may name, and the domain each one means. Exactly two, and
+ * they are the ONLY way to choose one (ADR-0007): there is no host to write by
+ * hand, because a region is the thing a person picks and a host is a detail.
  *
  * `us` maps to **null**, not to "e2b.dev". The SDK defaults to `e2b.app` and the
  * `e2b` CLI to `e2b.dev`; no single string is correct for both, so absent is the
@@ -325,21 +325,39 @@ export function readCliConfig(file = CLI_CONFIG_PATH) {
  */
 const REGIONS = Object.freeze({ us: null, eu: "e2b-juliett.dev" })
 
-/** The same table read backwards, for a config that pins a `domain` instead of
- * naming a region. Only regions with a domain appear — `us` is absent because
- * its domain is absent, which is the point of it. */
-const REGION_BY_DOMAIN = Object.freeze(
-  Object.fromEntries(Object.entries(REGIONS).filter(([, d]) => d).map(([r, d]) => [d, r])),
-)
+/**
+ * Which region a pinned `domain` belongs to, for a config that names a host
+ * instead of a region.
+ *
+ * Written out rather than derived by reversing REGIONS, because the two tables
+ * are not inverses of each other: a region resolves to ONE canonical domain,
+ * but a region can be reached at more than one host. US production is served at
+ * `api.e2b.app` — the current hostname and the SDK's default — and at
+ * `api.e2b.dev`, the older name kept on a compatibility path. Both answer, and
+ * both are the same environment, not two regions.
+ *
+ * Deriving this from REGIONS also silently dropped `us` altogether, since its
+ * canonical domain is deliberately absent — so anyone pinning a US host by hand
+ * got no region, and with it no `e2b_api_key_us`.
+ */
+const REGION_BY_DOMAIN = Object.freeze({
+  "e2b.app": "us",
+  "e2b.dev": "us",
+  "e2b-juliett.dev": "eu",
+})
 
 /**
  * How to name a region in a message. A wrong-region request fails as
  * `template 'x' not found`, which reads as a missing template — so anything
  * reporting that has to say WHERE it looked.
  *
- * A domain with no region name is printed as itself: staging, e2b.pro and BYOC
- * hosts have no name to give, and inventing one would be worse than the host.
+ * A domain with no region name is printed as itself: such a host has no name to
+ * give, and inventing one would be worse than the host.
  */
+export function regionForDomain(domain) {
+  return (domain && REGION_BY_DOMAIN[domain]) || null
+}
+
 export function describeRegion(domain) {
   if (!domain) return "US (the default region)" // US resolves to no domain at all
   const name = REGION_BY_DOMAIN[domain]
@@ -363,23 +381,34 @@ export function resolveCredentials({ env = {}, secrets = {}, sandbox = {}, cli =
   const fromDaemon = Boolean(env.HERDR_PLUGIN_ID || env.HERDR_PLUGIN_ROOT)
   const envKey = env.E2B_API_KEY?.trim() || null
   const envDomain = env.E2B_DOMAIN?.trim() || null
-  const cfgDomain = typeof sandbox.domain === "string" ? sandbox.domain.trim() : null
+  // `[sandbox] domain` was the old way to choose a cluster and is gone (ADR-0007).
+  // It must ERROR rather than be ignored: someone with `domain = "e2b-juliett.dev"`
+  // who upgraded into a silent no-op would have every box quietly move to US,
+  // which is precisely the failure regions exist to prevent.
+  const staleDomain = typeof sandbox.domain === "string" ? sandbox.domain.trim() : null
+  if (staleDomain) {
+    const asRegion = REGION_BY_DOMAIN[staleDomain]
+    throw new Error(
+      `[sandbox] domain is no longer a config key (found '${staleDomain}' in ${CONFIG_PATH}). ` +
+        (asRegion
+          ? `Replace it with: region = "${asRegion}"`
+          : `Choose a region instead: region = "${Object.keys(REGIONS).join('" or "')}"`) +
+        ".",
+    )
+  }
   const cfgRegion = typeof sandbox.region === "string" ? sandbox.region.trim().toLowerCase() : null
   if (cfgRegion && !(cfgRegion in REGIONS)) {
     throw new Error(
       `Unknown [sandbox] region '${cfgRegion}' in ${CONFIG_PATH}. ` +
-        `Valid regions: ${Object.keys(REGIONS).join(", ")}. ` +
-        "For any other cluster (staging, e2b.pro, a BYOC host) set [sandbox] domain instead.",
+        `Valid regions: ${Object.keys(REGIONS).join(", ")}.`,
     )
   }
 
-  // Which region's key applies, decided from the CONFIG alone: `region`, or a
-  // `domain` that names one, else the default region. Deliberately NOT from the
-  // resolved domain — that would be circular, since the resolved domain can come
-  // from the CLI login and whether that login is usable depends on which key we
-  // just picked. A `domain` that names no region (staging, e2b.pro, BYOC) has no
-  // per-region key at all rather than silently borrowing the US one.
-  const activeRegion = cfgRegion ?? (cfgDomain ? (REGION_BY_DOMAIN[cfgDomain] ?? null) : "us")
+  // Which region's key applies. `region` if named, else the default — US.
+  // Deliberately NOT read from the resolved domain: that would be circular, since
+  // the resolved domain can come from the CLI login and whether that login is
+  // usable depends on which key we just picked.
+  const activeRegion = cfgRegion ?? "us"
   // Only the ACTIVE region's key is ever read, so the other region's credential
   // is never handed to a subprocess or an SDK call.
   const regionKeyName = activeRegion ? `e2b_api_key_${activeRegion}` : null
@@ -404,9 +433,9 @@ export function resolveCredentials({ env = {}, secrets = {}, sandbox = {}, cli =
   // is exactly that answer: its correct value is absent, and a plain null would
   // fall straight through to the CLI login's cluster — so naming your region US
   // while logged into the EU would silently keep provisioning in the EU.
-  // An explicit `domain` still outranks a `region`; both are the config tier.
-  const cfgDomainResolved = cfgDomain ?? (cfgRegion ? REGIONS[cfgRegion] : null)
-  const cfgDecided = Boolean(cfgDomain) || Boolean(cfgRegion)
+  // The config tier is the region and nothing else — there is no host to pin.
+  const cfgDomainResolved = cfgRegion ? REGIONS[cfgRegion] : null
+  const cfgDecided = Boolean(cfgRegion)
   const domainTiers = fromDaemon
     ? [
         [cfgDomainResolved, "config", cfgDecided],
@@ -428,9 +457,9 @@ export function resolveCredentials({ env = {}, secrets = {}, sandbox = {}, cli =
       `it is frozen at the value herdr launched with. Using ${domain ?? "the SDK default"} ` +
       `from your ${domainSource === "cli" ? "`e2b auth login`" : "plugin config"} instead.`
   } else if (domainSource !== "cli" && !cfgDecided && !envDomain && cli.domain && !cliDomainUsable) {
-    // `cfgDecided`, not `cfgDomain`: naming a `region` pins the region just as
-    // firmly as pinning a `domain` does, so warning that the region is a guess
-    // would be telling the user to pin something they already pinned.
+    // `cfgDecided`: naming a `region` answers the question outright, so warning
+    // that the region is a guess would be telling the user to pin something they
+    // have already pinned.
     //
     // Name the source we actually took the key from — "check your config" is
     // useless advice when the key came from the environment, and naming

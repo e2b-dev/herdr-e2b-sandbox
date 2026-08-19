@@ -1418,18 +1418,18 @@ step=$(mismatch_step "e2b.dev")
 { printf '%s' "$step" | grep -q "resolves to e2b.dev" \
   && printf '%s' "$step" | grep -q 'e2b auth login` against e2b-juliett.dev' \
   && printf '%s' "$step" | grep -q 'export E2B_DOMAIN=e2b-juliett.dev' \
-  && printf '%s' "$step" | grep -q '\[sandbox\].domain' \
+  && printf '%s' "$step" | grep -q '\[sandbox\] region = "eu"' \
   && printf '%s' "$step" | grep -q 'e2b-box kill'; } \
-  && ok "known-but-different cluster → login/env/config/kill remedies" \
+  && ok "a box in another region → login/env/region/kill remedies" \
   || bad "known-but-different cluster remedies (step=$step)"
 
 step=$(mismatch_step "")
 { printf '%s' "$step" | grep -q "cluster is unknown" \
   && printf '%s' "$step" | grep -q 'e2b auth login` against e2b-juliett.dev' \
   && printf '%s' "$step" | grep -q 'export E2B_DOMAIN=e2b-juliett.dev' \
-  && printf '%s' "$step" | grep -q '\[sandbox\].domain' \
+  && printf '%s' "$step" | grep -q '\[sandbox\] region = "eu"' \
   && printf '%s' "$step" | grep -q 'e2b-box kill'; } \
-  && ok "unknown cluster → login/env/config/kill remedies" \
+  && ok "an unknown region → login/env/region/kill remedies" \
   || bad "unknown cluster remedies (step=$step)"
 
 # `e2b-region` is one developer's personal zsh function; it exists on no other
