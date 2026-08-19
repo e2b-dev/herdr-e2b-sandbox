@@ -182,6 +182,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   discarded, so a fatal config error such as a mistyped region degraded into the
   generic "No E2B API key" several calls later, sending you to check a credential
   that was fine.
+- **An exported key and a configured region no longer point at different
+  clusters.** The key and the domain were resolved separately, in two places, so
+  each could be answered by a different source. A key exported for US with
+  `region = "eu"` in config sent the US key to the EU cluster, which the API
+  rejects as `Invalid API key … Cannot get the team`, a message that blames the
+  credential when only the pairing is wrong. Nothing warned, because nothing
+  compared the two. A source naming both halves now settles it: the environment
+  when `E2B_DOMAIN` is exported beside the key, the config when a region is named
+  and the file holds a key. The `e2b` CLI login is deliberately not promoted,
+  since adopting it would swap the account a config key pinned. A split that
+  survives is now stated out loud, naming each source.
+
 - **`e2b-fleet` no longer blames the task slug for every naming failure.** That
   was accurate while an unusable slug was the only way to fail, but the naming
   helper prints its own reason on stderr directly above, and a second guessed
