@@ -21,6 +21,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and no flag it reports and writes nothing. Your own `config.toml` is never edited
   by it — a credential found in a harness's own file is stored as a value, while one
   found only in your shell records the variable's NAME and never its value.
+- Boxes now boot from what that command found: the config loader reads `auth.toml`,
+  and a box gets its template's discovered credential without you configuring
+  anything. A recorded variable name is resolved from `e2b-box`'s own environment
+  at create time, and the box is handed the variable **it** needs, which is not
+  always the one it was found under. Anything you wrote by hand still wins — the
+  order is shipped defaults, then discovered, then `[sandbox.env]`, then
+  `[templates.<name>.env]` — and an absent or malformed `auth.toml` is simply no
+  discovery rather than a broken CLI.
   (Nothing reads `auth.toml` yet; boxes start using it in the next change.)
 - **Pick a region by name.** `[sandbox] region = "us" | "eu"` is the only way to
   say where a box runs (see `docs/adr/0007`). `us` is the default and needs no

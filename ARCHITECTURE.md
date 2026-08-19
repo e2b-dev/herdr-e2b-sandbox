@@ -170,7 +170,7 @@ when the other two never ran. Rubrics, LLM judging and ranking stay out
 | `attach.js` | The terminal client (ADR-0008): reattaches to the box's recorded terminal when `attach-plan.js` proves it is the box's own (then nudges a repaint via resize), else creates a fresh raw-mode PTY stamped `HERDR_E2B_TERMINAL=<box key>` — pid + geometry recorded on the box record. The plugin's only long-lived TTY-owning process. Reports by exit code: 0 clean · 10 never attached · 11 box gone · 12 attached-then-lost — the contract `connect_shell` branches on. |
 | `attach-plan.js` | The attach-or-create decision, pure: record's terminal fields + process listing + pane size → `{action: "attach", pid, resize}` or `{action: "create", reason}`. Validates the marker before trusting a pid (pids get recycled), and picks the repaint nudge: one resize when geometry differs, away-and-back when it doesn't. Covered by `test/attach-plan.test.js`. |
 | `store.js` | The record model: atomic (temp+rename) shallow-merge `writeRecord`, `readRecord`, `listRecords`. Defines `BOXES_DIR`. |
-| `config.js` | `loadConfig` (TOML over defaults, `posInt`-clamped), `resolveTemplate` (per-branch rules), `templateRuleMatches`/`templateChoices` (the chooser's menu; `templates` defaults ship the public agent templates), `resolveLifecycle` (auto_pause → SDK lifecycle), `resolveEnvConfig`/`resolveEnv` (`[sandbox.env]` + `[templates.<name>.env]` → the `envs` one box is created with; per-template so a box only ever holds its own agent's credential), `resolveCredentials` (key + cluster as a pair: env → config → `e2b` CLI login), `readCliConfig` (`~/.e2b/config.json`, defensive). |
+| `config.js` | `loadConfig` (TOML over defaults, `posInt`-clamped), `resolveTemplate` (per-branch rules), `templateRuleMatches`/`templateChoices` (the chooser's menu; `templates` defaults ship the public agent templates), `resolveLifecycle` (auto_pause → SDK lifecycle), `resolveEnvConfig`/`resolveEnv` (the `envs` one box is created with, as a four-rung ladder: shipped template defaults, then what `e2b-box auth` discovered, then `[sandbox.env]`, then `[templates.<name>.env]` — so a hand-written value always wins; per-template so a box only ever holds its own agent's credential, and it takes the environment forwarded names resolve from as an argument rather than reading `process.env`), `resolveAuthConfig`/`readAuthConfig` (the generated `auth.toml`: a stored value, or a variable NAME to forward; absent or malformed degrades to nothing), `resolveCredentials` (key + cluster as a pair: env → config → `e2b` CLI login), `readCliConfig` (`~/.e2b/config.json`, defensive). |
 | `shared.js` | `requireApiKey`, best-effort `notify` (herdr desktop notification). |
 | `resolve-env.js` / `resolve-theme.js` | Tiny helpers the bash layer calls to print the credentials (`E2B_API_KEY` + `E2B_DOMAIN`) / theme (toml-only, run on any Node). |
 | `resolve-template.js` | Answers the chooser's two questions for a branch: is the template already decided by a rule, and what should the menu offer (`templateChoices`, default first). `e2b-fleet` reads the same output, so the roster and `open`'s menu can never drift apart. |
@@ -248,6 +248,12 @@ fleet still isn't (`docs/adr/0005`). The member list is never stored.
   `ensure` (SDK reconnect/recreate) rather than trusting a possibly-stale `ready`.
 - **Node/CLI resolution.** herdr may run on Node < 22; `e2b_node`/`ensure_e2b_path`
   find a ≥22 Node and the `e2b` CLI before any SDK/CLI call.
+- **Hand-written always wins.** `resolveEnv`'s ladder puts what `e2b-box auth`
+  discovered *below* both user tables, and `auth.toml` and `config.toml` have one
+  writer each — the command never edits the file the user edits. A discovered
+  credential found only in the shell is recorded by NAME and forwarded at create
+  time, so no new plaintext copy of it exists (ADR 0006). Covered by
+  `test/config.test.js`.
 
 ## Where to look for X
 
@@ -292,7 +298,9 @@ fleet still isn't (`docs/adr/0005`). The member list is never stored.
 pure logic (config resolution, pull path guards, fleet member naming, harness probe
 interpretation — that last one runs from captured probe output, so it passes on a
 machine with no coding CLI installed at all, which is every CI runner; its spawn
-half is covered separately against `sleep` and `cat`, never a real harness);
+half is covered separately against `sleep` and `cat`, never a real harness; the
+generated `auth.toml` and the loader that reads it are the one place a test writes
+a file, always a fixture under the OS temp dir and never your own config);
 `test/cli.test.sh` lints every script (`bash -n` / `node --check`) and asserts CLI
 exit-code behavior, including `e2b-fleet --dry-run` (the plan is the seam) and the
 batch semantics against a two-subcommand herdr stub that creates nothing.

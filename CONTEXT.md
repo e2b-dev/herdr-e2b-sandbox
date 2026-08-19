@@ -49,6 +49,19 @@ box booted from the matching template comes up authenticated instead of on a sig
 screen. A harness is local and yours; a template is remote and E2B's.
 _Avoid_: Local agent, toolchain, credential source
 
+**Discovered value**:
+A credential `e2b-box auth` found on this machine and wrote to the generated
+`auth.toml`. It is merged *under* everything in `config.toml`, so it is a default
+and never an override — a value you wrote by hand always beats it.
+_Avoid_: Detected key, auto-config, inherited credential
+
+**Forwarded variable**:
+A discovered credential the plugin records by NAME rather than by value, because it
+was found only in the shell environment. The value is read from `e2b-box`'s own
+environment at box-create time and never written down. What the box receives is the
+variable **it** needs, which for three harnesses is not the one it was found under —
+hence *host variable* (where it was found) versus *box variable* (what is injected).
+_Avoid_: Passthrough, env copy, exported key
 ### Regions and projects
 
 **Region**:

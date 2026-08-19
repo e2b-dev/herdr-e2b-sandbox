@@ -21,7 +21,10 @@ layers, the data flow, the state model, and the invariants worth checking).
   (`interpretProbe`), which runs from captured probe output and so needs no
   coding CLI installed, and what `e2b-box auth` would then write (`buildPlan` /
   `renderAuthToml`), which takes its file reader as an argument for the same
-  reason.
+  reason. Two exceptions read a file rather than take one: the generated
+  `auth.toml` reader and the loader test that proves a box boots from it, which
+  writes a fixture under the OS temp dir and spawns one child `node` — never the
+  developer's own config.
 - `test/cli.test.sh` — `bash -n` / `node --check` lint across the scripts, plus
   offline `e2b-box` behavior (the `no sandbox tracked` messages and the
   non-interactive `pull` abort-without-clobber path).

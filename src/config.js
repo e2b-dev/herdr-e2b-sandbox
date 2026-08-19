@@ -224,6 +224,22 @@ function envTable(raw) {
 }
 
 /**
+ * Normalize one `forward` table into a `{BOXVAR: "HOSTVAR"}` map. `envTable`'s
+ * sibling, and deliberately stricter than it: this side holds variable NAMES, and
+ * a number or a boolean is a value that happens to have been written in the wrong
+ * table, never a name to look up. Same blank-key rule for the same reason.
+ */
+function nameTable(raw) {
+  const out = {}
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out
+  for (const [boxVar, hostVar] of Object.entries(raw)) {
+    const key = String(boxVar).trim()
+    if (key && typeof hostVar === "string" && hostVar.trim()) out[key] = hostVar.trim()
+  }
+  return out
+}
+
+/**
  * The `[sandbox.env]` / `[templates.<name>.env]` pair, normalized. Pure — takes
  * the parsed sections, so it is testable without disk.
  *
@@ -247,23 +263,106 @@ export function resolveEnvConfig({ sandbox = {}, templates = {} } = {}) {
 }
 
 /**
- * The env a box booting from `template` should get: the shared table, with that
- * template's table merged over it. Returns `undefined` when there is nothing to
- * inject, so the create call can omit `envs` entirely rather than pass `{}`.
+ * A normalized `forward` table resolved against `env`: `{BOXVAR: HOSTVAR}` becomes
+ * `{BOXVAR: env[HOSTVAR]}`, skipping anything the environment does not hold.
+ *
+ * The skip is the point. A forwarded name whose variable is unset must inject
+ * NOTHING rather than an empty string: an empty credential is the failure that
+ * shows up furthest from its cause — the agent boots, reads it, and dies
+ * authenticating, which looks like a broken key rather than a missing one.
+ */
+function forwardedValues(names, env) {
+  const out = {}
+  for (const [boxVar, hostVar] of Object.entries(names || {})) {
+    const value = env?.[hostVar]
+    if (typeof value === "string" && value.trim()) out[boxVar] = value
+  }
+  return out
+}
+
+/**
+ * The env a box booting from `template` should get. Four rungs, lowest first:
+ *
+ *   1. shipped template defaults   (behaviour we ship — AMP_EXECUTOR and friends)
+ *   2. DISCOVERED by `e2b-box auth`  (auth.toml: a stored value, or a name to forward)
+ *   3. the user's `[sandbox.env]`
+ *   4. the user's `[templates.<name>.env]`
+ *
+ * Discovery sits below everything hand-written, so a value the user typed always
+ * wins — the same principle the shipped defaults already obey: an override that
+ * cannot override is a default nobody can escape.
+ *
+ * `env` is the environment forwarded names are resolved FROM, passed in rather
+ * than read off `process`. That is what keeps this function pure, and purity is
+ * what lets the ladder be pinned by a test instead of by inspection.
+ *
+ * Returns `undefined` when there is nothing to inject, so the create call can omit
+ * `envs` entirely rather than pass `{}`.
  *
  * Never persisted: this map goes to `Sandbox.create` and nowhere else. It is not
  * written to the box record and must not be logged — the record is world-readable
  * state and the log is `herdr plugin log list`.
  */
-export function resolveEnv(cfg, template) {
-  // Shipped defaults first, so the user's own tables win over them: an override
-  // that cannot override is a default nobody can escape.
+export function resolveEnv(cfg, template, env = {}) {
   const merged = {
     ...(cfg?.templateEnvDefaults?.[template] || {}),
+    // The discovered rung has two halves, and forwarding wins between them: a name
+    // resolves from THIS run's environment, while a stored value is a copy taken
+    // whenever `e2b-box auth` last ran. When both name the same box variable the
+    // fresher one should be the one injected. `buildPlan` emits only one kind per
+    // harness, so today this decides nothing — it is written down so that a future
+    // harness offering both does not resolve it by accident.
+    ...(cfg?.envDiscovered?.[template] || {}),
+    ...forwardedValues(cfg?.envForward?.[template], env),
     ...(cfg?.envShared || {}),
     ...(cfg?.envByTemplate?.[template] || {}),
   }
   return Object.keys(merged).length ? merged : undefined
+}
+
+/**
+ * The generated auth.toml, normalized into the same per-template shape as the
+ * user's own tables. Pure — takes the parsed file, so it is testable without disk.
+ *
+ * Two sub-tables per template, and the split is ADR 0006's:
+ *
+ *   `env`      a VALUE, copied out of a harness's own plaintext config file
+ *   `forward`  a variable NAME only, resolved from the environment at create time
+ *
+ * Deliberately NOT reading a shared table: discovery is per harness, and a harness
+ * maps to exactly one template. There is no such thing as a credential discovered
+ * for every box.
+ */
+export function resolveAuthConfig(parsed = {}) {
+  const envDiscovered = {}
+  const envForward = {}
+  const templates = parsed?.templates
+  if (templates && typeof templates === "object" && !Array.isArray(templates)) {
+    for (const [template, section] of Object.entries(templates)) {
+      const name = String(template).trim()
+      if (!name) continue
+      const env = envTable(section?.env)
+      if (Object.keys(env).length) envDiscovered[name] = env
+      const forward = nameTable(section?.forward)
+      if (Object.keys(forward).length) envForward[name] = forward
+    }
+  }
+  return { envDiscovered, envForward }
+}
+
+/**
+ * Read what `e2b-box auth` generated. Absent, unreadable or malformed all resolve
+ * to nothing — the same rule `readCliConfig` follows, and for the same reason: an
+ * auxiliary file this plugin wrote must never be able to take the CLI down. The
+ * cost of degrading is one box that boots unauthenticated; the cost of throwing is
+ * every verb, including the `auth` run that would fix it.
+ */
+export function readAuthConfig(file = AUTH_PATH) {
+  try {
+    return resolveAuthConfig(TOML.parse(readFileSync(file, "utf8")))
+  } catch {
+    return { envDiscovered: {}, envForward: {} }
+  }
 }
 
 /**
@@ -498,6 +597,10 @@ export function loadConfig() {
   const dashboard = file.dashboard || {}
   const fleet = resolveFleet(file.fleet)
   const env = resolveEnvConfig({ sandbox, templates: file.templates })
+  // What `e2b-box auth` found, merged UNDER the two tables above by resolveEnv.
+  // Read here rather than by a caller so discovery arrives in the resolved config
+  // exactly the way the user's own per-template tables do — one path, no new seam.
+  const auth = readAuthConfig()
   return {
     // Default theme for the dashboard TUI (empty = let the TUI decide: a saved
     // choice, else "terminal"). See [dashboard] in config.example.toml.
@@ -532,6 +635,11 @@ export function loadConfig() {
     // `[templates.<name>.env]` merged over it. Read with resolveEnv(cfg, template).
     envShared: env.envShared,
     envByTemplate: env.envByTemplate,
+    // auth.toml, generated by `e2b-box auth` — a discovered value, and the NAME of
+    // a variable to forward from this process's own environment at create time.
+    // Both lose to the two tables above; see resolveEnv for the whole ladder.
+    envDiscovered: auth.envDiscovered,
+    envForward: auth.envForward,
     // Shipped per-template env (behaviour, never credentials). Carried through
     // from DEFAULTS rather than read from the file: nothing in config.toml sets
     // it, and resolveEnv puts the user's own tables OVER it.

@@ -179,7 +179,8 @@ server_port  = 3000
 # harness authenticates which template, under which variable — and is the one to
 # trust if the two ever disagree. `e2b-box auth` reads that table to look for the
 # same credentials on this machine, and writes what it finds to a GENERATED
-# auth.toml beside this file. This file stays yours; that command never edits it.
+# auth.toml beside this file. This file stays yours; that command never edits it,
+# and a value you write here beats whatever it discovered for the same variable.
 #
 # [templates.claude.env]
 # ANTHROPIC_API_KEY = "sk-ant-…"
