@@ -631,6 +631,27 @@ out=$( cd "$FREPO" && env -u E2B_API_KEY -u E2B_DOMAIN HERDR_PLUGIN_CONFIG_DIR="
   && ok "an unknown region is reported by name, not as a stack trace" \
   || bad "unknown region message (out=$out)"
 
+# A key belongs to exactly one region, so the credential pre-flight must adopt
+# the resolver's answer WHOLE. It used to export each half only when that half
+# was empty, so a key already exported kept its place while the domain was taken
+# from the config: a US key aimed at the EU cluster, rejected as an invalid key.
+PAIRCFG="$TMP/pair-region"; mkdir -p "$PAIRCFG"
+printf '[sandbox]\nregion = "eu"\n[secrets]\ne2b_api_key_us = "e2b_uskey"\ne2b_api_key_eu = "e2b_eukey"\n' > "$PAIRCFG/config.toml"
+out=$( cd "$FREPO" && env -u E2B_DOMAIN E2B_API_KEY=e2b_uskey HERDR_PLUGIN_CONFIG_DIR="$PAIRCFG" \
+       bash -c 'source "$1/bin/lib/paths.sh"; ensure_e2b_env; printf "%s|%s" "$E2B_API_KEY" "${E2B_DOMAIN:-}"' _ "$ROOT" 2>&1 )
+[ "$out" = "e2b_eukey|e2b-juliett.dev" ] \
+  && ok "the pre-flight takes the key and the region as one pair" \
+  || bad "credential pair split (got '$out', wanted 'e2b_eukey|e2b-juliett.dev')"
+
+# region "us" resolves to NO domain, so a domain left in the environment has to
+# go. Keeping it would send the US key wherever this shell last pointed.
+printf '[sandbox]\nregion = "us"\n[secrets]\ne2b_api_key_us = "e2b_uskey"\n' > "$PAIRCFG/config.toml"
+out=$( cd "$FREPO" && env E2B_DOMAIN=e2b-juliett.dev HERDR_PLUGIN_CONFIG_DIR="$PAIRCFG" \
+       bash -c 'source "$1/bin/lib/paths.sh"; unset E2B_API_KEY; ensure_e2b_env; printf "%s|%s" "$E2B_API_KEY" "${E2B_DOMAIN:-<unset>}"' _ "$ROOT" 2>&1 )
+[ "$out" = "e2b_uskey|<unset>" ] \
+  && ok "region us clears a stale E2B_DOMAIN instead of inheriting it" \
+  || bad "stale domain not cleared (got '$out', wanted 'e2b_uskey|<unset>')"
+
 # A project's own template is namespaced `<project>/<name>`, and the project half
 # is shared by every member of a fleet — so the member is named after the last
 # segment only. Asserted through the plan because the label is what herdr shows.

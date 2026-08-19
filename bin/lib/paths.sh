@@ -147,17 +147,18 @@ sdk_kill() {
 # Optional arg: a domain from a box record, which wins over the resolved one so
 # every verb acts on the cluster that actually holds that box.
 ensure_e2b_env() {
-  local box_domain="${1:-}" line node_bin env_out
+  local box_domain="${1:-}" line node_bin env_out got_key got_domain
   if [ -z "${E2B_API_KEY:-}" ] || [ -z "${E2B_DOMAIN:-}" ]; then
     # e2b_node, not bare `node`: under `bash -lc` a version-managed node (mise,
     # nvm, volta) is often not on PATH at all, and silently resolving nothing is
     # how the credentials go missing in the first place.
     node_bin=$(e2b_node 2>/dev/null || command -v node 2>/dev/null || true)
     if [ -n "$node_bin" ]; then
+      got_key=""; got_domain=""
       while IFS= read -r line; do
         case "$line" in
-          E2B_API_KEY=*) [ -z "${E2B_API_KEY:-}" ] && export E2B_API_KEY="${line#E2B_API_KEY=}" ;;
-          E2B_DOMAIN=*)  [ -z "${E2B_DOMAIN:-}" ]  && export E2B_DOMAIN="${line#E2B_DOMAIN=}" ;;
+          E2B_API_KEY=*) got_key="${line#E2B_API_KEY=}" ;;
+          E2B_DOMAIN=*)  got_domain="${line#E2B_DOMAIN=}" ;;
         esac
       done <<EOF
 $(
@@ -172,6 +173,20 @@ $(
         printf '%s\n' "$env_out"
       )
 EOF
+      # Adopt the resolver's answer WHOLE, never merged with what is already
+      # exported. A key belongs to exactly one region, and merging is what split
+      # the pair: a US key left in the environment kept its place while the EU
+      # domain was taken from the config, and the API rejected the result as an
+      # invalid key. src/config.js has already weighed the environment against
+      # the config, so its answer is the answer.
+      #
+      # The domain is UNSET when the resolver names none. US resolves to no
+      # domain on purpose, and leaving a stale one exported would send a US key
+      # to whichever cluster this shell last talked to.
+      if [ -n "$got_key" ]; then
+        export E2B_API_KEY="$got_key"
+        if [ -n "$got_domain" ]; then export E2B_DOMAIN="$got_domain"; else unset E2B_DOMAIN; fi
+      fi
     fi
   fi
   # A tracked box outranks everything: it lives where it was created.
