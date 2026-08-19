@@ -68,14 +68,62 @@ export function randomSuffix(env = process.env) {
   return out
 }
 
+/**
+ * The part of a template name that identifies it to a HUMAN: the last path
+ * segment. `ondrejs-project/herdr-agents` -> `herdr-agents`.
+ *
+ * E2B namespaces a project's own templates as `<project>/<template>`, and every
+ * member of one fleet carries the same project — so the prefix distinguishes
+ * nothing here while costing a sidebar row its readability. Dropping it can make
+ * two DIFFERENT templates share a label; that is a roster error, caught where a
+ * roster exists (the CLI below), not silently disambiguated here.
+ *
+ * Returns "" when nothing usable survives, on the same contract as sanitizeSlug.
+ */
+export function templateSlug(template) {
+  const segs = String(template ?? "")
+    .split("/")
+    .filter(Boolean)
+  return sanitizeSlug(segs.length ? segs[segs.length - 1] : "")
+}
+
 /** `<slug>-<template>` — what the member's workspace is labelled, and later what
  * its agent is renamed to. Throws on an unusable slug or template. */
 export function memberLabel(slug, template) {
   const s = sanitizeSlug(slug)
   if (!s) throw new Error(`task slug ${JSON.stringify(String(slug ?? ""))} has no usable characters`)
-  const t = sanitizeSlug(template)
+  const t = templateSlug(template)
   if (!t) throw new Error(`template ${JSON.stringify(String(template ?? ""))} has no usable characters`)
   return `${s}-${t}`
+}
+
+/**
+ * One label per roster entry, in the order given — and a refusal when two entries
+ * produce the same one.
+ *
+ * The roster already treats the same template twice as one member, not two. This
+ * is that rule where the names, not the strings, are what match: `ondrejs-project/amp`
+ * and `mpp/amp` are different templates that both label a member `<slug>-amp`.
+ * Two workspaces wearing one name is worse than an error, because nothing on
+ * screen says which is which and a fleet is read per member.
+ */
+export function memberLabels(slug, templates) {
+  const seen = new Map() // label -> the template that claimed it
+  const out = []
+  for (const t of templates) {
+    const label = memberLabel(slug, t)
+    const claimed = seen.get(label)
+    if (claimed !== undefined) {
+      throw new Error(
+        `templates ${JSON.stringify(claimed)} and ${JSON.stringify(t)} both name a member ` +
+          `'${label}' — a roster can't hold two members with the same name. ` +
+          "Drop one, or pick templates whose names differ after the last '/'.",
+      )
+    }
+    seen.set(label, t)
+    out.push(label)
+  }
+  return out
 }
 
 /** `<prefix>/<slug>-<template>-<rand4>` — the branch one member is created on. */
@@ -96,9 +144,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const cfg = loadConfig()
   try {
     if (!templates.length) throw new Error("no templates given")
-    const rows = templates.map((t) => {
+    // Labels first, for the whole roster: a collision is a property of the SET,
+    // so it has to be found before any member's branch is handed back — bash
+    // creates worktrees from these rows as it reads them.
+    const labels = memberLabels(slug, templates)
+    const rows = templates.map((t, i) => {
       const branch = memberBranch(slug, t, { prefix: cfg.fleetPrefix })
-      return `${t}\t${branch}\t${memberLabel(slug, t)}`
+      return `${t}\t${branch}\t${labels[i]}`
     })
     // memberBranch has already refused an unusable slug by here.
     process.stdout.write(`${cfg.fleetBase}\t${sanitizeSlug(slug)}\n${rows.join("\n")}\n`)

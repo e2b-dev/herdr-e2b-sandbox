@@ -6,12 +6,64 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Pick a region by name.** `[sandbox] region = "us" | "eu"` decides where a box
+  runs, instead of having to know that a region is spelled as a domain. It is
+  sugar over `domain` (see `docs/adr/0006`): every other part of the plugin keeps
+  speaking domains, box records are unchanged, and `e2b-staging.dev`, `e2b.pro`
+  and BYOC hosts stay reachable by setting `domain` directly. `us` deliberately
+  resolves to *no* domain — the SDK defaults to `e2b.app` and the `e2b` CLI to
+  `e2b.dev`, so no single value is correct for both. An unrecognised region is an
+  error naming the two, never a silent fallthrough.
+- **One API key per region.** `[secrets] e2b_api_key_us` / `e2b_api_key_eu` may
+  sit beside the single `e2b_api_key`, so changing region moves the credential
+  with it. A key belongs to exactly one region, and the mismatch reports as
+  `Invalid API key … Cannot get the team` — which reads like a broken credential
+  when only the destination is wrong. Only the active region's key is ever read.
+- **A template existence check before the sandbox is created**, so a missing
+  template is reported in about 50ms rather than after a boot has to fail first.
+  It fails open: anything short of a definite "no" falls through to the create,
+  because the check is stricter than creating is and must never cost a box that
+  would have booted.
+
 ### Changed
 
+- **A configured region or domain now outranks an `E2B_DOMAIN` that the herdr
+  server merely inherited at launch**, while still losing to one exported in a
+  command you typed. herdr is long-lived and freezes its environment, so without
+  this the new setting would have been a no-op in the situation it exists for.
+- **A fleet member is named after its template's last path segment.** A member
+  booted from `ondrejs-project/herdr-agents` lands on
+  `e2b/<slug>-herdr-agents-<rand4>` rather than
+  `e2b/<slug>-ondrejs-project-herdr-agents-<rand4>` — the project half is shared
+  by every member of a fleet, so it only cost a sidebar row its readability. A
+  roster holding two templates that would name the same member is now refused,
+  naming both.
+- **The `base` fallback message names the region** as well as the template.
+  `template 'x' not found` is the signature symptom of asking the wrong region,
+  and reads as a missing template unless it says where it looked.
+- The README and the config example now document using your own project's
+  templates: the full `<project>/<template>` form, the quoting a `/` requires in
+  a TOML table key, that template names are per-region and so not portable
+  between them, and that the EU listing omits public templates — absence there is
+  not evidence a template is missing.
 - The suggested keybindings are now the full set of three — `prefix+shift+e`
   (open), `prefix+shift+f` (fleet) and `prefix+shift+d` (dashboard) — and the
   README, the manifest and `install.sh` all say that `prefix+shift+d` takes over
   herdr's own `close_workspace`.
+
+### Fixed
+
+- **A broken plugin config no longer reports itself as a missing API key.** The
+  credential pre-flight ran its resolver with stderr and the exit code both
+  discarded, so any fatal config error — a mistyped region, say — degraded into
+  the generic "No E2B API key" several calls later, sending you to check a
+  credential that was fine.
+- **`e2b-fleet` no longer blames the task slug for every naming failure.** That
+  was accurate while an unusable slug was the only way to fail, but the naming
+  helper prints its own reason on stderr directly above, and a second guessed
+  cause could contradict it.
 
 ## [0.0.1] - 2026-08-18
 

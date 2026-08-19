@@ -13,9 +13,23 @@
 import { appendFile } from "node:fs/promises"
 import { Sandbox, NotFoundError } from "e2b"
 
-import { loadConfig, resolveTemplate, resolveLifecycle, resolveEnv, CONFIG_PATH } from "./config.js"
+import {
+  loadConfig,
+  resolveTemplate,
+  resolveLifecycle,
+  resolveEnv,
+  describeRegion,
+  CONFIG_PATH,
+} from "./config.js"
 import { seedCommand } from "./fleet-seed.js"
-import { requireApiKey, sdkConn, warnCredentials, notify } from "./shared.js"
+import {
+  requireApiKey,
+  sdkConn,
+  warnCredentials,
+  notify,
+  isMissingTemplateError,
+  probeTemplate,
+} from "./shared.js"
 import { writeRecord, readRecord, logPath } from "./store.js"
 import { uploadSnapshot } from "./upload.js"
 
@@ -148,26 +162,47 @@ async function main() {
       metadata,
       lifecycle: resolveLifecycle(cfg),
     }
-    try {
-      // envs is per-sandbox and per-template: it never enters the image, so a
-      // credential here is not baked into anything shareable, and it is resolved
-      // fresh on every create rather than read back from the record.
-      sandbox = await Sandbox.create(template, { ...opts, envs: resolveEnv(cfg, template) })
-    } catch (e) {
-      // If a custom template isn't built yet, don't hard-fail — fall back to base.
-      const msg = (e && e.message) || String(e)
-      if (template !== "base" && /template|not\s*found|404|does not exist/i.test(msg)) {
-        await log(`template '${template}' unavailable (${msg}); falling back to 'base'`)
-        notify("E2B", `Template '${template}' not found — using base`)
-        await step("creating sandbox (base — fallback)")
-        // `base`'s env, not the requested template's: the box you actually get
-        // is a base box, and handing it a credential for an agent it doesn't
-        // ship is a secret sent somewhere with no reason to hold it.
-        sandbox = await Sandbox.create("base", { ...opts, envs: resolveEnv(cfg, "base") })
-        usedTemplate = "base"
-      } else {
-        throw e
+    // Why the template can't be booted, once known — set either by the probe
+    // below or by a create that failed. One reason, one fallback, so both routes
+    // report identically.
+    let unavailable = null
+
+    // Ask before booting. A create has to FAIL before it can tell us a template
+    // is missing; asking costs ~50ms. `probeTemplate` answers `false` only when
+    // it is sure, and `null` when it can't tell (a foreign-namespace 400, a
+    // network blip) — so this can save a doomed create but never cost a box that
+    // would have booted. `base` is not probed: it is the fallback itself.
+    if (template !== "base" && (await probeTemplate(template, conn)) === false) {
+      unavailable = "checked before creating"
+    }
+
+    if (!unavailable) {
+      try {
+        // envs is per-sandbox and per-template: it never enters the image, so a
+        // credential here is not baked into anything shareable, and it is resolved
+        // fresh on every create rather than read back from the record.
+        sandbox = await Sandbox.create(template, { ...opts, envs: resolveEnv(cfg, template) })
+      } catch (e) {
+        // If a custom template isn't built yet, don't hard-fail — fall back to base.
+        const msg = (e && e.message) || String(e)
+        if (template !== "base" && isMissingTemplateError(msg)) unavailable = msg
+        else throw e
       }
+    }
+
+    if (unavailable) {
+      // Name the REGION, not just the template. "template 'x' not found" is the
+      // signature symptom of asking the wrong region, and reads as a missing
+      // template unless it says where we looked.
+      const where = describeRegion(conn.domain)
+      await log(`template '${template}' not found in ${where} (${unavailable}); falling back to 'base'`)
+      notify("E2B", `Template '${template}' not found in ${where} — using base`)
+      await step("creating sandbox (base — fallback)")
+      // `base`'s env, not the requested template's: the box you actually get
+      // is a base box, and handing it a credential for an agent it doesn't
+      // ship is a secret sent somewhere with no reason to hold it.
+      sandbox = await Sandbox.create("base", { ...opts, envs: resolveEnv(cfg, "base") })
+      usedTemplate = "base"
     }
     created = true
     boxTemplate = usedTemplate

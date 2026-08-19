@@ -147,7 +147,7 @@ sdk_kill() {
 # Optional arg: a domain from a box record, which wins over the resolved one so
 # every verb acts on the cluster that actually holds that box.
 ensure_e2b_env() {
-  local box_domain="${1:-}" line node_bin
+  local box_domain="${1:-}" line node_bin env_out
   if [ -z "${E2B_API_KEY:-}" ] || [ -z "${E2B_DOMAIN:-}" ]; then
     # e2b_node, not bare `node`: under `bash -lc` a version-managed node (mise,
     # nvm, volta) is often not on PATH at all, and silently resolving nothing is
@@ -160,7 +160,17 @@ ensure_e2b_env() {
           E2B_DOMAIN=*)  [ -z "${E2B_DOMAIN:-}" ]  && export E2B_DOMAIN="${line#E2B_DOMAIN=}" ;;
         esac
       done <<EOF
-$("$node_bin" "$PLUGIN_DIR/src/resolve-env.js" 2>/dev/null || true)
+$(
+        # stderr is folded in so a FATAL config error is seen. Without this an
+        # unknown [sandbox] region degrades into the generic "No E2B API key"
+        # several calls later, which names the wrong problem entirely. Warning
+        # lines that aren't NAME=value simply don't match the cases above.
+        env_out=$("$node_bin" "$PLUGIN_DIR/src/resolve-env.js" 2>&1) || {
+          printf '%s\n' "$env_out" >&2
+          env_out=""
+        }
+        printf '%s\n' "$env_out"
+      )
 EOF
     fi
   fi

@@ -13,18 +13,55 @@
 # picked up by the running herdr server with no restart. https://e2b.dev/dashboard
 # e2b_api_key = "e2b_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
-[sandbox]
-# E2B cluster to provision on. Leave unset and the plugin resolves it in this
-# order: $E2B_DOMAIN → this key → the cluster your `e2b auth login` is on
-# (read from ~/.e2b/config.json) → the SDK default.
+# A key belongs to exactly ONE region, and pointing one at the other region fails
+# with `Invalid API key … Cannot get the team` — which reads like a broken
+# credential when the credential is fine and only the destination is wrong.
 #
-# Set it only to PIN a cluster. The reason not to leave this to the ambient
-# environment: herdr runs plugin commands as `bash -lc`, which never reads
-# ~/.zshrc, so a region exported by a shell hook is invisible to a keybind — the
-# same verb would provision on a different cluster depending on how you invoked
-# it. Whatever resolves here is stored on the box record, so a box always stays
-# on the cluster that created it, even if you switch regions afterwards.
-# domain = "e2b.dev"
+# So if you work in both, keep one key per region. Whichever region `[sandbox]
+# region` selects is the key that gets used, and the other is never read — so
+# switching region is a one-word edit that cannot leave the key behind. This
+# matters more here than in a shell: herdr is long-lived and cannot see a
+# shell-level region switch, so THIS FILE is the switch.
+#
+# Optional. With only `e2b_api_key` set, that one is used for every region.
+# e2b_api_key_us = "e2b_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+# e2b_api_key_eu = "e2b_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+#
+# Pinning a `domain` instead of naming a region works the same way when that
+# domain belongs to a named region. A domain that does not (e2b-staging.dev,
+# e2b.pro, a BYOC host) uses the plain `e2b_api_key` — no region key is borrowed
+# for a cluster it was not issued for.
+
+[sandbox]
+# The region your boxes run in: "us" (the default) or "eu". This is the key to
+# reach for — `domain` below is the mechanical value it resolves to.
+#
+#   us  -> the default region. Deliberately resolves to NO domain: the E2B SDK
+#          defaults to e2b.app and the `e2b` CLI to e2b.dev, so no single value
+#          is correct for both, and absent is.
+#   eu  -> e2b-juliett.dev
+#
+# Only these two names exist (see docs/adr/0006). A region you have not heard of
+# is an error, never a silent fallthrough — anything else is a `domain`.
+#
+# NOTE templates are per-region, so `templates` below is not portable between
+# them: a name that exists in one region can be missing in the other.
+# region = "eu"
+
+# The E2B cluster host, and the escape hatch for any region that has no name —
+# e2b-staging.dev, e2b.pro, a BYOC host. Setting this OUTRANKS `region`.
+#
+# Leave both unset and the plugin resolves the host in this order:
+# $E2B_DOMAIN → this key → the region your `e2b auth login` is on (read from
+# ~/.e2b/config.json) → the SDK default.
+#
+# Set one of these only to PIN a region. The reason not to leave it to the
+# ambient environment: herdr runs plugin commands as `bash -lc`, which never
+# reads ~/.zshrc, so a region exported by a shell hook is invisible to a keybind
+# — the same verb would provision in a different region depending on how you
+# invoked it. Whatever resolves here is stored on the box record, so a box always
+# stays in the region that created it, even if you switch regions afterwards.
+# domain = "e2b-staging.dev"
 
 # E2B template. "base" (default) is minimal and always available — fine to try
 # the flow, but tight on disk/tools for real work.
@@ -41,10 +78,26 @@ template     = "base"
 # claude, codex, opencode, amp, grok, droid, prime and base — so you only need
 # this key to REPLACE that menu with your own. Templates named in template_rules
 # are added automatically, and `t` in the picker takes any name you type.
-# Verify names with `e2b template list`: they are per-cluster, so a template on
-# prod may not exist on your EU cluster (provisioning then falls back to base
-# and says so).
-# templates = ["base", "my-custom-template", "opencode"]
+#
+# YOUR OWN PROJECT'S TEMPLATES go here by their FULL name, `<project>/<template>`
+# — the form the E2B dashboard shows. Write it out; the plugin never builds the
+# project half for you, and it never guesses a bare name into a namespaced one.
+# templates = ["ondrejs-project/herdr-agents", "ondrejs-project/claude-smol", "claude", "base"]
+#
+# Finding the names: `e2b template list`. Two things that list will not tell you.
+#   - Names are PER REGION. The same project name can exist in both regions
+#     owning different templates, so this list is NOT portable between them —
+#     moving `region` means revisiting it.
+#   - In the EU the listing returns only your project's own templates, never the
+#     public ones. So a public template missing from `e2b template list` there is
+#     NOT evidence it is missing: `claude`, `codex`, `opencode`, `amp`, `droid`
+#     and `base` all resolve in the EU even though none of them are listed.
+#
+# Get the project half wrong and E2B says so precisely, naming the project you
+# actually belong to:
+#   400: namespace 'e2b' must match your team 'ondrejs-project'
+# A template that is genuinely missing is a different error, and provisioning
+# falls back to `base` and says so.
 
 # Per-branch template overrides — first matching rule (JS regex on the branch)
 # wins over `template`. Route a branch to the right agent by naming it, e.g.
@@ -96,6 +149,16 @@ server_port  = 3000
 # a box booted from `base` does not. Keyed by template name (`e2b template list`,
 # or E2B's public names), so it lines up with `[sandbox] templates` and with the
 # roster a fleet is built from.
+#
+# A namespaced name contains a `/`, so its table header must be QUOTED — the key
+# is the whole name, exactly as written in `[sandbox] templates`:
+#
+#   [templates."ondrejs-project/herdr-agents".env]
+#   ANTHROPIC_API_KEY = "sk-ant-…"
+#
+# Unquoted, TOML reads the `/` as part of a bare key and the table never matches
+# the template, so the box boots with no credential and the agent opens on its
+# sign-in screen.
 #
 # Applied at CREATE only — `Sandbox.create`, not `connect`. Rotating a key here
 # does not reach a box that already exists: `e2b-box kill` it and open a new one.
@@ -206,6 +269,8 @@ ignore = [".git", "node_modules", ".next", "dist", "build", ".turbo", ".cache",
 # [fleet.agents]
 # claude = "claude --permission-mode acceptEdits"
 # base = ""
+# # A namespaced template is one key, quoted — same spelling as everywhere else:
+# "ondrejs-project/herdr-agents" = "claude --dangerously-skip-permissions"
 
 # What a member's box runs to seed its agent's first-run state, per template, just
 # before the agent command is typed. This is what makes a member arrive at a prompt

@@ -840,7 +840,11 @@ fi
 # stderr is deliberately NOT captured: node's own message (an unusable slug, a
 # runtime warning) must reach the terminal rather than end up parsed as a plan.
 plan=$("$NODE" "$PLUGIN_DIR/src/fleet-name.js" "$slug" "${templates[@]}") || {
-  echo "$FLEET_CLI: that task slug can't become a git branch — give it one with letters or digits in it." >&2
+  # The helper already printed WHY on stderr — an unusable slug, or two roster
+  # entries that name the same member. Don't guess a cause here: this line used
+  # to blame the slug for every failure, which flatly contradicted the specific
+  # message sitting directly above it.
+  echo "$FLEET_CLI: nothing was created." >&2
   exit 2
 }
 # Split the header by hand: `read` treats a tab as whitespace and would swallow

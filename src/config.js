@@ -301,7 +301,8 @@ export function readCliConfig(file = CLI_CONFIG_PATH) {
  * Resolve the API key and the cluster domain TOGETHER, from these sources:
  *
  *   1. env             `E2B_API_KEY` / `E2B_DOMAIN`   (explicit — always wins)
- *   2. plugin config   `[secrets].e2b_api_key` / `[sandbox].domain`
+ *   2. plugin config   `[secrets].e2b_api_key_<region>`, else `[secrets].e2b_api_key`
+ *                      / `[sandbox].region`, else `[sandbox].domain`
  *   3. `e2b` CLI login `~/.e2b/config.json`           (key + cluster, together)
  *
  * A key belongs to exactly one cluster, so key and domain must never be taken
@@ -313,6 +314,38 @@ export function readCliConfig(file = CLI_CONFIG_PATH) {
  *
  * Pure — callers pass the sources in, so this is testable without touching disk.
  */
+/**
+ * The regions a user may name, and the domain each one means. Exactly two, by
+ * decision (ADR-0006): anything else — staging, e2b.pro, a BYOC host — is spelled
+ * as a `[sandbox] domain`, which stays supported and untouched.
+ *
+ * `us` maps to **null**, not to "e2b.dev". The SDK defaults to `e2b.app` and the
+ * `e2b` CLI to `e2b.dev`; no single string is correct for both, so absent is the
+ * only correct value for the default region.
+ */
+const REGIONS = Object.freeze({ us: null, eu: "e2b-juliett.dev" })
+
+/** The same table read backwards, for a config that pins a `domain` instead of
+ * naming a region. Only regions with a domain appear — `us` is absent because
+ * its domain is absent, which is the point of it. */
+const REGION_BY_DOMAIN = Object.freeze(
+  Object.fromEntries(Object.entries(REGIONS).filter(([, d]) => d).map(([r, d]) => [d, r])),
+)
+
+/**
+ * How to name a region in a message. A wrong-region request fails as
+ * `template 'x' not found`, which reads as a missing template — so anything
+ * reporting that has to say WHERE it looked.
+ *
+ * A domain with no region name is printed as itself: staging, e2b.pro and BYOC
+ * hosts have no name to give, and inventing one would be worse than the host.
+ */
+export function describeRegion(domain) {
+  if (!domain) return "US (the default region)" // US resolves to no domain at all
+  const name = REGION_BY_DOMAIN[domain]
+  return name ? `${name.toUpperCase()} (${domain})` : domain
+}
+
 export function resolveCredentials({ env = {}, secrets = {}, sandbox = {}, cli = {} } = {}) {
   // Was this process spawned by the herdr daemon (an action, pane, or event) or
   // typed into a shell? herdr injects HERDR_PLUGIN_ID into every plugin command
@@ -330,8 +363,32 @@ export function resolveCredentials({ env = {}, secrets = {}, sandbox = {}, cli =
   const fromDaemon = Boolean(env.HERDR_PLUGIN_ID || env.HERDR_PLUGIN_ROOT)
   const envKey = env.E2B_API_KEY?.trim() || null
   const envDomain = env.E2B_DOMAIN?.trim() || null
-  const cfgKey = typeof secrets.e2b_api_key === "string" ? secrets.e2b_api_key.trim() : null
   const cfgDomain = typeof sandbox.domain === "string" ? sandbox.domain.trim() : null
+  const cfgRegion = typeof sandbox.region === "string" ? sandbox.region.trim().toLowerCase() : null
+  if (cfgRegion && !(cfgRegion in REGIONS)) {
+    throw new Error(
+      `Unknown [sandbox] region '${cfgRegion}' in ${CONFIG_PATH}. ` +
+        `Valid regions: ${Object.keys(REGIONS).join(", ")}. ` +
+        "For any other cluster (staging, e2b.pro, a BYOC host) set [sandbox] domain instead.",
+    )
+  }
+
+  // Which region's key applies, decided from the CONFIG alone: `region`, or a
+  // `domain` that names one, else the default region. Deliberately NOT from the
+  // resolved domain — that would be circular, since the resolved domain can come
+  // from the CLI login and whether that login is usable depends on which key we
+  // just picked. A `domain` that names no region (staging, e2b.pro, BYOC) has no
+  // per-region key at all rather than silently borrowing the US one.
+  const activeRegion = cfgRegion ?? (cfgDomain ? (REGION_BY_DOMAIN[cfgDomain] ?? null) : "us")
+  // Only the ACTIVE region's key is ever read, so the other region's credential
+  // is never handed to a subprocess or an SDK call.
+  const regionKeyName = activeRegion ? `e2b_api_key_${activeRegion}` : null
+  const cfgRegionKey =
+    regionKeyName && typeof secrets[regionKeyName] === "string" ? secrets[regionKeyName].trim() : null
+  const cfgPlainKey = typeof secrets.e2b_api_key === "string" ? secrets.e2b_api_key.trim() : null
+  const cfgKey = cfgRegionKey || cfgPlainKey
+  // Which key the config actually gave us, so a warning can name the line to edit.
+  const cfgKeyName = cfgRegionKey ? `[secrets].${regionKeyName}` : "[secrets].e2b_api_key"
 
   // Tier order: fresh sources first when the env can't be trusted to be fresh.
   const keyTiers = fromDaemon
@@ -342,10 +399,26 @@ export function resolveCredentials({ env = {}, secrets = {}, sandbox = {}, cli =
   // The CLI's cluster is only trustworthy for the key we actually resolved.
   const cliDomainUsable = Boolean(cli.domain) && (keySource === "cli" || !apiKey || apiKey === cli.apiKey)
   const cliDomain = cliDomainUsable ? cli.domain : null
+  // Tiers carry a `decided` flag rather than relying on the value being truthy,
+  // because a tier must be able to answer "no domain" ON PURPOSE. `region = "us"`
+  // is exactly that answer: its correct value is absent, and a plain null would
+  // fall straight through to the CLI login's cluster — so naming your region US
+  // while logged into the EU would silently keep provisioning in the EU.
+  // An explicit `domain` still outranks a `region`; both are the config tier.
+  const cfgDomainResolved = cfgDomain ?? (cfgRegion ? REGIONS[cfgRegion] : null)
+  const cfgDecided = Boolean(cfgDomain) || Boolean(cfgRegion)
   const domainTiers = fromDaemon
-    ? [[cfgDomain, "config"], [cliDomain, "cli"], [envDomain, "env"]]
-    : [[envDomain, "env"], [cfgDomain, "config"], [cliDomain, "cli"]]
-  const [domain, domainSourceFound] = domainTiers.find(([v]) => v) ?? [null, null]
+    ? [
+        [cfgDomainResolved, "config", cfgDecided],
+        [cliDomain, "cli", Boolean(cliDomain)],
+        [envDomain, "env", Boolean(envDomain)],
+      ]
+    : [
+        [envDomain, "env", Boolean(envDomain)],
+        [cfgDomainResolved, "config", cfgDecided],
+        [cliDomain, "cli", Boolean(cliDomain)],
+      ]
+  const [domain, domainSourceFound] = domainTiers.find(([, , decided]) => decided) ?? [null, null]
   const domainSource = domainSourceFound ?? "sdk-default"
 
   let warning = null
@@ -354,14 +427,19 @@ export function resolveCredentials({ env = {}, secrets = {}, sandbox = {}, cli =
       `Ignoring a stale E2B_DOMAIN (${envDomain}) inherited from the herdr server — ` +
       `it is frozen at the value herdr launched with. Using ${domain ?? "the SDK default"} ` +
       `from your ${domainSource === "cli" ? "`e2b auth login`" : "plugin config"} instead.`
-  } else if (domainSource !== "cli" && !cfgDomain && !envDomain && cli.domain && !cliDomainUsable) {
+  } else if (domainSource !== "cli" && !cfgDecided && !envDomain && cli.domain && !cliDomainUsable) {
+    // `cfgDecided`, not `cfgDomain`: naming a `region` pins the region just as
+    // firmly as pinning a `domain` does, so warning that the region is a guess
+    // would be telling the user to pin something they already pinned.
+    //
     // Name the source we actually took the key from — "check your config" is
-    // useless advice when the key came from the environment.
-    const where = keySource === "env" ? "$E2B_API_KEY" : "[secrets].e2b_api_key in config.toml"
+    // useless advice when the key came from the environment, and naming
+    // `e2b_api_key` is useless when the key came from `e2b_api_key_eu`.
+    const where = keySource === "env" ? "$E2B_API_KEY" : `${cfgKeyName} in config.toml`
     const fix =
       keySource === "env"
         ? "export E2B_DOMAIN alongside it"
-        : "remove [secrets].e2b_api_key to follow your CLI login, or set [sandbox].domain"
+        : `remove ${cfgKeyName} to follow your CLI login, or set [sandbox].region`
     warning =
       `E2B cluster is a guess: the key from ${where} is not the one \`e2b auth login\` saved ` +
       `(that login is on ${cli.domain}), so its cluster can't be assumed. ` +

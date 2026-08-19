@@ -25,9 +25,28 @@ _Avoid_: State file, cache
 **Template**:
 The E2B image a box boots from, and therefore which toolchain and coding agent it
 already has installed (`claude`, `codex`, `grok`, `base`, …). A template is a choice
-made once, when the box is created.
+made once, when the box is created. A template belongs to one project in one region,
+and its name is written the way that region names it — `<project>/<template>` for a
+project's own templates, bare for E2B's public ones.
 _Avoid_: Image, agent, harness — a template may ship an agent, but the two are not the
 same thing and herdr's own "agent" means a *local* pane process
+
+### Regions and projects
+
+**Region**:
+Where an E2B sandbox physically runs. **US** (`e2b.dev`) is the default and what
+every user gets unless they say otherwise; **EU** (`e2b-juliett.dev`) is opt-in.
+A box is created in one region and stays there for its whole life.
+_Avoid_: Cluster, foxtrot, juliett — those are E2B's internal names for the same
+thing, and neither reads as a location to a user choosing one
+
+**Project**:
+The E2B account a template and an API key belong to, and the namespace a
+template's name is prefixed with (`ondrejs-project/herdr-agents`). One project
+lives in exactly one region.
+_Avoid_: Team (E2B's former name for it, still visible in older APIs), org,
+workspace (that word is already herdr's), and *project path* — the directory the
+worktree is uploaded to inside a box — which is a different thing entirely
 
 ### Worktrees and fleets
 
@@ -58,7 +77,9 @@ name that says what the fleet is *for*, shared by every member.
 
 **Roster**:
 The templates chosen for one fleet, one member each. Picked per fleet; a template
-appears in a roster at most once.
+appears in a roster at most once, and no two of them may name the same member — a
+member is named after its template's last segment, so `ondrejs-project/amp` and
+`mpp/amp` would both claim one name.
 
 **Fleet task**:
 The instruction handed to every member's agent at launch, identical for all of them.

@@ -28,7 +28,9 @@ the script header — then fix this file.
 - Config file: `~/.config/herdr/plugins/config/e2b-dev.herdr-e2b/config.toml`
   (or `$HERDR_PLUGIN_CONFIG_DIR/config.toml`).
 - Fleet members are found by BRANCH PREFIX `e2b/<slug>-` — nothing about a fleet is
-  persisted as an object (ADR-0001). Branch shape: `e2b/<slug>-<template>-<rand4>`.
+  persisted as an object (ADR-0001). Branch shape: `e2b/<slug>-<template>-<rand4>`, where `<template>` is the template's
+  LAST path segment — `ondrejs-project/herdr-agents` gives `…-herdr-agents-<rand4>`.
+  Two roster entries that would collapse to the same name are refused, naming both.
 
 ## e2b-box
 
