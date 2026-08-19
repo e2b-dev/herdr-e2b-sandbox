@@ -166,7 +166,7 @@ when the other two never ran. Rubrics, LLM judging and ranking stay out
 | `download.js` | `pull` — reverse of upload. **Path-safety guards** (`relIsUnsafe`, `safeDest`) so a write can never escape the worktree. Only writes files that differ; reports each. |
 | `kill.js` | `Sandbox.kill` (bounded), idempotent — "already gone" vs "killed". |
 | `exec.js` | One command inside a tracked box → one JSON object on stdout (`{ok, exitCode, stdout, stderr, error}`). Started in the background and awaited by hand, because the SDK's `requestTimeoutMs` bounds the handshake, not the run; on the bound the process is **killed**. Draws the line the grader depends on: `ok:false` = never measured, `ok:true` = the command's own exit code. |
-| `lifecycle.js` | `pause` / `resume` for a tracked box — `Sandbox.pause` (files + memory snapshot) and `Sandbox.connect` (the resume path; there is no separate resume call). Owns the record's `paused` / `ready` status for both. |
+| `lifecycle.js` | `pause` / `resume` for a tracked box — `Sandbox.pause` (files + memory snapshot) and `Sandbox.connect` (the resume path; there is no separate resume call). Writes the record's `paused` / `ready` status for both (a box that pauses underneath an attached session gets its `paused` written by `attach.js` on the way out — the client is the only thing present at that moment). |
 | `attach.js` | The terminal client (ADR-0008): reattaches to the box's recorded terminal when `attach-plan.js` proves it is the box's own (then nudges a repaint via resize), else creates a fresh raw-mode PTY stamped `HERDR_E2B_TERMINAL=<box key>` — pid + geometry recorded on the box record. The plugin's only long-lived TTY-owning process. Reports by exit code: 0 clean · 10 never attached · 11 box gone · 12 attached-then-lost — the contract `connect_shell` branches on. |
 | `attach-plan.js` | The attach-or-create decision, pure: record's terminal fields + process listing + pane size → `{action: "attach", pid, resize}` or `{action: "create", reason}`. Validates the marker before trusting a pid (pids get recycled), and picks the repaint nudge: one resize when geometry differs, away-and-back when it doesn't. Covered by `test/attach-plan.test.js`. |
 | `store.js` | The record model: atomic (temp+rename) shallow-merge `writeRecord`, `readRecord`, `listRecords`. Defines `BOXES_DIR`. |
@@ -210,7 +210,7 @@ documents `HERDR_PLUGIN_CONFIG_DIR` as the home for user-editable config and
 Credentials therefore live in `$CONFIG_DIR/config.toml` (mode `0600`), never in
 `HERDR_PLUGIN_ROOT` — that is a managed source checkout. The record is the contract between the writer
 (`provision.js`), the reader (`e2b-box` spinner / `status` / `list`), and the
-dashboard. Key fields: `key`, `label`, `status` (`provisioning`/`ready`/`failed`),
+dashboard. Key fields: `key`, `label`, `status` (`provisioning`/`ready`/`failed`/`paused`),
 `step`, `sandboxId`, `template`, `url`, `projectPath`, `worktreePath`, `files`,
 `onTimeout` + `keepMemory` (the box's create-time lifecycle — what it does at its
 idle timeout, which the close-time messages read instead of the current config),

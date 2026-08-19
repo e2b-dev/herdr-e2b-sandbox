@@ -85,6 +85,11 @@ It lands back on the same fresh-shell problem.
   guards stay exactly where they are.
 - **The 2-second "never attached" heuristic goes away.** Owning the process means it can say
   what happened instead of us inferring it from a stopwatch (`bin/e2b-box:367`).
+- **The client corrects the record on the way out.** Only the explicit pause verb wrote
+  `paused`, so a box auto-pausing underneath a session left a record claiming `ready`. The
+  client is the only thing present at that moment: one `getInfo` on the observed loss — an
+  act, not a poll — writes the truth, and the readiness spinner treats `paused` as settled
+  instead of a state worth waiting on.
 - **Removing tmux removes the modified-Enter bug, not just the workaround.** `extended-keys on`
   existed because tmux itself re-encodes those sequences; the live failure it was patching
   (fleet t-16) cannot recur with no multiplexer in the path.

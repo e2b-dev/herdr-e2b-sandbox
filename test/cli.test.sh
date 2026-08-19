@@ -170,6 +170,25 @@ out=$(KEY=nobox "$E2B" wait --timeout-ms 0 2>&1); rc=$?
 { [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "positive integer"; } \
   && ok "wait --timeout-ms 0 → exit 2" || bad "wait --timeout-ms 0 (rc=$rc, out=$out)"
 
+# A paused box is a SETTLED state, not an unknown one worth spinning on: with
+# auto-pause the default, a box pausing mid-boot is reachable, and it used to
+# leave the user watching the spinner to the twenty-minute cap.
+printf '{"key":"pausedbox","label":"pausedbox","status":"paused","sandboxId":"sbx_p1"}\n' \
+  > "$HERDR_PLUGIN_STATE_DIR/boxes/pausedbox.json"
+out=$(KEY=pausedbox "$E2B" wait --timeout-ms 3000 2>&1); rc=$?
+{ [ "$rc" -eq 1 ] \
+  && printf '%s' "$out" | grep -qi "paused" \
+  && ! printf '%s' "$out" | grep -q "timed out"; } \
+  && ok "wait on a paused box → says paused immediately, doesn't spin to the cap" \
+  || bad "wait on paused box (rc=$rc, out=$out)"
+# ...and the machine-readable shape says the same thing: "timeout" must not
+# swallow a settled state a scripted caller would branch on.
+out=$(KEY=pausedbox "$E2B" wait --timeout-ms 3000 --json 2>/dev/null); rc=$?
+{ [ "$rc" -eq 1 ] && printf '%s' "$out" | jq -e '.ok == false and .status == "paused"' >/dev/null; } \
+  && ok "wait --json on a paused box → status \"paused\", not \"timeout\"" \
+  || bad "wait --json on paused box (rc=$rc, out=$out)"
+rm -f "$HERDR_PLUGIN_STATE_DIR/boxes/pausedbox.json"
+
 out=$("$E2B" doctor 2>&1); rc=$?
 { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "state dir"; } \
   && ok "doctor reports and exits 0 even with warnings" || bad "doctor (rc=$rc)"

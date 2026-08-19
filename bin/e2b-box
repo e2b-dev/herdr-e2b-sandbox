@@ -433,6 +433,11 @@ spin_until_ready() {
     case "$st" in
       ready) break ;;
       failed) [ "$tty" = 1 ] && printf '\r\033[K'; echo "✗ E2B sandbox failed: ${step:-$laststep}"; echo "  see: e2b-box logs"; return 1 ;;
+      # A paused box is a SETTLED state, not an unknown one worth waiting on —
+      # with auto-pause the default, a box can pause mid-boot, and spinning on
+      # it would hold the user to the twenty-minute cap for an answer the
+      # record already has.
+      paused) [ "$tty" = 1 ] && printf '\r\033[K'; echo "⏸ sandbox is paused — 'e2b-box open' resumes it and continues."; return 1 ;;
       "")  # transient (mid-write / just before first write) — tolerate briefly
         missing=$((missing + 1))
         if [ "$missing" -ge 20 ]; then
@@ -797,13 +802,26 @@ case "$cmd" in
     }
     started=$(date +%s)
     if [ -n "$wait_ms" ]; then WAIT_MAX_ITERS=$(( (wait_ms + 299) / 300 )); export WAIT_MAX_ITERS; fi
-    if spin_until_ready "$key" "waiting for"; then
+    # In --json mode the spinner's human lines (failed/paused/timed out) move to
+    # stderr, so stdout is exactly one JSON object — the contract --json names.
+    spin_rc=0
+    if [ "$json" -eq 1 ]; then
+      spin_until_ready "$key" "waiting for" >&2 || spin_rc=$?
+    else
+      spin_until_ready "$key" "waiting for" || spin_rc=$?
+    fi
+    if [ "$spin_rc" -eq 0 ]; then
       [ "$json" -eq 1 ] && jq -cn --arg k "$key" --argjson e "$(( ($(date +%s) - started) * 1000 ))" \
         '{ok:true, key:$k, status:"ready", elapsedMs:$e}'
       exit 0
     fi
-    [ "$json" -eq 1 ] && jq -cn --arg k "$key" --argjson e "$(( ($(date +%s) - started) * 1000 ))" \
-      '{ok:false, key:$k, status:"timeout", elapsedMs:$e}'
+    # Not ready — but "timeout" must not swallow the settled states: a paused
+    # (or failed) box is an answer, and a scripted caller branching on status
+    # should see the answer, not the stopwatch.
+    st=$(field "$key" status)
+    case "$st" in paused|failed) ;; *) st="timeout" ;; esac
+    [ "$json" -eq 1 ] && jq -cn --arg k "$key" --arg s "$st" --argjson e "$(( ($(date +%s) - started) * 1000 ))" \
+      '{ok:false, key:$k, status:$s, elapsedMs:$e}'
     exit 1
     ;;
   doctor)
