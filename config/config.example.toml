@@ -118,13 +118,19 @@ template     = "base"
 #   timeout_ms = 10800000   # 3h  (needs a paid E2B plan)
 timeout_ms   = 3600000
 
-# Pause the sandbox on idle-timeout instead of killing it (SDK lifecycle
-# onTimeout=pause), so its state is preserved. Works on the free tier and is the
-# best way to not lose work at the 1h timeout. Default false; set true to enable.
-auto_pause   = false
-# Only when auto_pause: wake the sandbox (restore its memory) automatically on the
-# next connect. Default true. Set false to keep a filesystem-only snapshot that
-# cold-boots on reconnect (loses running processes, but cheaper to keep paused).
+# What happens at the idle timeout. Default true: the sandbox pauses with a FULL
+# memory snapshot — billing stops, and your agent, its processes and everything in
+# memory are still there on the next `e2b-box open`. Works on the free tier.
+# Set false for throwaway boxes that are simply killed at the timeout.
+auto_pause   = true
+# Only when auto_pause: the snapshot kind. Default true (full memory snapshot).
+# Set false for a filesystem-only snapshot — cheaper to keep paused, but resuming
+# cold-boots the box from disk, losing running processes. A filesystem-only
+# snapshot can't be woken automatically, so auto_resume must then be false too.
+keep_memory  = true
+# Only when auto_pause: wake the paused sandbox (restore its memory snapshot in
+# place) automatically on the next connect. Default true. Set false to require an
+# explicit resume (`e2b-box resume` / `e2b-box open`).
 auto_resume  = true
 
 # Where the worktree is uploaded inside the sandbox. Defaults to /home/user/project.

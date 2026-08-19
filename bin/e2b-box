@@ -247,12 +247,28 @@ pull_risk() {
 }
 
 # After you exit the sandbox shell, decide what to do with the sandbox: pull your work
-# back down, kill it, or leave it (auto_pause will pause it at the timeout).
+# back down, kill it, or leave it. What "leave it" means depends on the box's own
+# lifecycle, fixed at create time and recorded as `onTimeout`: by default it pauses
+# with a full memory snapshot at the idle timeout; with auto_pause off it is killed.
 on_close_prompt() {
-  local k="$1" sid="$2" ans a2 risk dest node_bin lbl st
+  local k="$1" sid="$2" ans a2 risk dest node_bin lbl st idle
   lbl=$(field "$k" label); : "${lbl:=$k}"
   [ -t 0 ] || return 0   # non-interactive: leave the sandbox as-is
   st=$(field "$k" status)
+  # What THIS box does at its idle timeout — from the record (create-time truth),
+  # not the config file, which may have changed since. Empty (a record from
+  # before this was tracked) is genuinely unknown, so say so rather than guess.
+  case "$(field "$k" onTimeout)" in
+    pause)
+      # keepMemory is a JSON boolean; field()'s `// empty` eats a false, so read it raw.
+      if [ "$(rec "$k" | jq -r '.keepMemory' 2>/dev/null)" = false ]; then
+        idle="auto-pauses at the idle timeout (filesystem-only snapshot — reopening cold-boots it)"
+      else
+        idle="auto-pauses at the idle timeout; 'e2b-box open' puts you back"
+      fi ;;
+    kill) idle="killed at the idle timeout (auto_pause is off); 'e2b-box open' boots a fresh one" ;;
+    *)    idle="paused or killed at its idle timeout, per its auto_pause setting; 'e2b-box open' reconciles" ;;
+  esac
   echo
   # A paused box needs a way back IN, and "leave running" would be a lie for it.
   if [ "$st" = paused ]; then
@@ -282,7 +298,7 @@ on_close_prompt() {
       echo "  pulling '$lbl' → $dest …"
       "$node_bin" "$PLUGIN_DIR/src/download.js" "$(jq -cn --arg k "$k" --arg d "$dest" '{key:$k,destRoot:$d}')"
       git -C "$dest" rev-parse --git-dir >/dev/null 2>&1 && echo "  review: git -C '$dest' diff"
-      echo "  sandbox left running (auto-pauses at the timeout; e2b-box kill to stop it)."
+      echo "  sandbox left running — $idle. 'e2b-box kill' to stop it now."
       ;;
     k|K|kill)
       if sdk_kill "$sid" "$(field "$k" domain)" >/dev/null 2>&1; then
@@ -295,7 +311,7 @@ on_close_prompt() {
       if [ "$st" = paused ]; then
         echo "  left paused — nothing is billing; 'e2b-box open' resumes it and puts you back."
       else
-        echo "  left running — auto-pauses at the idle timeout; 'e2b-box open' to return."
+        echo "  left running — $idle."
       fi
       ;;
   esac

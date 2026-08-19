@@ -73,23 +73,47 @@ test("templateChoices: configured list + rule templates + default, deduped in or
   assert.deepEqual(templateChoices({ template: "base", templates: [], templateRules: [] }), ["base"])
 })
 
-test("resolveLifecycle: autoPause off → kill", () => {
-  assert.deepEqual(resolveLifecycle({ autoPause: false }), { onTimeout: "kill" })
+test("resolveLifecycle: default (nothing configured) → pause with a full memory snapshot", () => {
+  // The default is a box you can come back to: paused, memory intact, woken on
+  // the next connect. The snapshot kind is stated explicitly — the SDK's default
+  // happens to agree today, but this call is the contract, not their default.
+  assert.deepEqual(resolveLifecycle({}), {
+    onTimeout: { action: "pause", keepMemory: true },
+    autoResume: true,
+  })
+  assert.deepEqual(resolveLifecycle({ autoPause: true, autoResume: true, keepMemory: true }), {
+    onTimeout: { action: "pause", keepMemory: true },
+    autoResume: true,
+  })
 })
 
-test("resolveLifecycle: autoPause on → pause + autoResume", () => {
-  assert.deepEqual(resolveLifecycle({ autoPause: true, autoResume: true }), {
-    onTimeout: "pause",
-    autoResume: true,
+test("resolveLifecycle: auto_pause off → kill at the timeout, as before", () => {
+  assert.deepEqual(resolveLifecycle({ autoPause: false }), { onTimeout: "kill" })
+  // Killing has no snapshot, so the other keys can't soften it.
+  assert.deepEqual(resolveLifecycle({ autoPause: false, keepMemory: false, autoResume: true }), {
+    onTimeout: "kill",
   })
-  assert.deepEqual(resolveLifecycle({ autoPause: true, autoResume: false }), {
-    onTimeout: "pause",
+})
+
+test("resolveLifecycle: filesystem-only snapshot needs auto_resume off", () => {
+  assert.deepEqual(resolveLifecycle({ keepMemory: false, autoResume: false }), {
+    onTimeout: { action: "pause", keepMemory: false },
     autoResume: false,
   })
-  // autoResume defaults to true when unset
-  assert.deepEqual(resolveLifecycle({ autoPause: true }), {
-    onTimeout: "pause",
-    autoResume: true,
+})
+
+test("resolveLifecycle: filesystem-only + auto-resume is rejected before the API", () => {
+  // The SDK/API refuses this pair (a cold-boot snapshot can't be woken by
+  // traffic); reject it here with a message that names both keys and the fix.
+  for (const cfg of [{ keepMemory: false }, { keepMemory: false, autoResume: true }]) {
+    assert.throws(() => resolveLifecycle(cfg), /keep_memory.*auto_resume|auto_resume.*keep_memory/s)
+  }
+})
+
+test("resolveLifecycle: autoResume alone still defaults sensibly", () => {
+  assert.deepEqual(resolveLifecycle({ autoResume: false }), {
+    onTimeout: { action: "pause", keepMemory: true },
+    autoResume: false,
   })
 })
 
