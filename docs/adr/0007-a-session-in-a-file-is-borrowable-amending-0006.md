@@ -110,7 +110,45 @@ session is found, and it is the reason `prefer = "env"` exists.
 now covers two things with different lifetimes and different consequences, and a report
 that renders them identically is hiding the part that matters.
 
-Harnesses beyond codex are unassessed. Amp, droid and prime store credentials in
-locations this ADR has not surveyed; each is a separate finding, and the rule above
-decides them one at a time. A harness whose session is only in a credential store stays
-out, permanently — that half of 0006 is not up for revision.
+The other harnesses have since been surveyed, and the rule above decided all four
+without needing to be bent:
+
+| harness | where the credential lives | verdict |
+|---|---|---|
+| amp | `~/.local/share/amp/secrets.json`, plaintext | borrowable — a plain file, read as a value |
+| prime | `~/.prime/config.json`, plaintext `api_key` | borrowable — a plain file, read as a value |
+| droid | `~/.factory/auth.v2.file`, ciphertext, key file beside it | **out** |
+| claude | macOS Keychain (`Claude Code-credentials`) | **out** |
+
+Amp and prime needed nothing from this ADR — they are 0006's original "a value already
+in a plaintext file the user owns", and only ever lacked a reader.
+
+Droid and claude are the boundary doing its job. Droid's store is encrypted; the key
+sits next to it, so it is decryptable, and decrypting it anyway would make this plugin
+the owner of a format Factory can change without notice.
+
+Claude's is the Keychain, and it earns a longer note because `stablyai/orca` reads
+exactly that item and makes it work — reconstructing the scoped service name from
+`sha256(CLAUDE_CONFIG_DIR).slice(0,8)` and owning the OAuth refresh itself. So the
+question "why not do what orca does" has an answer beyond the rule, and the answer is
+arithmetic. Measured on a live login (2026-08-19): the Keychain blob is
+`{claudeAiOauth:{accessToken, refreshToken, expiresAt, refreshTokenExpiresAt, scopes,
+subscriptionType, rateLimitTier}}`, and the access token had **4.3 hours** left against
+codex's **10 days**. The codex trick — ship the bearer, placeholder the refresh — works
+there precisely because ten days outlasts any box. Four hours does not: a box handed
+that meets a sign-in screen mid-task, which is the failure this feature exists to
+remove, merely postponed.
+
+Making it useful would mean the box refreshing for itself, which means shipping the
+real refresh token, which means two rotators and a laptop logged out of its own
+session. Orca can hold that safely only because it runs claude locally and defers its
+refresh while a PTY is live; a box is remote and unobservable, which is the one part of
+0006's original reasoning that survives contact with the evidence.
+
+So claude's route stays `claude setup-token` — a first-party long-lived token, pasted
+like every other value this plugin accepts. Not a consolation prize: one year against
+four hours. The report names that command rather than leaving "set ANTHROPIC_API_KEY"
+to imply a key the user has to go and find.
+
+A harness whose credential is only in a credential store stays out, permanently. That
+half of 0006 is not up for revision, and the survey above did not need it to be.

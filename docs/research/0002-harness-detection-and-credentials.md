@@ -18,7 +18,7 @@ not installed; its rows come from source and docs only.
 | codex | `codex --version` | `codex login status` — **stderr** | yes, 0/1 | `CODEX_API_KEY` | `OPENAI_API_KEY` | `~/.codex/auth.json`, field `OPENAI_API_KEY` |
 | grok | `grok --version` | `grok models` — first stdout line | **no, always 0** | `XAI_API_KEY` | same | `~/.grok/config.toml`, `[model.<id>] api_key` |
 | opencode | `opencode --version` | `opencode auth list` | **no, always 0** | any of ~190 | `OPENCODE_AUTH_CONTENT` | `~/.config/opencode/opencode.json`, `provider.<id>.options.apiKey` |
-| amp | `amp --version` | `amp usage` | yes, 0/1 | `AMP_API_KEY` | same | none — `~/.local/share/amp/secrets.json`, undocumented |
+| amp | `amp --version` | `amp usage` | yes, 0/1 | `AMP_API_KEY` | same | `~/.local/share/amp/secrets.json`, field `apiKey@<server>` — undocumented, but plaintext and now read (ADR 0007) |
 | droid | `droid --version` | `droid computer list` | yes, 0/1 | `FACTORY_API_KEY` | same | none — `~/.factory/auth.v2.*`, encrypted |
 | prime | `prime-agent --version` (**stderr**) | `prime-agent model list` | **no, always 0** | `PRIME_API_KEY` | same | `~/.prime/config.json`, `api_key` |
 | gemini | `gemini --version` | **none exists** | n/a | `GEMINI_API_KEY` | same | none — OS keychain |

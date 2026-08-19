@@ -79,6 +79,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   provisioning log at the moment it goes missing, instead of being dropped silently.
   The box is still created — an unauthenticated box is what was asked for and is
   still useful.
+- **amp** and **prime** now hand a box the key already sitting in their own config
+  file (`~/.local/share/amp/secrets.json`, `~/.prime/config.json`), taking the report
+  from 3 of 7 harnesses to 5 of 7. No policy change — this is the original rule about
+  a value already in a plaintext file you own; both simply lacked a reader. amp's key
+  is named after the server it belongs to, so the reader takes the default server's
+  entry and refuses when several are present rather than guessing which one a box
+  should get.
+- **droid** and **claude** are deliberately still out, and ADR 0007 now records why
+  rather than leaving it open: droid's store is encrypted, and claude's is the macOS
+  Keychain, which this plugin does not open on any path. Claude's route remains
+  `claude setup-token`.
   (Nothing reads `auth.toml` yet; boxes start using it in the next change.)
 - **Pick a region by name.** `[sandbox] region = "us" | "eu"` is the only way to
   say where a box runs (see `docs/adr/0007`). `us` is the default and needs no

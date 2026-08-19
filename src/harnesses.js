@@ -151,6 +151,16 @@ export const HARNESSES = {
     authArgs: ["auth", "status"],
     hostVar: "ANTHROPIC_API_KEY",
     boxVar: "ANTHROPIC_API_KEY",
+    // The row that cannot be discovered, so its remedy has to carry the whole answer.
+    // Claude keeps its subscription login in the macOS Keychain, which no path here
+    // opens (ADR 0007) — and unlike codex, borrowing it would not help much anyway:
+    // measured on a real login, the access token had about FOUR HOURS left, against
+    // codex's ten days. A box handed that meets a sign-in screen mid-task, which is
+    // the failure this whole feature exists to remove. `claude setup-token` mints a
+    // long-lived token instead, and it is pasted like any other value — so the advice
+    // names it rather than leaving "set ANTHROPIC_API_KEY" to imply the user should
+    // go hunting for a key that lasts.
+    advice: "run `claude setup-token` for a long-lived token, then set ANTHROPIC_API_KEY to it",
     // No plain-key config file exists: on macOS the credential is in the Keychain,
     // which ADR 0006 puts out of scope. The environment is the only readable surface.
     keyFile: null,
