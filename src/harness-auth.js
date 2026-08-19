@@ -25,6 +25,7 @@
 //
 // Runnable directly, which is how bin/e2b-box calls it:
 //   node src/harness-auth.js [--yes]
+import { spawnSync } from "node:child_process"
 import { createInterface } from "node:readline"
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import os from "node:os"
@@ -259,6 +260,63 @@ function confirm(question) {
   })
 }
 
+/**
+ * Which of these variable names a LOGIN SHELL cannot see.
+ *
+ * The asymmetry this exists for: herdr spawns plugin commands as `bash -lc`, which
+ * reads ~/.profile and never a zsh rc. So a key exported from ~/.zshrc is visible to
+ * `e2b-box auth` typed in a terminal and simply absent when herdr creates the box —
+ * discovery reports `key found`, auth.toml records the name, and the box still opens
+ * on a sign-in screen with nothing saying why. That is worse than never having found
+ * it, because the report claims the opposite.
+ *
+ * Checked rather than guessed, so the warning cannot cry wolf at the majority whose
+ * keys are in ~/.profile. One shell for the whole batch, and only NAMES cross the
+ * boundary in either direction — the check asks whether each variable is set, never
+ * what it holds, so no value is read back into this process or onto a command line.
+ *
+ * Any failure to run the shell answers "nothing is invisible": this is an advisory,
+ * and an advisory that fires because a probe broke is noise.
+ */
+export function invisibleToLoginShell(names, { run = spawnSync } = {}) {
+  const wanted = [...new Set(names)].filter((n) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(n))
+  if (!wanted.length) return []
+  const script = wanted.map((n) => `[ -n "\${${n}+x}" ] && echo ${n}`).join("; ")
+  try {
+    const r = run("bash", ["-lc", script], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] })
+    if (r.error || typeof r.stdout !== "string") return []
+    const seen = new Set(r.stdout.split("\n").map((l) => l.trim()).filter(Boolean))
+    return wanted.filter((n) => !seen.has(n))
+  } catch {
+    return []
+  }
+}
+
+/** The advisory itself, or "" when every forwarded name survives the trip. */
+export function formatForwardWarning(plan, invisible) {
+  if (!invisible.length) return ""
+  const rows = plan.entries.filter((e) => e.kind === "forward" && invisible.includes(e.hostVar))
+  if (!rows.length) return ""
+  const out = [
+    "",
+    "warning: these were found in THIS shell but are invisible to a login shell,",
+    "so a box herdr launches will not get them (herdr runs plugin commands as",
+    "`bash -lc`, which reads ~/.profile and never a zsh rc):",
+    "",
+  ]
+  for (const e of rows) out.push(`  ${e.template.padEnd(10)} $${e.hostVar}`)
+  out.push("")
+  out.push("fix either one, then re-run this command:")
+  out.push("  · export them from ~/.profile instead of ~/.zshrc, or")
+  out.push(`  · paste the box's own variable into ${CONFIG_PATH}, which always wins:`)
+  out.push("")
+  for (const e of rows) {
+    out.push(`  [templates.${e.template}.env]`)
+    out.push(`  ${e.boxVar} = "…"`)
+  }
+  return out.join("\n")
+}
+
 async function main(argv) {
   const yes = argv.includes("--yes") || argv.includes("-y")
   const unknown = argv.find((a) => a !== "--yes" && a !== "-y")
@@ -269,7 +327,13 @@ async function main(argv) {
 
   const rows = await probeAll()
   const plan = buildPlan(rows)
-  process.stdout.write(`${formatReport(rows)}\n\n${formatPlan(plan)}\n`)
+  // Said at the moment the user is looking at the row it is about — the only moment
+  // they can act on it without first debugging a box that came up unauthenticated.
+  const warning = formatForwardWarning(
+    plan,
+    invisibleToLoginShell(plan.entries.filter((e) => e.kind === "forward").map((e) => e.hostVar)),
+  )
+  process.stdout.write(`${formatReport(rows)}\n\n${formatPlan(plan)}\n${warning ? `${warning}\n` : ""}`)
 
   // Not a terminal and no flag: report and stop. Guessing consent from a pipe is
   // how a scripted caller ends up with a file it never asked for — and the

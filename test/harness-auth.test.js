@@ -5,7 +5,14 @@ import os from "node:os"
 import path from "node:path"
 import TOML from "@iarna/toml"
 
-import { buildPlan, renderAuthToml, writeAuthFile, formatPlan } from "../src/harness-auth.js"
+import {
+  buildPlan,
+  renderAuthToml,
+  writeAuthFile,
+  formatPlan,
+  invisibleToLoginShell,
+  formatForwardWarning,
+} from "../src/harness-auth.js"
 
 // Rows here are what src/harness-probe.js hands back — the SHAPE interpretProbe
 // returns, hand-written so none of this needs a harness installed.
@@ -312,4 +319,48 @@ test("a session whose expiry cannot be read is refused, not guessed at", () => {
 test("an api-key auth.json is not mistaken for a session", () => {
   const apikey = JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "sk-x" })
   assert.equal(buildPlan([sessionRow], { readText: () => apikey }).entries.length, 0)
+})
+
+// ── 08: a name the login shell cannot see ─────────────────────────────────────
+// The shell is injected, so these run identically on a machine where every key IS
+// visible — which is most machines, and is exactly why the real check must be a
+// check and not an assumption.
+
+const fakeShell = (visible) => () => ({ stdout: visible.join("\n") })
+
+test("invisibleToLoginShell names only what the login shell cannot see", () => {
+  const run = fakeShell(["IN_PROFILE"])
+  assert.deepEqual(invisibleToLoginShell(["IN_PROFILE", "ONLY_IN_ZSHRC"], { run }), ["ONLY_IN_ZSHRC"])
+})
+
+test("invisibleToLoginShell says nothing when the probe cannot run", () => {
+  // An advisory that fires because its own probe broke is noise, and noise here
+  // teaches people to ignore the one case that matters.
+  assert.deepEqual(invisibleToLoginShell(["X"], { run: () => ({ error: new Error("nope") }) }), [])
+  assert.deepEqual(invisibleToLoginShell(["X"], { run: () => { throw new Error("boom") } }), [])
+})
+
+test("invisibleToLoginShell refuses a name that is not a shell identifier", () => {
+  // The names come from a generated file; one carrying a `;` would otherwise be
+  // spliced straight into the script this builds.
+  let script = null
+  invisibleToLoginShell(["GOOD", "BAD; rm -rf /"], { run: (_b, a) => ((script = a[1]), { stdout: "" }) })
+  assert.ok(!script.includes("rm -rf"))
+  assert.ok(script.includes("GOOD"))
+})
+
+test("the warning names the variable, the template, and both fixes", () => {
+  const plan = { entries: [{ kind: "forward", template: "grok", boxVar: "XAI_API_KEY", hostVar: "XAI_API_KEY" }] }
+  const out = formatForwardWarning(plan, ["XAI_API_KEY"])
+  assert.match(out, /invisible to a login shell/)
+  assert.match(out, /\$XAI_API_KEY/)
+  assert.match(out, /~\/\.profile/)
+  assert.match(out, /\[templates\.grok\.env\]/)
+})
+
+test("nothing invisible → no warning at all", () => {
+  const plan = { entries: [{ kind: "forward", template: "grok", boxVar: "X", hostVar: "X" }] }
+  assert.equal(formatForwardWarning(plan, []), "")
+  // ...and a name that is invisible but was never forwarded is not our business.
+  assert.equal(formatForwardWarning(plan, ["SOMETHING_ELSE"]), "")
 })

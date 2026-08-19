@@ -287,6 +287,31 @@ function forwardedValues(names, env) {
 }
 
 /**
+ * Forwarded names this environment cannot resolve — the promise `auth.toml` made
+ * and this process cannot keep.
+ *
+ * A name is recorded because the value was in the shell when `e2b-box auth` ran.
+ * When herdr creates the box it runs `bash -lc`, a login shell that reads
+ * ~/.profile and never a zsh rc, so a key exported from ~/.zshrc is simply gone by
+ * then. `resolveEnv` drops it silently and correctly — nothing else it could do —
+ * and the box boots on a sign-in screen with the report still claiming `key found`.
+ *
+ * So the drop is made nameable. Pure, and separate from `resolveEnv` because that
+ * function answers "what does the box get" and this one answers "what did it not
+ * get, that it was told it would".
+ *
+ * @returns {string[]} host variable names, empty when everything resolved
+ */
+export function unresolvedForwards(cfg, template, env = {}) {
+  const names = cfg?.envForward?.[template]
+  if (!names) return []
+  return Object.values(names).filter((hostVar) => {
+    const v = env?.[hostVar]
+    return !(typeof v === "string" && v.trim())
+  })
+}
+
+/**
  * The top rung: a borrowed session, or nothing.
  *
  * Nothing in three cases, and they are not the same case. No session was found;

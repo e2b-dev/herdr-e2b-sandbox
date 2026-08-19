@@ -24,6 +24,7 @@ import {
   resolveAuthConfig,
   readAuthConfig,
   discoveredSources,
+  unresolvedForwards,
 } from "../src/config.js"
 
 test("resolveTemplate: no rules → default template", () => {
@@ -982,4 +983,33 @@ test("discoveredSources tells a live session from a dead one", () => {
     discoveredSources({ envSession: { codex: { expires: inDays(-1) } } }).codex,
     "session-expired",
   )
+})
+
+// ── 08: a forwarded name that resolves to nothing must be nameable ─────────────
+// The failure this catches arrives disguised as success — `auth` says `key found`,
+// the box boots unauthenticated, and nothing connects the two.
+
+test("unresolvedForwards names a recorded variable the environment does not hold", () => {
+  const cfg = { envForward: { grok: { XAI_API_KEY: "XAI_API_KEY" } } }
+  assert.deepEqual(unresolvedForwards(cfg, "grok", {}), ["XAI_API_KEY"])
+  assert.deepEqual(unresolvedForwards(cfg, "grok", { XAI_API_KEY: "xai-live" }), [])
+})
+
+test("unresolvedForwards treats a blank value as missing", () => {
+  // An empty credential fails further from its cause than an absent one: the agent
+  // boots, reads it, and dies authenticating.
+  const cfg = { envForward: { grok: { XAI_API_KEY: "XAI_API_KEY" } } }
+  assert.deepEqual(unresolvedForwards(cfg, "grok", { XAI_API_KEY: "   " }), ["XAI_API_KEY"])
+})
+
+test("unresolvedForwards names the HOST variable, which is what the user must export", () => {
+  // Three harnesses are found under one name and injected under another; telling
+  // the user to export the box's name would send them to fix the wrong thing.
+  const cfg = { envForward: { codex: { OPENAI_API_KEY: "CODEX_API_KEY" } } }
+  assert.deepEqual(unresolvedForwards(cfg, "codex", {}), ["CODEX_API_KEY"])
+})
+
+test("unresolvedForwards is silent for a template with nothing forwarded", () => {
+  assert.deepEqual(unresolvedForwards({ envForward: { grok: {} } }, "claude", {}), [])
+  assert.deepEqual(unresolvedForwards({}, "grok", {}), [])
 })
