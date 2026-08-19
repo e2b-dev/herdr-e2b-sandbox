@@ -17,6 +17,17 @@ pub(crate) struct Box {
     pub(crate) step: String,
     #[serde(default, rename = "sandboxId")]
     pub(crate) sandbox_id: String,
+    /// The template the sandbox ACTUALLY runs, as written at create time. Empty
+    /// for a record from before templates were tracked, and for a box that never
+    /// got as far as a sandbox.
+    #[serde(default)]
+    pub(crate) template: String,
+    /// The template that was ASKED for, recorded only when it differs from the
+    /// one that booted — a template built on another cluster falls back to
+    /// `base` (see provision.js), and the board says so rather than implying the
+    /// agent you wanted is in there.
+    #[serde(default, rename = "requestedTemplate")]
+    pub(crate) requested_template: String,
     #[serde(default)]
     pub(crate) files: u32,
     #[serde(default, rename = "worktreePath")]
@@ -134,11 +145,17 @@ pub(crate) fn parse_head(head: &str) -> Option<String> {
     detached.then(|| format!("@{}", &head[..7]))
 }
 
+/// Width of the TEMPLATE column: wide enough for the longest agent template the
+/// plugin ships rules for (`opencode`) plus the downgrade mark, and fixed — which
+/// template a box runs is part of what the box IS, so it doesn't give way.
+pub(crate) const TEMPLATE_W: u16 = 12;
+
 /// Fixed cost of a table row that is NOT the branch column: the block's two
-/// borders, the `▸ ` highlight symbol, NAME/STATUS/SANDBOX/FILES, the minimum
-/// STEP, and the one-cell gap between each of those five columns.
+/// borders, the `▸ ` highlight symbol, NAME/TEMPLATE/SANDBOX/FILES, the minimum
+/// STATUS (last column, and elastic because it carries the provisioning step),
+/// and the one-cell gap between each of those five columns.
 /// Keep in sync with the `widths` array in main.rs's `draw`.
-const TABLE_FIXED: u16 = 2 + 2 + 18 + 16 + 22 + 6 + 20 + 4;
+const TABLE_FIXED: u16 = 2 + 2 + 18 + TEMPLATE_W + 22 + 6 + 20 + 4;
 const BRANCH_MIN: u16 = 8;
 const BRANCH_MAX: u16 = 28; // fits a long feature branch without starving STEP
 
@@ -159,18 +176,75 @@ pub(crate) fn branch_column_width(total: u16) -> u16 {
 /// truncated branch never passes for a real one; an unknown branch reads as the
 /// same `—` the FILES column uses for "nothing to show".
 pub(crate) fn branch_cell(branch: &str, width: u16) -> String {
+    fit(branch, width)
+}
+
+/// Whether a box is running a DIFFERENT template than the one asked for. The
+/// node side records the requested name only in that case, so a non-empty,
+/// non-matching `requestedTemplate` is the whole test.
+pub(crate) fn template_downgraded(template: &str, requested: &str) -> bool {
+    !requested.is_empty() && requested != template
+}
+
+/// What the TEMPLATE column shows: the template the sandbox actually runs, with
+/// a trailing `⚠` when that is not the one requested — the same glyph the header
+/// uses for "this list isn't all one cluster". The mark keeps its two cells even
+/// when the name has to be cut, because a silent downgrade is exactly the thing
+/// the column exists to make visible.
+pub(crate) fn template_cell(template: &str, requested: &str, width: u16) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    if !template_downgraded(template, requested) {
+        return fit(template, width);
+    }
+    format!("{} ⚠", fit(template, width.saturating_sub(2)))
+}
+
+/// A value cut to `width` cells: `…` marks a truncation, `—` stands in for nothing
+/// known, and a zero-width (dropped) column renders no text at all.
+fn fit(value: &str, width: u16) -> String {
     let width = width as usize;
     if width == 0 {
         return String::new();
     }
-    if branch.is_empty() {
+    if value.is_empty() {
         return "—".into();
     }
-    if branch.chars().count() <= width {
-        return branch.to_string();
+    if value.chars().count() <= width {
+        return value.to_string();
     }
-    let kept: String = branch.chars().take(width.saturating_sub(1)).collect();
+    let kept: String = value.chars().take(width.saturating_sub(1)).collect();
     format!("{kept}…")
+}
+
+/// The extra detail the STATUS cell shows after the status word, if any — what
+/// the dropped STEP column was actually for: `uploading 210/540 files` while a
+/// box provisions, `provision failed · see logs` after it fails.
+///
+/// Nothing is shown when the step only repeats the status, and nothing when the
+/// step is `ready` — that is the step's own "nothing in flight" value, so beside
+/// a `paused` box it is stale rather than informative.
+pub(crate) fn status_detail(status: &str, step: &str) -> Option<String> {
+    let step = step.trim();
+    let dull = step.is_empty() || step == status || step == "ready";
+    (!dull).then(|| step.to_string())
+}
+
+/// The REGION a domain belongs to — what a person picks, as opposed to the host
+/// that serves it. Keep the table IN SYNC with `REGION_BY_DOMAIN` in
+/// src/config.js, which is where the plugin's own answer lives.
+///
+/// An empty domain is `us`, and deliberately so: US production resolves to no
+/// domain at all (the SDK defaults there), so "nothing pinned" and "US" are the
+/// same state — see the REGIONS table in config.js. A host with no region name
+/// prints as itself rather than being given an invented one.
+pub(crate) fn region_label(domain: &str) -> String {
+    match domain.trim() {
+        "" | "e2b.app" | "e2b.dev" => "us".into(),
+        "e2b-juliett.dev" => "eu".into(),
+        other => other.into(),
+    }
 }
 
 /// The E2B cluster this dashboard is pointed at — i.e. where a box opened from
