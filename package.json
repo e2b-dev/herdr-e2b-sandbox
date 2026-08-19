@@ -26,7 +26,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test test/*.test.js && bash test/cli.test.sh"
+    "test": "node --test test/*.test.js && bash test/cli.test.sh",
+    "prototype:pty": "node src/prototype-pty-reattach-repaint.mjs"
   },
   "dependencies": {
     "e2b": "^2.32.0",
