@@ -1013,3 +1013,53 @@ test("unresolvedForwards is silent for a template with nothing forwarded", () =>
   assert.deepEqual(unresolvedForwards({ envForward: { grok: {} } }, "claude", {}), [])
   assert.deepEqual(unresolvedForwards({}, "grok", {}), [])
 })
+
+// ── a session keeps the API key it replaces OUT of the box ────────────────────
+// Not a precedence contest — the point is that the key does not travel at all.
+
+const supersedingCfg = (expires) => ({
+  envDiscovered: { codex: { OPENAI_API_KEY: "sk-discovered" } },
+  envShared: { HTTPS_PROXY: "http://proxy" },
+  envByTemplate: { codex: { OPENAI_API_KEY: "sk-hand-written" } },
+  envSession: {
+    codex: { var: "CODEX_AUTH_JSON", value: "{session}", expires, supersedes: "OPENAI_API_KEY" },
+  },
+})
+
+test("a live session removes the API key from the box entirely", () => {
+  const env = resolveEnv(supersedingCfg(inDays(9)), "codex", {})
+  assert.equal(env.CODEX_AUTH_JSON, "{session}")
+  assert.equal(env.OPENAI_API_KEY, undefined)
+})
+
+test("suppression removes the key from EVERY rung, not just the losing one", () => {
+  // It can arrive as a discovered value, from [sandbox.env], or from the user's own
+  // template table. None of them may reach a box the session already authenticates.
+  const cfg = supersedingCfg(inDays(9))
+  cfg.envShared.OPENAI_API_KEY = "sk-from-sandbox-env"
+  assert.equal(resolveEnv(cfg, "codex", {}).OPENAI_API_KEY, undefined)
+})
+
+test("suppression touches nothing else in the environment", () => {
+  // Only the redundant CREDENTIAL is dropped — a proxy, a locale, a shipped default
+  // all still reach the box.
+  assert.equal(resolveEnv(supersedingCfg(inDays(9)), "codex", {}).HTTPS_PROXY, "http://proxy")
+})
+
+test("an expired session suppresses nothing — the key is the fallback", () => {
+  const env = resolveEnv(supersedingCfg(inDays(-1)), "codex", {})
+  assert.equal(env.CODEX_AUTH_JSON, undefined)
+  assert.equal(env.OPENAI_API_KEY, "sk-hand-written")
+})
+
+test("prefer = 'env' suppresses nothing either", () => {
+  const cfg = { ...supersedingCfg(inDays(9)), templatePrefer: { codex: "env" } }
+  assert.equal(resolveEnv(cfg, "codex", {}).OPENAI_API_KEY, "sk-hand-written")
+})
+
+test("a session with no `supersedes` recorded drops nothing", () => {
+  // Older auth.toml files, and any future session whose harness has no key variable.
+  const cfg = supersedingCfg(inDays(9))
+  delete cfg.envSession.codex.supersedes
+  assert.equal(resolveEnv(cfg, "codex", {}).OPENAI_API_KEY, "sk-hand-written")
+})

@@ -68,6 +68,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   expired session as expired; an expired one is never injected, so a box falls back
   to whatever credential still works instead of to a sign-in screen. Claude is
   untouched — its credential is in the Keychain, which ADR 0007 does not reopen.
+- When a borrowed session authenticates a box, the **API key it replaces is no longer
+  sent** — whichever rung supplied it, including your own `[templates.<name>.env]`. A
+  box signed in by the session cannot use the key, and an unusable credential in a
+  box's environment is blast radius bought for nothing. An expired or opted-out
+  session suppresses nothing, because that is precisely when the key is the fallback.
 - `e2b-box auth` now checks whether a variable it recorded by NAME is visible to a
   **login shell**, and says so when it is not. herdr runs plugin commands as
   `bash -lc`, which reads `~/.profile` and never a zsh rc, so a key exported only

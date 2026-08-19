@@ -337,6 +337,11 @@ function sessionValue(cfg, template, now) {
  *   4. the user's `[templates.<name>.env]`
  *   5. a DISCOVERED SESSION, unless expired or opted out of  (ADR 0007)
  *
+ * ...and when rung 5 lands, the API key it replaces is REMOVED from the result
+ * entirely, whichever rung put it there. A box signed in by the session cannot use
+ * the key, and an unusable credential in a box's environment is blast radius bought
+ * for nothing.
+ *
  * Rungs 2–4 obey the original principle: discovery is a default, so a value the user
  * typed always wins. Rung 5 deliberately breaks it, and it is the only thing here
  * that does — the machine's live signed-in session beats a key pasted months ago,
@@ -360,6 +365,7 @@ function sessionValue(cfg, template, now) {
  * state and the log is `herdr plugin log list`.
  */
 export function resolveEnv(cfg, template, env = {}, now = Date.now()) {
+  const session = sessionValue(cfg, template, now)
   const merged = {
     ...(cfg?.templateEnvDefaults?.[template] || {}),
     // The discovered rung has two halves, and forwarding wins between them: a name
@@ -372,8 +378,18 @@ export function resolveEnv(cfg, template, env = {}, now = Date.now()) {
     ...forwardedValues(cfg?.envForward?.[template], env),
     ...(cfg?.envShared || {}),
     ...(cfg?.envByTemplate?.[template] || {}),
-    ...sessionValue(cfg, template, now),
+    ...session,
   }
+  // A box authenticated by the session has no use for the API key as well, so the
+  // key does not travel. Deleted rather than never-merged because it can arrive from
+  // any of the rungs above — a discovered value, [sandbox.env], the user's own
+  // template table — and the point is that NONE of them reach the box, not that one
+  // of them loses a precedence contest.
+  //
+  // Only when the session actually won. An expired or opted-out session leaves the
+  // key exactly where it was, which is what makes the fallback work at all.
+  const supersedes = cfg?.envSession?.[template]?.supersedes
+  if (supersedes && Object.keys(session).length) delete merged[supersedes]
   return Object.keys(merged).length ? merged : undefined
 }
 
@@ -410,7 +426,8 @@ export function resolveAuthConfig(parsed = {}) {
       const sess = section?.session
       const v = String(sess?.var ?? "").trim()
       if (v && typeof sess?.value === "string" && sess.value && typeof sess?.expires === "string") {
-        envSession[name] = { var: v, value: sess.value, expires: sess.expires }
+        const sup = String(sess?.supersedes ?? "").trim()
+        envSession[name] = { var: v, value: sess.value, expires: sess.expires, ...(sup ? { supersedes: sup } : {}) }
       }
     }
   }

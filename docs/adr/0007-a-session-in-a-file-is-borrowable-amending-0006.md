@@ -97,6 +97,25 @@ A per-template `prefer = "env"` opts out and restores 0006's ordering for that t
 Silently losing is the failure mode; losing with a documented way to say otherwise is a
 policy.
 
+## The key a session replaces does not travel
+
+When a session authenticates a box, the API key for that same harness is removed from
+what the box is given — whichever rung supplied it, including the user's own
+`[templates.<name>.env]`. The box cannot use both, and an unusable credential sitting
+in a box's environment is blast radius bought for nothing: every process in there can
+read it, and the box has network egress.
+
+The session records the variable it replaces (`supersedes`) rather than the resolver
+consulting the harness table, so precedence stays data-driven and `config.js` keeps
+knowing nothing about harnesses.
+
+Only when the session actually won. An expired session, or one opted out of with
+`prefer = "env"`, suppresses nothing — that is exactly the case where the key is the
+fallback, and removing it would turn a degraded box into an unauthenticated one.
+
+This applies only to harnesses that HAVE a session. For amp, prime, grok and opencode
+the key is the credential, and nothing here changes what they are sent.
+
 ## Consequences
 
 A box can now hold a **subscription session** rather than a scoped API key, and the two
