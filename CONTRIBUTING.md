@@ -15,7 +15,8 @@ layers, the data flow, the state model, and the invariants worth checking).
 `npm test` is fully offline (no E2B calls, no API key) and runs:
 
 - `node --test test/*.test.js` — pure helpers: config resolution
-  (`resolveTemplate` / `resolveLifecycle`) and the `pull` path-safety guards
+  (`resolveTemplate` / `resolveLifecycle`), the attach-or-create decision
+  (`planAttach`), and the `pull` path-safety guards
   (`isIgnored` / `relIsUnsafe`).
 - `test/cli.test.sh` — `bash -n` / `node --check` lint across the scripts, plus
   offline `e2b-box` behavior (the `no sandbox tracked` messages and the

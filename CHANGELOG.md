@@ -75,12 +75,30 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pid recorded on the box record. The client reports outcomes by exit code
   (clean · never attached · box gone · attached-then-lost), replacing the old
   two-second timing heuristic; the undocumented `[sandbox] tmux` opt-out key is
-  removed along with the mechanism it gated. Reconnecting gives a fresh shell
-  for now — reattaching to the terminal you left lands next.
+  removed along with the mechanism it gated.
 - The suggested keybindings are now the full set of three — `prefix+shift+e`
   (open), `prefix+shift+f` (fleet) and `prefix+shift+d` (dashboard) — and the
   README, the manifest and `install.sh` all say that `prefix+shift+d` takes over
   herdr's own `close_workspace`.
+  removed along with the mechanism it gated.
+- **Reopening a box puts you back on the screen you left.** The client
+  reattaches to the box's own terminal — verified by its marker, never by a
+  bare pid — and nudges a repaint with a resize (one when the pane's geometry
+  differs from the terminal's, away-and-back when it doesn't), so your agent
+  comes back mid-task with its frame intact. The scrollback above the frame is
+  not stored anywhere and does not return; the client says so, once, only when
+  reattaching. A terminal that died (or whose pid was recycled) yields a fresh
+  one, announced. The attach-or-create decision is a pure module
+  (`src/attach-plan.js`) with offline tests.
+- **Boxes now pause at the idle timeout by default** (`auto_pause = true`) instead
+  of being killed: a full memory snapshot, so the running agent and everything in
+  memory are still there when `e2b-box open` wakes it. Set `auto_pause = false`
+  for the old kill-at-timeout behaviour. A new `[sandbox] keep_memory` key picks
+  the snapshot kind; `keep_memory = false` (filesystem-only, cold-boots on
+  resume) must be paired with `auto_resume = false` and is otherwise rejected
+  with an error naming both keys before anything reaches the API. The closing
+  messages after you leave a box now describe what that box will actually do at
+  its timeout, read from its record.
 
 ### Fixed
 
