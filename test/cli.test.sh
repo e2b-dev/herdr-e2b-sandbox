@@ -1361,7 +1361,11 @@ seed_out=$(seed_run "$SEED_CODEX" "$SHOME/codex-session" CODEX_AUTH_JSON="$SESSI
   && ! grep -q 'secret-head' "$SHOME/codex-session/.codex/auth.json"; } \
   && ok "a borrowed session is seeded verbatim and beats the api key beside it" \
   || bad "session seeding (out=$seed_out, file=$(cat "$SHOME/codex-session/.codex/auth.json" 2>/dev/null))"
-[ "$(stat -f '%Lp' "$SHOME/codex-session/.codex/auth.json" 2>/dev/null || stat -c '%a' "$SHOME/codex-session/.codex/auth.json" 2>/dev/null)" = "600" ] \
+# `ls -l` and not `stat`: BSD's `stat -f` is a FORMAT string and GNU's is
+# "filesystem status", so `stat -f … || stat -c …` succeeds on Linux with entirely
+# the wrong output and the fallback never runs. The suite already reads modes this
+# way for auth.toml, so this is the idiom that is known to hold on both.
+[ "$(ls -l "$SHOME/codex-session/.codex/auth.json" 2>/dev/null | cut -c1-10)" = "-rw-------" ] \
   && ok "a seeded session file is written at restrictive permissions" \
   || bad "session auth.json mode is not 600"
 
