@@ -22,19 +22,26 @@
 # (github.com/tomasvarga/herdr-pickr, MIT) so the two plugins feel like one tool. Prints the chosen template on stdout (callers capture it) and returns
 # non-zero when there's no terminal to draw on.
 #
-#   ask_template_tty <label> <default-template> <choices> <count>
+#   ask_template_tty <label> <default-template> <choices> <count> [marks]
 #
 # where <label> names what's being booted (it's the title), <default-template>
 # is the row that opens SELECTED (nothing takes it but Enter — q, Esc and the
 # read timeout all return 2, and the caller must create nothing), <choices> is
 # the menu one template per line, and <count> is how many lines that is.
 #
+# <marks> is optional and parallel to <choices>: one line per row, drawn dimmed
+# beside the name, empty for a row with nothing to say. It ANNOTATES and never
+# filters — a template whose box would come up on a sign-in screen stays in the
+# menu, because hiding it would remove one the user may intend to configure later
+# (or a base image that needs no credential at all). Callers pass what
+# `e2b-box auth` discovered; this file neither knows nor asks where a mark came from.
+#
 # Finding "where the human is" takes two tries. A plain shell has a controlling
 # terminal, so /dev/tty is the pane. A herdr pane program may run on a pty WITHOUT
 # it being our controlling terminal — /dev/tty fails there while fd 0 is the very
 # pane you're looking at — so fall back to duplicating stdin.
 ask_template_tty() {
-  local lbl="$1" resolved="$2" choices="$3" n="$4" sel=0 i key rest hit typed
+  local lbl="$1" resolved="$2" choices="$3" n="$4" marks="${5:-}" sel=0 i key rest hit typed
   if { : >/dev/tty; } 2>/dev/null; then
     exec 3>/dev/tty 4</dev/tty
   elif [ -t 0 ] && { exec 3>&0; } 2>/dev/null; then
@@ -45,6 +52,22 @@ ask_template_tty() {
   local items=()
   while IFS= read -r t; do [ -n "$t" ] && items+=("$t"); done <<EOF
 $choices
+EOF
+  # Marks are indexed positionally, not compacted like <choices>: an interior blank
+  # line means "this row has nothing to say", and dropping it would slide every
+  # annotation below it onto the wrong template. TRAILING blanks are a different
+  # story — the caller's own $(…) already stripped them, so this array is routinely
+  # SHORTER than <choices> and the `:-` below is load-bearing rather than defensive.
+  # `wide` is the longest mark, so the column fits whatever it is handed and 0 means
+  # there is no column to draw at all.
+  local notes=() wide=0
+  i=0
+  while IFS= read -r t; do
+    notes[$i]="$t"
+    [ "${#t}" -gt "$wide" ] && wide=${#t}
+    i=$((i + 1))
+  done <<EOF
+$marks
 EOF
   # Open on the default row wherever it sits in the list — the menu keeps its
   # configured order (base last), so row 1 is not the one Enter should take.
@@ -66,6 +89,9 @@ EOF
       else
         printf '     [%s] %-24s ' "$((i + 1))" "${items[$i]}" >&3
       fi
+      # Reserve the column only when something is annotated, so a machine that has
+      # never run `e2b-box auth` sees exactly the menu it always saw.
+      [ "$wide" -gt 0 ] && printf ' \033[2m%-*s\033[0m' "$wide" "${notes[$i]:-}" >&3
       [ "${items[$i]}" = "$resolved" ] && printf ' \033[2mdefault\033[0m' >&3
       printf '\n' >&3
       i=$((i + 1))

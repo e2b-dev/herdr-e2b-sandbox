@@ -188,7 +188,11 @@ async function main() {
         // envs is per-sandbox and per-template: it never enters the image, so a
         // credential here is not baked into anything shareable, and it is resolved
         // fresh on every create rather than read back from the record.
-        sandbox = await Sandbox.create(template, { ...opts, envs: resolveEnv(cfg, template) })
+        //
+        // process.env is handed IN rather than read by the resolver: a credential
+        // `e2b-box auth` recorded by name (never by value) lives in this process's
+        // environment and is looked up here, at the one moment it is needed.
+        sandbox = await Sandbox.create(template, { ...opts, envs: resolveEnv(cfg, template, process.env) })
       } catch (e) {
         // If a custom template isn't built yet, don't hard-fail — fall back to base.
         const msg = (e && e.message) || String(e)
@@ -208,7 +212,7 @@ async function main() {
       // `base`'s env, not the requested template's: the box you actually get
       // is a base box, and handing it a credential for an agent it doesn't
       // ship is a secret sent somewhere with no reason to hold it.
-      sandbox = await Sandbox.create("base", { ...opts, envs: resolveEnv(cfg, "base") })
+      sandbox = await Sandbox.create("base", { ...opts, envs: resolveEnv(cfg, "base", process.env) })
       usedTemplate = "base"
     }
     created = true

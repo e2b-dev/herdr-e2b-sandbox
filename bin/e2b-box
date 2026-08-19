@@ -223,7 +223,7 @@ boot_abort() {
 # A template is fixed at creation, so this runs for a fresh box and never for a
 # reconnect (where the question is moot).
 pick_template() {
-  local k="$1" b node_bin info decided resolved choices n lbl
+  local k="$1" b node_bin info decided resolved rows choices marks n lbl
   [ -n "${E2B_TEMPLATE:-}" ] && { printf '%s' "$E2B_TEMPLATE"; return 0; }
   [ -n "$(field "$k" sandboxId)" ] && return 0     # box exists — template is settled
   node_bin=$(e2b_node) || return 0                 # no node → config decides
@@ -232,8 +232,13 @@ pick_template() {
   decided=$(printf '%s' "$info" | head -1 | cut -f1)
   resolved=$(printf '%s' "$info" | head -1 | cut -f2)
   [ "$decided" = decided ] && return 0             # a branch rule already chose
-  # Line 1 is the header; the rest are the menu, resolved template first.
-  choices=$(printf '%s' "$info" | tail -n +2 | grep -v '^$')
+  # Line 1 is the header; the rest are the menu, resolved template first. Each of
+  # those is `<template>\t<mark>` — the mark being what `e2b-box auth` found for it —
+  # cut into two parallel lists so the picker can draw one beside the other. The mark
+  # only ever changes what a row SAYS (see the invariant in ARCHITECTURE.md).
+  rows=$(printf '%s' "$info" | tail -n +2 | grep -v '^[[:space:]]*$')
+  choices=$(printf '%s\n' "$rows" | cut -f1)
+  marks=$(printf '%s\n' "$rows" | cut -f2)
   n=$(printf '%s\n' "$choices" | wc -l | tr -d ' ')
   # A single candidate is not a choice — don't make you press Enter to confirm
   # the only option there is.
@@ -244,7 +249,7 @@ pick_template() {
   # 2 (aborted) is passed straight through; 1 (no terminal to draw on) is not an
   # answer and not a refusal, so it becomes "let the config decide" as before.
   local rc
-  ask_template_tty "$lbl" "$resolved" "$choices" "$n"; rc=$?
+  ask_template_tty "$lbl" "$resolved" "$choices" "$n" "$marks"; rc=$?
   [ "$rc" -eq 2 ] && return 2
   return 0
 }

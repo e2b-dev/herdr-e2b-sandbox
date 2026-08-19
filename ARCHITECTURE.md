@@ -77,12 +77,16 @@ never touches the E2B SDK; it drives **herdr** and then reuses `open` per member
    `--slug`, `-t` and `--task` given, both screens are skipped.
 3. `src/fleet-name.js` turns the slug + roster into one branch and label per member
    (`<prefix>/<slug>-<template>-<rand4>`). Bash never builds a ref name.
-4. `--dry-run` prints exactly that plan and exits 0 — the feature's test seam.
-5. Otherwise: a runtime probe that herdr answers `worktree list` (the version floor
+4. Any member whose box will boot with no credential in it is named once, before
+   anything is created — the member, its template and the exact variable to set
+   (`src/fleet-auth.js`) — and then the fleet carries on (ADR 0003's shape). Config
+   only; nothing on this path probes a harness binary.
+5. `--dry-run` prints exactly that plan and exits 0 — the feature's test seam.
+6. Otherwise: a runtime probe that herdr answers `worktree list` (the version floor
    does **not** move for fleet), then every member is spawned **concurrently** —
    `herdr worktree create` (unfocused, no `--path`, so the user's `[worktrees]`
    directory decides layout), then `herdr pane run <root pane> e2b-box open -t <t>`.
-6. Per member, once its box's sandbox shell appears: `src/fleet-seed.js` hands over
+7. Per member, once its box's sandbox shell appears: `src/fleet-seed.js` hands over
    one shell command that writes the agent's **first-run state** inside the box
    (`~/.claude.json`, `~/.codex/auth.json`) so it comes up at a prompt rather than a
    welcome wizard — typed first, because after the agent has read those files it is
@@ -98,7 +102,7 @@ never touches the E2B SDK; it drives **herdr** and then reuses `open` per member
    member that is already up — every step is time-bounded
    (`HERDR_E2B_FLEET_{SHELL,AGENT,TASK}_WAIT`, seconds), and a step that doesn't
    land is reported with the box left running, never retried, never fatal.
-7. One line per member, an `N/M up` summary, non-zero exit if any failed. **No
+8. One line per member, an `N/M up` summary, non-zero exit if any failed. **No
    rollback**: a failed member keeps its branch and its worktree. If the pickers
    ran, the pane then becomes `e2b-dash` — asking is what asks for the board, and
    `create` (everything named up front) therefore never boards.
@@ -155,7 +159,7 @@ when the other two never ran. Rubrics, LLM judging and ranking stay out
 | `e2b-bench` | Launcher for the grader, thin on purpose: finds the binary and resolves the credentials the same way every other verb does, then execs it. No TTY guard — a grade is a report meant to be piped and run from CI. |
 | `teardown-worktree` | `worktree.removed` handler — kills the box for the removed path (matched by stored `worktreePath`). |
 | `lib/paths.sh` | Shared helpers: state-dir resolution, `e2b_node` (find Node ≥22), `ensure_e2b_path`/`ensure_e2b_key`, `sdk_kill`, `box_key`. |
-| `lib/chooser.sh` | The full-screen pickers. `ask_template_tty` — one template for one box: arrows/`j`/`k`, number-jump, enter, `q` takes the default. `ask_slug_tty` — one line of text, with a caller-supplied validator function (so ref rules stay in `src/fleet-name.js`), esc aborts; asked for a third argument it also draws the optional **fleet task** field (tab/arrows switch, enter always launches) and prints slug and task as two lines.  `ask_roster_tty` — the multi-select roster: space toggles, number toggles, enter launches, an empty roster can't, `q`/esc abort. Self-contained bash — no state dir, no node — so any verb can source it. Finds the human in two steps: `/dev/tty`, else duplicated stdin (a herdr pane may run on a pty that isn't the controlling terminal). |
+| `lib/chooser.sh` | The full-screen pickers. `ask_template_tty` — one template for one box: arrows/`j`/`k`, number-jump, enter, `q` takes the default; an optional fifth argument carries one **auth mark** per row (what `e2b-box auth` discovered, drawn dimmed beside the name), which annotates and never filters — no row is hidden or reordered by it. `ask_slug_tty` — one line of text, with a caller-supplied validator function (so ref rules stay in `src/fleet-name.js`), esc aborts; asked for a third argument it also draws the optional **fleet task** field (tab/arrows switch, enter always launches) and prints slug and task as two lines.  `ask_roster_tty` — the multi-select roster: space toggles, number toggles, enter launches, an empty roster can't, `q`/esc abort. Self-contained bash — no state dir, no node — so any verb can source it. Finds the human in two steps: `/dev/tty`, else duplicated stdin (a herdr pane may run on a pty that isn't the controlling terminal). |
 | `lib/pane.sh` | Pane plumbing shared by `e2b-box-open`, `e2b-fleet-open` and `e2b-dash-toggle`: `pane_herdr`, `pane_node`, `pane_query`, `pane_procs`, `pane_is_idle` (fails safe — unknown counts as busy). |
 
 ### Data plane — `src/` (ESM, uses `e2b` + `@iarna/toml`)
@@ -170,11 +174,12 @@ when the other two never ran. Rubrics, LLM judging and ranking stay out
 | `attach.js` | The terminal client (ADR-0008): reattaches to the box's recorded terminal when `attach-plan.js` proves it is the box's own (then nudges a repaint via resize), else creates a fresh raw-mode PTY stamped `HERDR_E2B_TERMINAL=<box key>` — pid + geometry recorded on the box record. The plugin's only long-lived TTY-owning process. Reports by exit code: 0 clean · 10 never attached · 11 box gone · 12 attached-then-lost — the contract `connect_shell` branches on. |
 | `attach-plan.js` | The attach-or-create decision, pure: record's terminal fields + process listing + pane size → `{action: "attach", pid, resize}` or `{action: "create", reason}`. Validates the marker before trusting a pid (pids get recycled), and picks the repaint nudge: one resize when geometry differs, away-and-back when it doesn't. Covered by `test/attach-plan.test.js`. |
 | `store.js` | The record model: atomic (temp+rename) shallow-merge `writeRecord`, `readRecord`, `listRecords`. Defines `BOXES_DIR`. |
-| `config.js` | `loadConfig` (TOML over defaults, `posInt`-clamped), `resolveTemplate` (per-branch rules), `templateRuleMatches`/`templateChoices` (the chooser's menu; `templates` defaults ship the public agent templates), `resolveLifecycle` (auto_pause → SDK lifecycle), `resolveEnvConfig`/`resolveEnv` (`[sandbox.env]` + `[templates.<name>.env]` → the `envs` one box is created with; per-template so a box only ever holds its own agent's credential), `resolveCredentials` (key + cluster as a pair: env → config → `e2b` CLI login), `readCliConfig` (`~/.e2b/config.json`, defensive). |
+| `config.js` | `loadConfig` (TOML over defaults, `posInt`-clamped), `resolveTemplate` (per-branch rules), `templateRuleMatches`/`templateChoices` (the chooser's menu; `templates` defaults ship the public agent templates), `resolveLifecycle` (auto_pause → SDK lifecycle), `resolveEnvConfig`/`resolveEnv` (the `envs` one box is created with, as a four-rung ladder: shipped template defaults, then what `e2b-box auth` discovered, then `[sandbox.env]`, then `[templates.<name>.env]` — so a hand-written value always wins; per-template so a box only ever holds its own agent's credential, and it takes the environment forwarded names resolve from as an argument rather than reading `process.env`), `resolveAuthConfig`/`readAuthConfig` (the generated `auth.toml`: a stored value, or a variable NAME to forward; absent or malformed degrades to nothing), `discoveredSources` (which template got which — `file` for a stored value, `env` for a forwarded name — in the `auth` report's own vocabulary, so the picker's mark and the report read the same way), `resolveCredentials` (key + cluster as a pair: env → config → `e2b` CLI login), `readCliConfig` (`~/.e2b/config.json`, defensive). |
 | `shared.js` | `requireApiKey`, best-effort `notify` (herdr desktop notification). |
 | `resolve-env.js` / `resolve-theme.js` | Tiny helpers the bash layer calls to print the credentials (`E2B_API_KEY` + `E2B_DOMAIN`) / theme (toml-only, run on any Node). |
-| `resolve-template.js` | Answers the chooser's two questions for a branch: is the template already decided by a rule, and what should the menu offer (`templateChoices`, default first). `e2b-fleet` reads the same output, so the roster and `open`'s menu can never drift apart. |
+| `resolve-template.js` | Answers the chooser's two questions for a branch: is the template already decided by a rule, and what should the menu offer (`templateChoices`, default first). `e2b-fleet` reads the same choices through `--fleet`, so the roster and `open`'s menu can never drift apart. The default mode ALSO annotates: each of its menu lines is `<template>\t<mark>`, the mark being what `e2b-box auth` discovered for it — read off the generated file, never probed, because a probe on the create path is what the `auth` subcommand exists to avoid. `--fleet` and `--known` are unmarked and emit bare names, which is why only `pick_template` cuts the columns apart. |
 | `fleet-name.js` | Fleet member naming, as pure functions: `sanitizeSlug` (fold any typed text into one legal ref component, `""` when nothing survives), `templateSlug` (a template's last path segment — `ondrejs-project/herdr-agents` -> `herdr-agents`, since the project half is shared by every member and only costs a sidebar row its readability), `memberLabel`, `memberLabels` (the whole roster at once, refusing two entries that would name one member), `memberBranch` (`<prefix>/<slug>-<template>-<rand4>`; `$HERDR_E2B_FLEET_RAND` pins the suffix for tests). Also a CLI that `bin/e2b-fleet` calls for the whole plan — bash never builds a ref name, because with no fleet state the branch prefix *is* the fleet id. |
+| `fleet-auth.js` | Which fleet members will come up on a sign-in screen, and the wording that says so: `unauthenticatedMembers` (pure — a roster, a loaded config and the environment forwarded names resolve from) and `formatFleetAuthWarning` (one block for the batch, never one line per member). The question it asks is the LAST one, not the first: not "did `auth` discover this" but "will `resolveEnv` hand this box its template's variable", so a credential the user pasted by hand counts and a control arm (`[fleet.agents] <t> = ""`) and a template no harness ships are skipped. Reads config and NEVER probes. Also a CLI `bin/e2b-fleet` pipes its member plan into. |
 | `harnesses.js` | Which coding CLIs are installed on the USER's machine and whether a box may borrow their credentials: `HARNESSES` (per harness — the binary, its version and auth probes, its own parse rule, the variable it uses **here** vs the one a **box** needs, and any documented plain-key file) for the seven harnesses behind a shipped template, and `interpretProbe`, which reads a probe's RESULT and never spawns anything. Pure, so every parse rule is testable with none of them installed. A harness resolves to `authenticated` / `no-key` / `unknown`, and `unknown` is never collapsed into "not installed". Bounded by ADR 0006: no Keychain, no OAuth cache, environment and documented config only. |
 | `harness-probe.js` | The impure half of the above: spawns the probes for all seven harnesses concurrently with a 5s ceiling, `shell: false` (so a shell function cannot answer for the binary) and stdin on `/dev/null` (one harness with no key opens a browser and blocks forever), then formats one row per harness. Read-only — it never writes. |
 | `harness-auth.js` | `e2b-box auth` itself: probe, show, ask **once** for the whole batch, write. `buildPlan` turns probe rows into what will be kept and is pure given its file reader; `renderAuthToml` and `formatPlan` are pure; only `writeAuthFile` touches disk. It writes a GENERATED `auth.toml` beside `config.toml` at mode `0600`, regenerated whole on every run, and never touches `config.toml` — one writer each is what makes "hand-written always wins" true. ADR 0006's split lives here: a value read out of a **file** is stored, a value seen only in the **shell** records the variable's NAME and nothing else. Missing credentials are reported and never prompted for; `--yes` skips the question, and no terminal plus no flag writes nothing. |
@@ -248,6 +253,25 @@ fleet still isn't (`docs/adr/0005`). The member list is never stored.
   `ensure` (SDK reconnect/recreate) rather than trusting a possibly-stale `ready`.
 - **Node/CLI resolution.** herdr may run on Node < 22; `e2b_node`/`ensure_e2b_path`
   find a ≥22 Node and the `e2b` CLI before any SDK/CLI call.
+- **Hand-written always wins.** `resolveEnv`'s ladder puts what `e2b-box auth`
+  discovered *below* both user tables, and `auth.toml` and `config.toml` have one
+  writer each — the command never edits the file the user edits. A discovered
+  credential found only in the shell is recorded by NAME and forwarded at create
+  time, so no new plaintext copy of it exists (ADR 0006). Covered by
+  `test/config.test.js`.
+- **The picker annotates, never filters.** An auth mark changes what a template row
+  *says* and never whether it is offered, where it sits, or what the picker returns
+  — hiding a template with no credential would remove one the user may intend to
+  configure later, or a base image that needs none. The mark is also a SOURCE and
+  never a value. Covered by `test/cli.test.sh` (the menu with and without a
+  generated file is the same list in the same order, asserted both off
+  `resolve-template.js` and off the frame the pty picker actually draws).
+- **A fleet warns and launches.** A member with no credential is named before
+  anything is created — member, template, and the exact variable — and then the
+  fleet flies. Same shape as the dirty-tree warning (ADR 0003): make the consequence
+  visible, then do what was asked. One warning for the roster, never one per member.
+  Nothing on that path spawns a harness binary, which `test/cli.test.sh` proves
+  mechanically with fake binaries on `PATH`.
 
 ## Where to look for X
 
@@ -259,6 +283,10 @@ fleet still isn't (`docs/adr/0005`). The member list is never stored.
 - *"Which template does a new box boot?"* → `src/resolve-template.js` +
   `resolveTemplate`/`templateChoices` in `src/config.js`, chosen in `bin/e2b-box`
   (`pick_template`); the fallback-to-base path is in `src/provision.js`.
+- *"Will that box come up authenticated?"* → `discoveredSources` in
+  `src/config.js`, marked onto the menu by `src/resolve-template.js` and drawn by
+  `ask_template_tty`; for a fleet member, `unauthenticatedMembers` in
+  `src/fleet-auth.js`, which asks `resolveEnv` rather than the generated file.
 - *"Sandbox lifecycle / pause / template"* → `src/config.js`
   (`resolveLifecycle`/`resolveTemplate`) + `src/provision.js`; the explicit
   `pause`/`resume` verbs live in `src/lifecycle.js` (`z` in the dashboard).
@@ -292,7 +320,9 @@ fleet still isn't (`docs/adr/0005`). The member list is never stored.
 pure logic (config resolution, pull path guards, fleet member naming, harness probe
 interpretation — that last one runs from captured probe output, so it passes on a
 machine with no coding CLI installed at all, which is every CI runner; its spawn
-half is covered separately against `sleep` and `cat`, never a real harness);
+half is covered separately against `sleep` and `cat`, never a real harness; the
+generated `auth.toml` and the loader that reads it are the one place a test writes
+a file, always a fixture under the OS temp dir and never your own config);
 `test/cli.test.sh` lints every script (`bash -n` / `node --check`) and asserts CLI
 exit-code behavior, including `e2b-fleet --dry-run` (the plan is the seam) and the
 batch semantics against a two-subcommand herdr stub that creates nothing.

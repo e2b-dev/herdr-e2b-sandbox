@@ -21,6 +21,32 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and no flag it reports and writes nothing. Your own `config.toml` is never edited
   by it — a credential found in a harness's own file is stored as a value, while one
   found only in your shell records the variable's NAME and never its value.
+- Boxes now boot from what that command found: the config loader reads `auth.toml`,
+  and a box gets its template's discovered credential without you configuring
+  anything. A recorded variable name is resolved from `e2b-box`'s own environment
+  at create time, and the box is handed the variable **it** needs, which is not
+  always the one it was found under. Anything you wrote by hand still wins — the
+  order is shipped defaults, then discovered, then `[sandbox.env]`, then
+  `[templates.<name>.env]` — and an absent or malformed `auth.toml` is simply no
+  discovery rather than a broken CLI.
+- The template picker in `e2b-box open` now marks each template with what
+  `e2b-box auth` discovered for it — `key (file)` for a credential stored out of a
+  harness's own config, `key (env)` for one forwarded by name from your shell — so
+  you learn a box will open on a sign-in screen before you spend a minute creating
+  it. It annotates and never filters: a template with no credential stays on the
+  menu, in the same position, because it may be one you intend to configure later
+  or a base image that needs none. The picker reads the generated file only and
+  spawns no probe, and a template it found nothing for is drawn with no mark rather
+  than a misleading one.
+- `e2b-fleet` now warns before it launches a member that will come up on a sign-in
+  screen. One warning for the whole roster, naming each affected member, its
+  template and the exact variable to set, followed by the block you can paste
+  straight into your own `config.toml`. Then it launches: this is a warning and not
+  a gate, the same way a dirty worktree is (ADR 0003) — you may be about to
+  configure that credential, or may not care about that member. A member you
+  configured by hand counts as authenticated, and a member with nothing to
+  authenticate — a plain image, a template of your own, an agentless control arm —
+  is left out of it. Nothing on that path spawns a harness binary.
   (Nothing reads `auth.toml` yet; boxes start using it in the next change.)
 - **Pick a region by name.** `[sandbox] region = "us" | "eu"` is the only way to
   say where a box runs (see `docs/adr/0007`). `us` is the default and needs no

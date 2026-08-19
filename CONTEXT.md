@@ -49,6 +49,19 @@ box booted from the matching template comes up authenticated instead of on a sig
 screen. A harness is local and yours; a template is remote and E2B's.
 _Avoid_: Local agent, toolchain, credential source
 
+**Discovered value**:
+A credential `e2b-box auth` found on this machine and wrote to the generated
+`auth.toml`. It is merged *under* everything in `config.toml`, so it is a default
+and never an override — a value you wrote by hand always beats it.
+_Avoid_: Detected key, auto-config, inherited credential
+
+**Forwarded variable**:
+A discovered credential the plugin records by NAME rather than by value, because it
+was found only in the shell environment. The value is read from `e2b-box`'s own
+environment at box-create time and never written down. What the box receives is the
+variable **it** needs, which for three harnesses is not the one it was found under —
+hence *host variable* (where it was found) versus *box variable* (what is injected).
+_Avoid_: Passthrough, env copy, exported key
 ### Regions and projects
 
 **Region**:
@@ -70,6 +83,15 @@ lives in exactly one region.
 _Avoid_: Team (E2B's former name for it, still visible in older APIs), org,
 workspace (that word is already herdr's), and *project path* — the directory the
 worktree is uploaded to inside a box — which is a different thing entirely
+
+**Unauthenticated member**:
+A fleet member whose box will be created with no credential in it, so its agent comes
+up on a sign-in screen — the one question a fleet member cannot answer for itself,
+since nobody is sitting in front of it. Decided by what `resolveEnv` would inject and
+not by what `e2b-box auth` discovered, so a key you pasted into `config.toml` counts.
+A member with no agent at all, and one whose template no harness ships, are not
+unauthenticated — they have nothing to authenticate.
+_Avoid_: Broken member, failed member, keyless box
 
 ### Worktrees and fleets
 

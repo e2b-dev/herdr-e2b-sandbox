@@ -1,8 +1,14 @@
-// Unit tests for config resolution — no E2B calls, no filesystem config.
-// resolveTemplate/resolveLifecycle take a cfg object, so they're pure and offline.
+// Unit tests for config resolution. Pure functions take a cfg object, so they run
+// offline with no E2B call; the two that read a file are handed a path to a fixture
+// under the OS temp dir, and never the developer's own config.
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import TOML from "@iarna/toml"
+import { execFileSync } from "node:child_process"
+import { mkdtempSync, writeFileSync } from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
 import {
   resolveTemplate,
   resolveLifecycle,
@@ -15,6 +21,9 @@ import {
   resolveEnvConfig,
   resolveEnv,
   describeRegion,
+  resolveAuthConfig,
+  readAuthConfig,
+  discoveredSources,
 } from "../src/config.js"
 
 test("resolveTemplate: no rules → default template", () => {
@@ -353,6 +362,230 @@ test("resolveEnv: nothing to inject → undefined, so the create call can omit e
   assert.equal(resolveEnv({ envShared: {}, envByTemplate: {} }, "claude"), undefined)
   assert.equal(resolveEnv({}, "claude"), undefined)
   assert.equal(resolveEnv(undefined, "claude"), undefined)
+})
+
+// ── the generated auth.toml, and the full precedence ladder ───────────────────
+// `e2b-box auth` writes it, the loader reads it, and it sits UNDER everything the
+// user wrote. These pin the reading and the ladder; test/harness-auth.test.js pins
+// the writing.
+
+test("resolveAuthConfig: a discovered value lands in the same shape as the user's own table", () => {
+  const r = resolveAuthConfig({
+    templates: {
+      codex: { env: { OPENAI_API_KEY: "sk-from-a-file" } },
+      claude: { forward: { ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY" } },
+    },
+  })
+  assert.deepEqual(r.envDiscovered, { codex: { OPENAI_API_KEY: "sk-from-a-file" } })
+  assert.deepEqual(r.envForward, { claude: { ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY" } })
+})
+
+test("resolveAuthConfig: a forward entry is a variable NAME, so only strings survive", () => {
+  // A number or a table is not a variable name, and `env=""` on a sandbox is a
+  // syntax error rather than a lookup. Neither may become one.
+  const r = resolveAuthConfig({
+    templates: { amp: { forward: { AMP_API_KEY: "AMP_API_KEY", A: 3, B: { c: 1 }, C: "  ", "  ": "X" } } },
+  })
+  assert.deepEqual(r.envForward, { amp: { AMP_API_KEY: "AMP_API_KEY" } })
+})
+
+test("resolveAuthConfig: nothing in the file → empty tables, never undefined", () => {
+  assert.deepEqual(resolveAuthConfig(), { envDiscovered: {}, envForward: {} })
+  assert.deepEqual(resolveAuthConfig({ templates: { claude: {} } }).envDiscovered, {})
+})
+
+/** A fresh directory under the OS temp dir. Fixtures only — no test here ever
+ * reads or writes the developer's own config. */
+const tmpdir = () => mkdtempSync(path.join(os.tmpdir(), "herdr-e2b-auth-"))
+
+test("readAuthConfig: an absent generated file resolves to nothing and does not throw", () => {
+  const r = readAuthConfig(path.join(os.tmpdir(), "herdr-e2b-no-such-auth.toml"))
+  assert.deepEqual(r, { envDiscovered: {}, envForward: {} })
+})
+
+test("readAuthConfig: a malformed generated file resolves to nothing and does not throw", () => {
+  // The established habit: an unparseable auxiliary file must never take the CLI
+  // down. A half-written auth.toml is a bad discovery run, not a broken plugin.
+  const file = path.join(tmpdir(), "auth.toml")
+  writeFileSync(file, "[templates.claude.env\nANTHROPIC_API_KEY = ")
+  assert.deepEqual(readAuthConfig(file), { envDiscovered: {}, envForward: {} })
+})
+
+test("readAuthConfig: a written generated file is read back into the resolved shape", () => {
+  const file = path.join(tmpdir(), "auth.toml")
+  writeFileSync(file, '[templates.codex.env]\nOPENAI_API_KEY = "sk-from-a-file"\n[templates.claude.forward]\nANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"\n')
+  assert.deepEqual(readAuthConfig(file), {
+    envDiscovered: { codex: { OPENAI_API_KEY: "sk-from-a-file" } },
+    envForward: { claude: { ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY" } },
+  })
+})
+
+// What the `open` picker draws beside each template. Reading only — the picker may
+// never probe, so these pin that the annotation is a function of the generated file
+// and nothing else.
+
+test("discoveredSources: a stored value reads as `file`, a forwarded name as `env`", () => {
+  // The two sub-tables ARE the two sources: `env` holds a value copied out of a
+  // harness's own config file, `forward` holds a variable name seen in the shell.
+  const cfg = {
+    envDiscovered: { codex: { OPENAI_API_KEY: "sk-from-a-file" } },
+    envForward: { claude: { ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY" } },
+  }
+  assert.deepEqual(discoveredSources(cfg), { codex: "file", claude: "env" })
+})
+
+test("discoveredSources: a template with no entry gets no source, so the picker says nothing", () => {
+  // `auth` never ran, or the harness is not in the table. Either way the picker has
+  // nothing true to say about it, and a mark would be a claim rather than a finding.
+  const cfg = { envDiscovered: { codex: { OPENAI_API_KEY: "x" } }, envForward: {} }
+  assert.equal(discoveredSources(cfg).base, undefined)
+  assert.equal(discoveredSources(cfg).claude, undefined)
+})
+
+test("discoveredSources: nothing discovered at all → nothing to annotate, never a throw", () => {
+  assert.deepEqual(discoveredSources({}), {})
+  assert.deepEqual(discoveredSources(), {})
+})
+
+test("discoveredSources: forwarding wins when a template has both, exactly as resolveEnv does", () => {
+  // The annotation names the source of the value that would actually be INJECTED,
+  // and resolveEnv puts a forwarded name over a stored one. Nothing emits both
+  // today; this pins the two functions to the same tie-break for when something does.
+  const cfg = {
+    envDiscovered: { claude: { ANTHROPIC_API_KEY: "sk-copied-when-auth-ran" } },
+    envForward: { claude: { ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY" } },
+  }
+  assert.equal(discoveredSources(cfg).claude, "env")
+})
+
+test("resolveEnv: the whole ladder, in one place", () => {
+  // shipped default < discovered < the user's shared table < the user's template
+  // table. Four rungs, one variable each, plus one variable every rung sets — so
+  // the order is asserted and not merely the presence of each.
+  const cfg = {
+    templateEnvDefaults: { claude: { SHIPPED: "default", LADDER: "1-shipped" } },
+    envDiscovered: { claude: { DISCOVERED: "found", LADDER: "2-discovered" } },
+    envForward: { claude: { FORWARDED: "HOST_NAME", LADDER_FWD: "HOST_LADDER" } },
+    envShared: { SHARED: "mine", LADDER: "3-shared" },
+    envByTemplate: { claude: { PER_TEMPLATE: "mine too", LADDER: "4-per-template" } },
+  }
+  assert.deepEqual(resolveEnv(cfg, "claude", { HOST_NAME: "forwarded-value", HOST_LADDER: "2-forwarded" }), {
+    SHIPPED: "default",
+    DISCOVERED: "found",
+    FORWARDED: "forwarded-value",
+    LADDER_FWD: "2-forwarded",
+    SHARED: "mine",
+    PER_TEMPLATE: "mine too",
+    LADDER: "4-per-template",
+  })
+})
+
+test("resolveEnv: a hand-written value beats a discovered one, from either user table", () => {
+  // The promise the whole feature rests on. Both user tables are checked because
+  // a discovered value that only loses to ONE of them is an override that cannot
+  // override in the other.
+  const discovered = { envDiscovered: { claude: { ANTHROPIC_API_KEY: "sk-discovered" } } }
+  const forwarded = { envForward: { claude: { ANTHROPIC_API_KEY: "HOST_KEY" } } }
+  const host = { HOST_KEY: "sk-from-the-shell" }
+  const mine = { ANTHROPIC_API_KEY: "sk-mine" }
+
+  assert.equal(resolveEnv({ ...discovered, envByTemplate: { claude: mine } }, "claude", host).ANTHROPIC_API_KEY, "sk-mine")
+  assert.equal(resolveEnv({ ...discovered, envShared: mine }, "claude", host).ANTHROPIC_API_KEY, "sk-mine")
+  assert.equal(resolveEnv({ ...forwarded, envByTemplate: { claude: mine } }, "claude", host).ANTHROPIC_API_KEY, "sk-mine")
+  assert.equal(resolveEnv({ ...forwarded, envShared: mine }, "claude", host).ANTHROPIC_API_KEY, "sk-mine")
+})
+
+test("resolveEnv: a forwarded variable is read from the map passed in, not the process", () => {
+  // The reason the signature changed. If this ever reads process.env, precedence
+  // stops being pinnable by a test and starts depending on who ran the suite.
+  const cfg = { envForward: { droid: { FACTORY_API_KEY: "FACTORY_API_KEY" } } }
+  const before = process.env.FACTORY_API_KEY
+  process.env.FACTORY_API_KEY = "sk-from-the-process"
+  try {
+    assert.deepEqual(resolveEnv(cfg, "droid", { FACTORY_API_KEY: "sk-from-the-map" }), {
+      FACTORY_API_KEY: "sk-from-the-map",
+    })
+    assert.equal(resolveEnv(cfg, "droid", {}), undefined)
+    assert.equal(resolveEnv(cfg, "droid"), undefined)
+  } finally {
+    // Restored rather than deleted: this suite must leave the environment exactly
+    // as it found it, and a developer with a real FACTORY_API_KEY exported is not
+    // a reason for a later test to see a different machine.
+    if (before === undefined) delete process.env.FACTORY_API_KEY
+    else process.env.FACTORY_API_KEY = before
+  }
+})
+
+test("resolveEnv: a forwarded name beats a stored value for the same box variable", () => {
+  // Both are discovery, so neither can beat a user table — this only settles which
+  // half of the discovered rung wins. The forwarded one does: it reads this run's
+  // environment, while the stored one is a copy from whenever `auth` last ran.
+  const cfg = {
+    envDiscovered: { claude: { ANTHROPIC_API_KEY: "sk-copied-when-auth-ran" } },
+    envForward: { claude: { ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY" } },
+  }
+  assert.equal(
+    resolveEnv(cfg, "claude", { ANTHROPIC_API_KEY: "sk-in-the-shell-now" }).ANTHROPIC_API_KEY,
+    "sk-in-the-shell-now",
+  )
+  // …and a name that resolves to nothing falls back to the stored value rather
+  // than blanking it.
+  assert.equal(resolveEnv(cfg, "claude", {}).ANTHROPIC_API_KEY, "sk-copied-when-auth-ran")
+})
+
+test("resolveEnv: the box gets the BOX variable, looked up under the HOST one", () => {
+  // They differ for three of the seven harnesses. Getting this backwards produces
+  // a box that looks configured and is not: codex authenticates from CODEX_API_KEY
+  // here, and its box needs OPENAI_API_KEY.
+  const cfg = { envForward: { codex: { OPENAI_API_KEY: "CODEX_API_KEY" } } }
+  assert.deepEqual(resolveEnv(cfg, "codex", { CODEX_API_KEY: "sk-codex" }), { OPENAI_API_KEY: "sk-codex" })
+})
+
+test("resolveEnv: a forwarded name that holds nothing injects nothing", () => {
+  // An empty string is not a credential, and injecting one is worse than injecting
+  // none — the agent starts, reads it, and fails somewhere further from the cause.
+  const cfg = { envForward: { amp: { AMP_API_KEY: "AMP_API_KEY" } } }
+  assert.equal(resolveEnv(cfg, "amp", { AMP_API_KEY: "" }), undefined)
+  assert.equal(resolveEnv(cfg, "amp", { AMP_API_KEY: "   " }), undefined)
+  assert.equal(resolveEnv(cfg, "amp", { OTHER: "x" }), undefined)
+})
+
+test("resolveEnv: discovery for another template never reaches this box", () => {
+  const cfg = {
+    envDiscovered: { claude: { ANTHROPIC_API_KEY: "sk-ant" } },
+    envForward: { codex: { OPENAI_API_KEY: "CODEX_API_KEY" } },
+  }
+  assert.equal(resolveEnv(cfg, "base", { CODEX_API_KEY: "sk-codex" }), undefined)
+})
+
+test("loadConfig: a box boots from the generated file the way it boots from config.toml", () => {
+  // The loader wiring, end to end — the one thing the pure functions above cannot
+  // prove. A child process, because the config dir is resolved once at import.
+  const dir = tmpdir()
+  writeFileSync(
+    path.join(dir, "auth.toml"),
+    '[templates.codex.env]\nOPENAI_API_KEY = "sk-discovered"\n[templates.claude.forward]\nANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"\n[templates.amp.forward]\nAMP_API_KEY = "AMP_API_KEY"\n',
+  )
+  writeFileSync(path.join(dir, "config.toml"), '[templates.amp.env]\nAMP_API_KEY = "sk-hand-written"\n')
+
+  const script =
+    "const { loadConfig, resolveEnv } = await import(process.argv[1]);" +
+    "const cfg = loadConfig();" +
+    "console.log(JSON.stringify({" +
+    '  codex: resolveEnv(cfg, "codex", {}),' +
+    '  claude: resolveEnv(cfg, "claude", { ANTHROPIC_API_KEY: "sk-forwarded" }),' +
+    '  amp: resolveEnv(cfg, "amp", { AMP_API_KEY: "sk-from-the-shell" }),' +
+    "}))"
+  const out = execFileSync(
+    process.execPath,
+    ["--input-type=module", "-e", script, fileURLToPath(new URL("../src/config.js", import.meta.url))],
+    { encoding: "utf8", env: { ...process.env, HERDR_PLUGIN_CONFIG_DIR: dir } },
+  )
+  const got = JSON.parse(out)
+  assert.equal(got.codex.OPENAI_API_KEY, "sk-discovered", "a stored value reaches the box")
+  assert.equal(got.claude.ANTHROPIC_API_KEY, "sk-forwarded", "a recorded NAME is forwarded from the given environment")
+  // amp's shipped default still rides along, and the hand-written key still wins.
+  assert.deepEqual(got.amp, { AMP_EXECUTOR: "sandbox", AMP_API_KEY: "sk-hand-written" })
 })
 
 // --- [fleet.agents]: unattended by default ------------------------------------

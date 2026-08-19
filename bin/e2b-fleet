@@ -871,6 +871,20 @@ fi
 # the same sentence twice.
 [ -n "$dirty_note" ] && [ "$dirty_shown" -eq 0 ] && echo "$dirty_note" >&2
 
+# --- members that will land on a sign-in screen ------------------------------
+# The same shape as the dirty-tree warning above and for the same reason (ADR 0003):
+# make the consequence visible, name what is affected, and then do what was asked. A
+# missing credential is worse here than in `open` — nobody is sitting in front of a
+# fleet member, and a sign-in prompt is the one question it cannot answer itself.
+#
+# src/fleet-auth.js decides and words it, off the member plan we already have, so
+# bash never learns which variable a template wants. It reads config only: nothing
+# on this path may spawn a harness binary, which is the whole reason `auth` is a
+# subcommand you run on purpose. One block for the roster, never one per member, and
+# never a refusal — the credential may be the next thing the user configures.
+auth_note=$(printf '%s\n' "$members" | "$NODE" "$PLUGIN_DIR/src/fleet-auth.js" 2>/dev/null)
+[ -n "$auth_note" ] && printf '%s\n' "$auth_note" >&2
+
 # Which workspace a member hangs off is not cosmetic: herdr groups worktree
 # workspaces under a SOURCE workspace, and `--workspace ID` and `--cwd PATH` are
 # the two mutually-exclusive ways to name one. `--cwd` resolves the source by
@@ -1585,6 +1599,12 @@ if [ "$dash" -eq 1 ]; then
   (
     trap '' HUP
     printf -- '--- %s: fleet %s ---\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$fleet_slug"
+    # The pane already carried this warning, but the board is about to take the
+    # screen and hold it for the minutes the roster takes — which is exactly the
+    # window in which a member that will never start work is worth knowing about. So
+    # it goes into the log the board just pointed at, beside the per-member report,
+    # for the same reason that report is here: behind the board, the log IS the pane.
+    [ -n "$auth_note" ] && printf '%s\n' "$auth_note"
     run_members
     printf -- '--- done (rc=%s) ---\n' "$?"
   ) >>"$fleet_log" 2>&1 &

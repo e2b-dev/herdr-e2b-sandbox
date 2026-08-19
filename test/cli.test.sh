@@ -302,6 +302,65 @@ out=$("$E2B" auth --nope </dev/null 2>&1); rc=$?
 { [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "unknown option"; } \
   && ok "auth rejects a flag it does not know → exit 2" || bad "auth --nope (rc=$rc, out=$out)"
 
+# What the `open` picker draws beside each template. Asserted here rather than in a
+# unit test because the two halves have to agree across a process boundary: the node
+# side emits `<template>\t<mark>` and bash cuts the columns apart. Driven with a
+# fabricated config dir, so what this machine actually has installed cannot decide
+# whether the suite is green.
+echo "── behavior: the template picker annotates what auth discovered ──"
+TAB=$(printf '\t')
+pdir="$TMP/pick-auth"; ndir="$TMP/pick-noauth"; mkdir -p "$pdir" "$ndir"
+# The menu is pinned by a fixture rather than left to the shipped defaults, so an
+# eighth public template later cannot turn this block red for the wrong reason.
+for d in "$pdir" "$ndir"; do
+  printf '[sandbox]\ntemplate = "base"\ntemplates = ["claude", "codex", "amp", "base"]\n' > "$d/config.toml"
+done
+cat > "$pdir/auth.toml" <<'TOML'
+[templates.codex.env]
+OPENAI_API_KEY = "sk-from-a-file"
+[templates.claude.forward]
+ANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"
+TOML
+menu=$(HERDR_PLUGIN_CONFIG_DIR="$pdir" node "$ROOT/src/resolve-template.js" "" 2>&1 | tail -n +2)
+printf '%s\n' "$menu" | grep -q "^claude${TAB}key (env)$" \
+  && ok "a forwarded credential is annotated with its source" || bad "claude annotation (menu=$menu)"
+printf '%s\n' "$menu" | grep -q "^codex${TAB}key (file)$" \
+  && ok "a stored credential is annotated with its source" || bad "codex annotation (menu=$menu)"
+# The whole point of annotating rather than filtering: a template the plugin cannot
+# authenticate is still on the menu, and it is not moved out of the way either.
+printf '%s\n' "$menu" | grep -q "^amp${TAB}$" \
+  && ok "an unauthenticated template is still offered, with no annotation" || bad "amp row (menu=$menu)"
+want=$(HERDR_PLUGIN_CONFIG_DIR="$ndir" node "$ROOT/src/resolve-template.js" "" | tail -n +2 | cut -f1)
+[ "$(printf '%s\n' "$menu" | cut -f1)" = "$want" ] \
+  && ok "the menu is neither filtered nor reordered by what was discovered" \
+  || bad "the annotation changed the menu itself (with=$(printf '%s' "$menu" | cut -f1 | tr '\n' ' '), without=$(printf '%s' "$want" | tr '\n' ' '))"
+# The picker reads the generated file and nothing else — no probe is spawned on the
+# create path, which is the constraint `auth` being a separate subcommand exists for.
+[ "$(printf '%s\n' "$menu" | grep -c "key (")" = "2" ] \
+  && ok "only what the generated file holds is annotated" || bad "extra annotations (menu=$menu)"
+# The mark names a SOURCE, never a secret: the picker draws on a shared pane and its
+# frame ends up in a scrollback the box's shell then takes over.
+printf '%s\n' "$menu" | grep -q "sk-from-a-file" \
+  && bad "the picker PRINTED A CREDENTIAL VALUE" || ok "the picker names a source, never a value"
+# No generated file at all is the state every machine starts in: every template is
+# still offered, and nothing carries a mark.
+nmenu=$(HERDR_PLUGIN_CONFIG_DIR="$ndir" node "$ROOT/src/resolve-template.js" "" 2>&1); nrc=$?
+{ [ "$nrc" -eq 0 ] && [ -n "$(printf '%s\n' "$nmenu" | tail -n +2)" ] \
+  && ! printf '%s\n' "$nmenu" | grep -q "key ("; } \
+  && ok "no generated file → the full menu, no annotations, exit 0" \
+  || bad "picker with no auth.toml (rc=$nrc, out=$nmenu)"
+# Writer and reader, end to end and through the real file. `e2b-box auth` decides
+# which sub-table a finding lands in and the picker infers the source back out of
+# it; nothing else pins those two to each other, so a rename on either side would
+# otherwise make the mark quietly lie rather than fail.
+edir="$TMP/pick-e2e"; mkdir -p "$edir"
+printf '[sandbox]\ntemplate = "base"\ntemplates = ["claude", "base"]\n' > "$edir/config.toml"
+ANTHROPIC_API_KEY=sk-ant-test-not-real HERDR_PLUGIN_CONFIG_DIR="$edir" "$E2B" auth --yes </dev/null >/dev/null 2>&1
+emenu=$(HERDR_PLUGIN_CONFIG_DIR="$edir" node "$ROOT/src/resolve-template.js" "" 2>&1 | tail -n +2)
+printf '%s\n' "$emenu" | grep -q "^claude${TAB}key (env)$" \
+  && ok "what auth wrote is what the picker marks, through the real file" \
+  || bad "auth → picker round trip (menu=$emenu, file=$(cat "$edir/auth.toml" 2>/dev/null))"
+
 # `connect` takes the sandbox id `list` prints, because that is the id the CLI
 # underneath takes. An id we don't track is still attachable, but the cluster is
 # then a guess — and a wrong cluster looks exactly like a deleted sandbox, so it
@@ -461,6 +520,68 @@ out=$(fleet --slug login-fix -t claude -n); rc=$?
 { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "1 uncommitted file"; } \
   && ok "a dirty invoking tree warns with the count and continues" || bad "dirty warning (rc=$rc, out=$out)"
 rm -f "$FREPO/untracked.txt"
+
+echo "── fleet: a member that will land on a sign-in screen is named first ──"
+# The one place a missing credential actually costs something. In `open` it is an
+# annoyance — the user is sitting in front of the box and can sign in. In a fleet it
+# is a member that never starts work, discovered minutes later in a pane that is now
+# stuck. So it is said BEFORE launch, once, naming the member, its template and the
+# exact variable — and then the fleet flies (ADR 0003's shape, as for a dirty tree).
+AUTHCFG="$TMP/fleet-auth-cfg"; mkdir -p "$AUTHCFG"
+authfleet() { ( cd "$FREPO" && HERDR_E2B_FLEET_RAND=ab12 HERDR_PLUGIN_CONFIG_DIR="$AUTHCFG" "$FLEET" "$@" 2>&1 ); }
+
+rm -f "$AUTHCFG/config.toml" "$AUTHCFG/auth.toml"
+out=$(authfleet --slug signin -t claude -t codex -t base -n); rc=$?
+{ [ "$rc" -eq 0 ] \
+  && printf '%s\n' "$out" | grep -qE "signin-claude +claude +ANTHROPIC_API_KEY" \
+  && printf '%s\n' "$out" | grep -qE "signin-codex +codex +OPENAI_API_KEY" \
+  && printf '%s\n' "$out" | grep -q '\[templates.claude.env\]' \
+  && printf '%s' "$out" | grep -q "nothing was created"; } \
+  && ok "an unauthenticated member is named with its template and its box variable" \
+  || bad "fleet auth warning content (rc=$rc, out=$out)"
+
+# One warning for the batch. Three members, two of them affected, and the block is
+# emitted once — a roster of seven scrolling past as seven warnings is how a warning
+# stops being read. `base` is not in it: a plain image has no agent to sign in.
+{ [ "$(printf '%s\n' "$out" | grep -c 'will start unauthenticated')" -eq 1 ] \
+  && printf '%s\n' "$out" | grep -q '2 members will start unauthenticated' \
+  && ! printf '%s\n' "$out" | grep -q 'signin-base .*_API_KEY'; } \
+  && ok "one warning for the roster, and a template needing no credential is left out" \
+  || bad "fleet auth warning shape (out=$out)"
+
+# A credential the user wrote by hand IS a credential — the check is what reaches
+# Sandbox.create, not what `e2b-box auth` happened to discover. Printing the remedy
+# at somebody who already took it is how a warning becomes noise.
+printf '[templates.claude.env]\nANTHROPIC_API_KEY = "sk-ant-x"\n[templates.codex.env]\nOPENAI_API_KEY = "sk-oai-x"\n' > "$AUTHCFG/config.toml"
+out=$(authfleet --slug allset -t claude -t codex -n); rc=$?
+{ [ "$rc" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'will start unauthenticated'; } \
+  && ok "a fully authenticated roster says nothing at all" \
+  || bad "authenticated roster warned anyway (rc=$rc, out=$out)"
+
+# What `e2b-box auth` generated counts too, and it is the same check: auth.toml is
+# merged UNDER config.toml by the loader, so both arrive as one resolved env.
+rm -f "$AUTHCFG/config.toml"
+printf '[templates.claude.env]\nANTHROPIC_API_KEY = "sk-ant-discovered"\n' > "$AUTHCFG/auth.toml"
+out=$(authfleet --slug found -t claude -n); rc=$?
+rm -f "$AUTHCFG/auth.toml"
+{ [ "$rc" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'will start unauthenticated'; } \
+  && ok "a credential discovered into auth.toml authenticates the member too" \
+  || bad "discovered credential warned anyway (rc=$rc, out=$out)"
+
+# NOTHING on this path may spawn a harness binary. That is the whole reason `auth` is
+# a subcommand you run on purpose, and a fleet creates several boxes at once — a
+# probe here would put the cost back exactly where it was designed out of. Proved
+# mechanically rather than by reading the code, because the failure is invisible.
+PROBEDIR="$TMP/fleet-no-probe"; mkdir -p "$PROBEDIR"
+for b in claude codex grok opencode amp droid prime; do
+  printf '#!/bin/sh\necho "%s" >> "%s/spawned"\n' "$b" "$PROBEDIR" > "$PROBEDIR/$b"
+  chmod +x "$PROBEDIR/$b"
+done
+out=$( cd "$FREPO" && PATH="$PROBEDIR:$PATH" HERDR_E2B_FLEET_RAND=ab12 \
+       HERDR_PLUGIN_CONFIG_DIR="$AUTHCFG" "$FLEET" --slug noprobe -t claude -t codex -n 2>&1 ); rc=$?
+{ [ "$rc" -eq 0 ] && [ ! -f "$PROBEDIR/spawned" ]; } \
+  && ok "the fleet path spawns no harness binary" \
+  || bad "the fleet probed: $(cat "$PROBEDIR/spawned" 2>/dev/null)"
 
 # [fleet] base and prefix come from config, so the branch namespace and the ref
 # members fork from are both the user's to choose.
@@ -949,6 +1070,17 @@ out=$(spawn herdr-ok --slug ok-run -t claude -t codex); rc=$?
   && ok "every member up → one line each + '2/2 up' + exit 0" \
   || bad "all-members-up report (rc=$rc, out=$out)"
 
+# …and the live path launches after saying it. The warning is not a gate: the user
+# may be about to configure that credential, or may not care about that member.
+rm -f "$PROBEDIR/spawned"
+out=$(PATH="$PROBEDIR:$PATH" spawn herdr-ok --slug unauth -t claude); rc=$?
+{ [ "$rc" -eq 0 ] \
+  && printf '%s\n' "$out" | grep -qE "unauth-claude +claude +ANTHROPIC_API_KEY" \
+  && printf '%s\n' "$out" | grep -qx "1/1 up" \
+  && [ ! -f "$PROBEDIR/spawned" ]; } \
+  && ok "a member with no credential is named, the fleet launches anyway, and nothing probed" \
+  || bad "unauthenticated member blocked the launch (rc=$rc, probed=$(cat "$PROBEDIR/spawned" 2>/dev/null), out=$out)"
+
 out=$(spawn herdr-fail --slug bad-run -t claude -t codex); rc=$?
 { [ "$rc" -ne 0 ] \
   && printf '%s\n' "$out" | grep -q "✗ bad-run-claude" \
@@ -1301,6 +1433,15 @@ for _ in $(seq 1 50); do grep -q 'done (rc=' "$FLEET_LOG" 2>/dev/null && break; 
   && grep -q "done (rc=0)" "$FLEET_LOG"; } \
   && ok "the per-member report lands in the fleet log behind the board" \
   || bad "fleet log (log=$(cat "$FLEET_LOG" 2>/dev/null))"
+
+# …and so does the unauthenticated-member warning. The pane carried it a moment
+# before the exec, but the board then owns the screen for the whole provisioning
+# run — which is precisely the window in which "this member will never start work"
+# is worth reading. Behind the board, the log is the pane.
+{ grep -q "will start unauthenticated" "$FLEET_LOG" \
+  && grep -qE "boarded-claude +claude +ANTHROPIC_API_KEY" "$FLEET_LOG"; } \
+  && ok "the sign-in warning reaches the fleet log too, not only the pane the board covers" \
+  || bad "fleet log auth warning (log=$(cat "$FLEET_LOG" 2>/dev/null))"
 
 echo "── bench: the launcher's refusals, and members found by branch ──"
 # The Rust binary has its own tests; these cover the shell wrapper and the two
@@ -1774,40 +1915,44 @@ REPO, OUT, BASH = sys.argv[1], sys.argv[2], sys.argv[3]
 CHOOSER = REPO + "/bin/lib/chooser.sh"
 MENU = "\"$(printf 'claude\\ncodex\\nbase')\""
 
-def drain(fd, quiet=0.05, limit=4.0):
+def drain(fd, quiet=0.05, limit=4.0, sink=None):
     """Read until the child has been silent long enough to have finished its
     redraw (keeps the whole sweep about a second instead of a fixed sleep per
-    keystroke), or until it closes the pty."""
+    keystroke), or until it closes the pty. `sink` collects what was drawn, which
+    is the only way to assert on a picker's SCREEN rather than on what it returned."""
     end = time.time() + limit
     last = time.time()
     while time.time() < end:
         r, _, _ = select.select([fd], [], [], 0.03)
         if r:
             try:
-                if not os.read(fd, 65536):
+                chunk = os.read(fd, 65536)
+                if not chunk:
                     return False
             except OSError:
                 return False
+            if sink is not None:
+                sink.append(chunk)
             last = time.time()
         elif time.time() - last > quiet:
             return True
     return True
 
-def run(script, keys):
+def run(script, keys, sink=None):
     if os.path.exists(OUT):
         os.remove(OUT)
     pid, fd = pty.fork()
     if pid == 0:
         os.execv(BASH, [BASH, "-c", "source %s; %s" % (CHOOSER, script)])
-    drain(fd)
+    drain(fd, sink=sink)
     for k in keys:
         os.write(fd, k)
-        drain(fd)
+        drain(fd, sink=sink)
     deadline = time.time() + 6
     while time.time() < deadline:
         if os.waitpid(pid, os.WNOHANG)[0]:
             break
-        if not drain(fd, quiet=0.1, limit=0.4):
+        if not drain(fd, quiet=0.1, limit=0.4, sink=sink):
             break
     try:
         os.close(fd)
@@ -1829,6 +1974,11 @@ def call(expr, prefix=""):
     return '%sout=$(%s); rc=$?; printf "%%s|rc=%%s\\n" "$out" "$rc" > "%s"' % (prefix, expr, OUT)
 
 PICK = call("ask_template_tty demo codex %s 3" % MENU)
+# The same menu with the auth annotations `e2b-box auth` discovered, one line per
+# row: a forwarded name, a stored value, and a template with nothing found — which
+# is the third state and must draw no mark at all.
+MARKS = "\"$(printf 'key (env)\\nkey (file)\\n')\""
+PICKANN = call("ask_template_tty demo codex %s 3 %s" % (MENU, MARKS))
 ROST = call("ask_roster_tty demo %s 3 codex" % MENU)
 VALID = 'alnum() { case "$1" in *[a-zA-Z0-9]*) return 0;; esac; return 1; }; '
 SLUG = call("ask_slug_tty '' alnum", VALID)
@@ -1839,6 +1989,9 @@ SLUGTASK = call("ask_slug_tty '' alnum task", VALID)
 
 cases = [
     ("single: enter takes the resolved default row, not row 1", PICK, [b"\r"], "codex|rc=0"),
+    # Annotating must not change what the picker RETURNS — same keys, same answer.
+    ("single: an annotated menu still returns the row you took", PICKANN, [b"\r"], "codex|rc=0"),
+    ("single: an unannotated row is still selectable", PICKANN, [b"3"], "base|rc=0"),
     ("single: j moves down",                     PICK, [b"j", b"\r"], "base|rc=0"),
     ("single: k moves up",                       PICK, [b"k", b"\r"], "claude|rc=0"),
     ("single: a number jumps straight to a row", PICK, [b"1"], "claude|rc=0"),
@@ -1876,6 +2029,28 @@ for name, script, keys, want in cases:
     detail = name if got == want else "%s (got %r, want %r)" % (name, got, want)
     print("%s|%s" % (verdict, detail))
     sys.stdout.flush()
+
+# What was DRAWN, not what came back. The annotation has no other observable
+# effect, so the only honest check is to read the frame off the pty.
+sink = []
+run(PICKANN, [b"\r"], sink=sink)
+screen = b"".join(sink).decode("utf-8", "replace")
+for name, want, present in [
+    ("a discovered credential is drawn beside its template", "key (env)", True),
+    ("the source tag distinguishes a stored value from a forwarded name", "key (file)", True),
+    ("a template with nothing discovered is drawn with no mark", "base", True),
+]:
+    hit = (want in screen) == present
+    print("%s|%s" % ("ok" if hit else "FAIL", name if hit else "%s (screen=%r)" % (name, screen[-400:])))
+    sys.stdout.flush()
+# Three states, told apart: two annotated rows and one bare one. `base` is the bare
+# row, so nothing may follow its name but the row's own padding.
+bare = [ln for ln in screen.split("\r\n") if "base" in ln and "template name" not in ln]
+hit = bool(bare) and all("key (" not in ln for ln in bare)
+print("%s|%s" % ("ok" if hit else "FAIL",
+                 "an unauthenticated template is offered without a misleading mark"
+                 if hit else "an unauthenticated template drew a mark (got %r)" % bare))
+sys.stdout.flush()
 PYCHECK
   while IFS='|' read -r verdict detail; do
     [ -n "$verdict" ] || continue
