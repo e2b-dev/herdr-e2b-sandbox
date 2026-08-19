@@ -226,8 +226,13 @@ cfg_after=$(ls -1A "$cfgdir" | wc -l | tr -d ' ')
 # A key in the environment is borrowable and must be reported as such — and the
 # report must never contain the value, only the variable's name.
 out=$(ANTHROPIC_API_KEY=sk-ant-test-not-real "$E2B" auth 2>&1)
-printf '%s' "$out" | grep -q "key found" \
-  && ok "auth sees a credential in the environment" || bad "auth missed an env credential"
+# Two truthful phrasings, because the row depends on whether the HARNESS is here:
+# "key found (env)" when it is, and "not installed here, but ... is set" when it is
+# not. CI has no claude, so asserting only the first tested the developer's laptop
+# rather than the behaviour. What must hold either way is that the credential is
+# seen and reported as usable.
+printf '%s' "$out" | grep -qE "key found|a box can still use it" \
+  && ok "auth sees a credential in the environment" || bad "auth missed an env credential (out=$out)"
 printf '%s' "$out" | grep -q "sk-ant-test-not-real" \
   && bad "auth PRINTED A SECRET VALUE" || ok "auth never prints a credential's value"
 
