@@ -84,6 +84,18 @@ import { loadConfig } from "./config.js"
 // or backtick — check that still holds before editing one.
 export const DEFAULT_SEEDS = {
   claude: `k=$(printf %s "$ANTHROPIC_API_KEY" | tail -c 20); [ -n "$k" ] || echo "herdr-e2b: no ANTHROPIC_API_KEY in this box - claude starts unauthenticated"; node -e 'const f=process.env.HOME+"/.claude.json",fs=require("fs");let c={};try{c=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}if(c.hasCompletedOnboarding===true&&c.bypassPermissionsModeAccepted===true){console.log("herdr-e2b: claude onboarding already done - leaving it alone");process.exit(0)}c.hasCompletedOnboarding=true;c.bypassPermissionsModeAccepted=true;if(!c.theme)c.theme="dark";if(c.autoUpdates===undefined)c.autoUpdates=false;const k=process.argv[1];if(k){c.customApiKeyResponses=c.customApiKeyResponses||{};const a=c.customApiKeyResponses.approved||[];if(!a.includes(k))a.push(k);c.customApiKeyResponses.approved=a;c.customApiKeyResponses.rejected=c.customApiKeyResponses.rejected||[]}c.projects=c.projects||{};c.projects[process.cwd()]=Object.assign({},c.projects[process.cwd()],{hasTrustDialogAccepted:true});fs.writeFileSync(f,JSON.stringify(c))' "$k"; node -e 'const fs=require("fs"),d=process.env.HOME+"/.claude",f=d+"/settings.json";let s={};try{s=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}if(s.skipDangerousModePermissionPrompt===true){console.log("herdr-e2b: claude already skips the bypass disclaimer - leaving it alone");process.exit(0)}s.skipDangerousModePermissionPrompt=true;fs.mkdirSync(d,{recursive:true});fs.writeFileSync(f,JSON.stringify(s))'`,
+  // Session FIRST, key as the fallback (ADR 0007). $CODEX_AUTH_JSON carries a whole
+  // auth.json — the user's own signed-in session, with its single-use refresh token
+  // already replaced by a placeholder host-side — so the box writes the file
+  // verbatim. Only the variable's NAME is here; the box's shell expands it, and
+  // nothing secret reaches the pane. Falling back to the api-key shape keeps every
+  // box that has no session behaving exactly as it did before.
+  //
+  // The clobber guard moved from "does this file mention OPENAI_API_KEY" to "is
+  // there a file at all": a resumed box signed in with a session has no such string
+  // in it, and the old test would have overwritten the user's live login with a
+  // freshly seeded one on every reconnect.
+  //
   // Two pieces of state, not one. The key answers the sign-in menu; the trust
   // entry answers the SECOND prompt — "Do you trust the contents of this
   // directory?" — which Codex asks per working directory before it will load
@@ -91,7 +103,7 @@ export const DEFAULT_SEEDS = {
   // Its schema is `projects."<abs path>".trust_level = "trusted"` in
   // ~/.codex/config.toml (Codex config reference). Appended, never rewritten: the
   // file may already carry a model or an MCP server the image put there.
-  codex: `if [ -n "$OPENAI_API_KEY" ]; then mkdir -p "$HOME/.codex"; if grep -q OPENAI_API_KEY "$HOME/.codex/auth.json" 2>/dev/null; then echo "herdr-e2b: codex is already authenticated - leaving it alone"; else printf '{"auth_mode":"apikey","OPENAI_API_KEY":"%s"}' "$OPENAI_API_KEY" > "$HOME/.codex/auth.json" && chmod 600 "$HOME/.codex/auth.json"; fi; else echo "herdr-e2b: no OPENAI_API_KEY in this box - codex starts unauthenticated"; fi; mkdir -p "$HOME/.codex"; node -e 'const fs=require("fs"),p=process.cwd(),f=process.env.HOME+"/.codex/config.toml",NL=String.fromCharCode(10),h="[projects."+JSON.stringify(p)+"]";let t="";try{t=fs.readFileSync(f,"utf8")}catch{}if(t.includes(h)){console.log("herdr-e2b: codex already trusts "+p+" - leaving it alone");process.exit(0)}fs.appendFileSync(f,NL+h+NL+"trust_level = "+JSON.stringify("trusted")+NL)'`,
+  codex: `mkdir -p "$HOME/.codex"; if [ -s "$HOME/.codex/auth.json" ]; then echo "herdr-e2b: codex is already authenticated - leaving it alone"; elif [ -n "$CODEX_AUTH_JSON" ]; then printf %s "$CODEX_AUTH_JSON" > "$HOME/.codex/auth.json" && chmod 600 "$HOME/.codex/auth.json" && echo "herdr-e2b: codex signed in with your borrowed session"; elif [ -n "$OPENAI_API_KEY" ]; then printf '{"auth_mode":"apikey","OPENAI_API_KEY":"%s"}' "$OPENAI_API_KEY" > "$HOME/.codex/auth.json" && chmod 600 "$HOME/.codex/auth.json"; else echo "herdr-e2b: no codex credential in this box - codex starts unauthenticated"; fi; mkdir -p "$HOME/.codex"; node -e 'const fs=require("fs"),p=process.cwd(),f=process.env.HOME+"/.codex/config.toml",NL=String.fromCharCode(10),h="[projects."+JSON.stringify(p)+"]";let t="";try{t=fs.readFileSync(f,"utf8")}catch{}if(t.includes(h)){console.log("herdr-e2b: codex already trusts "+p+" - leaving it alone");process.exit(0)}fs.appendFileSync(f,NL+h+NL+"trust_level = "+JSON.stringify("trusted")+NL)'`,
   // Not a wizard — an UPDATER. opencode updates itself in the background and then
   // puts a modal over the pane ("Successfully updated to vX. Please restart the
   // application.", observed live on test-12). That is worse than a first-run prompt,

@@ -37,6 +37,18 @@ layers, the data flow, the state model, and the invariants worth checking).
   covered off `--dry-run` (content, the once-per-roster shape, and the templates it
   leaves out) and off the herdr stub (it warns, then reports `1/1 up`); that its
   path spawns no harness binary is proved with fake harness binaries on `PATH`.
+  `install.sh`'s first-run discovery is lifted out as a function and driven against
+  a stub `e2b-box` — what it calls, with which flag, and that a failing or
+  already-discovered machine still finishes — all under `set -euo pipefail`, since
+  "a discovery failure does not fail the install" is only a claim when the shell
+  options that could break it are on. One case uses the real subcommand, for the
+  one thing a stub cannot show: a hand-written `config.toml` surviving untouched.
+  The borrowed-session work is covered off fabricated `auth.json` fixtures rather than
+  an installed codex — that the real refresh token reaches neither the plan nor the
+  rendered file, that an unreadable expiry is refused instead of guessed at, and the
+  whole precedence ladder including `prefer = "env"` and an expired session falling
+  back to the hand-written value. The login-shell visibility check takes its shell as
+  an argument, so it runs identically on a machine where every key IS visible.
 
 Live E2B round-trips (provision / sync / pull / kill) are verified manually,
 since they consume real sandbox time — use a throwaway git folder and kill the

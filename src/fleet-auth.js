@@ -65,7 +65,14 @@ export function unauthenticatedMembers(members = [], cfg = {}, env = {}) {
     if (Object.prototype.hasOwnProperty.call(agents, m.template) && String(agents[m.template] ?? "") === "") {
       continue
     }
-    const value = resolveEnv(cfg, m.template, env)?.[h.boxVar]
+    const resolved = resolveEnv(cfg, m.template, env)
+    // A member is authenticated by EITHER variable. A borrowed session arrives under
+    // its own name (`sessionFile.boxVar`) rather than the key's, so checking only
+    // `boxVar` would warn about a member that comes up perfectly signed in — the
+    // false alarm that teaches people to ignore this warning. An expired session
+    // never reaches here: resolveEnv drops it, so the member correctly reads as
+    // unauthenticated and gets named.
+    const value = resolved?.[h.boxVar] ?? (h.sessionFile ? resolved?.[h.sessionFile.boxVar] : undefined)
     // Blank is missing. An empty credential is the failure that shows up furthest
     // from its cause — the agent boots, reads it and dies authenticating, which
     // reads as a broken key rather than an absent one.

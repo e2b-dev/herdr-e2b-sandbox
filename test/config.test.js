@@ -24,6 +24,7 @@ import {
   resolveAuthConfig,
   readAuthConfig,
   discoveredSources,
+  unresolvedForwards,
 } from "../src/config.js"
 
 test("resolveTemplate: no rules → default template", () => {
@@ -390,7 +391,7 @@ test("resolveAuthConfig: a forward entry is a variable NAME, so only strings sur
 })
 
 test("resolveAuthConfig: nothing in the file → empty tables, never undefined", () => {
-  assert.deepEqual(resolveAuthConfig(), { envDiscovered: {}, envForward: {} })
+  assert.deepEqual(resolveAuthConfig(), { envDiscovered: {}, envForward: {}, envSession: {} })
   assert.deepEqual(resolveAuthConfig({ templates: { claude: {} } }).envDiscovered, {})
 })
 
@@ -400,7 +401,7 @@ const tmpdir = () => mkdtempSync(path.join(os.tmpdir(), "herdr-e2b-auth-"))
 
 test("readAuthConfig: an absent generated file resolves to nothing and does not throw", () => {
   const r = readAuthConfig(path.join(os.tmpdir(), "herdr-e2b-no-such-auth.toml"))
-  assert.deepEqual(r, { envDiscovered: {}, envForward: {} })
+  assert.deepEqual(r, { envDiscovered: {}, envForward: {}, envSession: {} })
 })
 
 test("readAuthConfig: a malformed generated file resolves to nothing and does not throw", () => {
@@ -408,15 +409,18 @@ test("readAuthConfig: a malformed generated file resolves to nothing and does no
   // down. A half-written auth.toml is a bad discovery run, not a broken plugin.
   const file = path.join(tmpdir(), "auth.toml")
   writeFileSync(file, "[templates.claude.env\nANTHROPIC_API_KEY = ")
-  assert.deepEqual(readAuthConfig(file), { envDiscovered: {}, envForward: {} })
+  assert.deepEqual(readAuthConfig(file), { envDiscovered: {}, envForward: {}, envSession: {} })
 })
 
 test("readAuthConfig: a written generated file is read back into the resolved shape", () => {
   const file = path.join(tmpdir(), "auth.toml")
-  writeFileSync(file, '[templates.codex.env]\nOPENAI_API_KEY = "sk-from-a-file"\n[templates.claude.forward]\nANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"\n')
+  // All three sub-tables in one file, so the reader is pinned against the shape
+  // `renderAuthToml` actually emits rather than against one kind at a time.
+  writeFileSync(file, '[templates.codex.env]\nOPENAI_API_KEY = "sk-from-a-file"\n[templates.claude.forward]\nANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"\n[templates.grok.session]\nvar = "GROK_AUTH_JSON"\nvalue = "{payload}"\nexpires = "2099-01-01T00:00:00.000Z"\n')
   assert.deepEqual(readAuthConfig(file), {
     envDiscovered: { codex: { OPENAI_API_KEY: "sk-from-a-file" } },
     envForward: { claude: { ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY" } },
+    envSession: { grok: { var: "GROK_AUTH_JSON", value: "{payload}", expires: "2099-01-01T00:00:00.000Z" } },
   })
 })
 
@@ -917,4 +921,95 @@ test("resolveCredentials: [sandbox] domain is rejected, and names the region to 
     () => resolveCredentials({ sandbox: { domain: "your-own-e2b-host.example" } }),
     /region = "us" or "eu"/,
   )
+})
+
+// ── ADR 0007: a discovered session outranks the user's own table ───────────────
+// The one place discovery is allowed to beat a hand-written value, so it is pinned
+// here rather than left to inspection — and so is every way it must NOT.
+
+const sessionCfg = (expires) => ({
+  envByTemplate: { codex: { OPENAI_API_KEY: "sk-hand-written" } },
+  envSession: { codex: { var: "CODEX_AUTH_JSON", value: "{session}", expires } },
+})
+const inDays = (n) => new Date(Date.now() + n * 86400000).toISOString()
+
+test("a live session beats the user's own [templates.<name>.env]", () => {
+  const env = resolveEnv(sessionCfg(inDays(9)), "codex", {})
+  assert.equal(env.CODEX_AUTH_JSON, "{session}")
+  // The hand-written key is still delivered — it is outranked for the box's choice
+  // of credential, not deleted from the environment.
+  assert.equal(env.OPENAI_API_KEY, "sk-hand-written")
+})
+
+test("an EXPIRED session is not injected at all", () => {
+  const env = resolveEnv(sessionCfg(inDays(-1)), "codex", {})
+  assert.equal(env.CODEX_AUTH_JSON, undefined)
+  // ...and the hand-written value it would have outranked still reaches the box, so
+  // an expired session degrades to a working credential rather than a sign-in screen.
+  assert.equal(env.OPENAI_API_KEY, "sk-hand-written")
+})
+
+test("a session with an unparseable expiry is treated as expired", () => {
+  assert.equal(resolveEnv(sessionCfg("not a date"), "codex", {}).CODEX_AUTH_JSON, undefined)
+})
+
+test("prefer = 'env' takes the precedence back", () => {
+  const cfg = { ...sessionCfg(inDays(9)), templatePrefer: { codex: "env" } }
+  assert.equal(resolveEnv(cfg, "codex", {}).CODEX_AUTH_JSON, undefined)
+  assert.equal(resolveEnv(cfg, "codex", {}).OPENAI_API_KEY, "sk-hand-written")
+})
+
+test("prefer applies only to the template it names", () => {
+  const cfg = {
+    templatePrefer: { claude: "env" },
+    envSession: { codex: { var: "CODEX_AUTH_JSON", value: "{s}", expires: inDays(9) } },
+  }
+  assert.equal(resolveEnv(cfg, "codex", {}).CODEX_AUTH_JSON, "{s}")
+})
+
+test("resolveAuthConfig refuses a session missing any of var/value/expires", () => {
+  const partial = { templates: { codex: { session: { var: "V", value: "x" } } } }
+  assert.deepEqual(resolveAuthConfig(partial).envSession, {})
+})
+
+test("resolveEnvConfig reads prefer only for the exact value 'env'", () => {
+  const t = { codex: { prefer: "env" }, claude: { prefer: "session" }, grok: { prefer: "ENV " } }
+  assert.deepEqual(resolveEnvConfig({ templates: t }).templatePrefer, { codex: "env" })
+})
+
+test("discoveredSources tells a live session from a dead one", () => {
+  assert.equal(discoveredSources({ envSession: { codex: { expires: inDays(9) } } }).codex, "session")
+  assert.equal(
+    discoveredSources({ envSession: { codex: { expires: inDays(-1) } } }).codex,
+    "session-expired",
+  )
+})
+
+// ── 08: a forwarded name that resolves to nothing must be nameable ─────────────
+// The failure this catches arrives disguised as success — `auth` says `key found`,
+// the box boots unauthenticated, and nothing connects the two.
+
+test("unresolvedForwards names a recorded variable the environment does not hold", () => {
+  const cfg = { envForward: { grok: { XAI_API_KEY: "XAI_API_KEY" } } }
+  assert.deepEqual(unresolvedForwards(cfg, "grok", {}), ["XAI_API_KEY"])
+  assert.deepEqual(unresolvedForwards(cfg, "grok", { XAI_API_KEY: "xai-live" }), [])
+})
+
+test("unresolvedForwards treats a blank value as missing", () => {
+  // An empty credential fails further from its cause than an absent one: the agent
+  // boots, reads it, and dies authenticating.
+  const cfg = { envForward: { grok: { XAI_API_KEY: "XAI_API_KEY" } } }
+  assert.deepEqual(unresolvedForwards(cfg, "grok", { XAI_API_KEY: "   " }), ["XAI_API_KEY"])
+})
+
+test("unresolvedForwards names the HOST variable, which is what the user must export", () => {
+  // Three harnesses are found under one name and injected under another; telling
+  // the user to export the box's name would send them to fix the wrong thing.
+  const cfg = { envForward: { codex: { OPENAI_API_KEY: "CODEX_API_KEY" } } }
+  assert.deepEqual(unresolvedForwards(cfg, "codex", {}), ["CODEX_API_KEY"])
+})
+
+test("unresolvedForwards is silent for a template with nothing forwarded", () => {
+  assert.deepEqual(unresolvedForwards({ envForward: { grok: {} } }, "claude", {}), [])
+  assert.deepEqual(unresolvedForwards({}, "grok", {}), [])
 })

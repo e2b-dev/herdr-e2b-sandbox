@@ -185,15 +185,44 @@ test("interpretProbe: a codex API key in its own auth file is borrowable from th
   assert.equal(r.source, "file")
 })
 
-test("interpretProbe: a codex subscription login is not a key this plugin can use", () => {
+test("interpretProbe: a codex subscription login IS borrowable, as a session", () => {
+  // Reversed by ADR 0007. It used to be `no-key` on the grounds that OpenAI forbids
+  // sharing auth.json across concurrent jobs — but that rule guards the single-use
+  // refresh token, which src/harnesses.js replaces with a placeholder rather than
+  // copying. What is left is a fixed-expiry bearer that rotates nothing.
   const r = interpretProbe("codex", {
     status: 0,
     stdout: "",
     stderr: "Logged in using ChatGPT\n",
     env: {},
   })
+  assert.equal(r.state, "authenticated")
+  assert.equal(r.source, "session")
+})
+
+test("interpretProbe: a login this table has no reader for stays no-key", () => {
+  // The catch-all below the ChatGPT branch. A future `Logged in using <something>`
+  // must not be silently claimed as borrowable just because it says "Logged in".
+  const r = interpretProbe("codex", {
+    status: 0,
+    stdout: "",
+    stderr: "Logged in using Azure Entra\n",
+    env: {},
+  })
   assert.equal(r.state, "no-key")
   assert.equal(r.source, "login")
+})
+
+test("interpretProbe: a real CODEX_API_KEY still outranks a subscription session", () => {
+  // The env check runs first and must keep doing so: an actual key the user set is
+  // a deliberate choice, and a session must not shadow it.
+  const r = interpretProbe("codex", {
+    status: 0,
+    stdout: "",
+    stderr: "Logged in using ChatGPT\n",
+    env: { CODEX_API_KEY: "sk-real" },
+  })
+  assert.equal(r.source, "env")
 })
 
 test("interpretProbe: codex says not-logged-in while the environment says otherwise", () => {

@@ -47,6 +47,38 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   configured by hand counts as authenticated, and a member with nothing to
   authenticate — a plain image, a template of your own, an agentless control arm —
   is left out of it. Nothing on that path spawns a harness binary.
+- `install.sh` now runs that discovery once on a fresh install, so a first box comes
+  up authenticated without anyone reading the config reference. It shells out to
+  `e2b-box auth --yes` — one discovery implementation, a second entry point into it
+  — and passes the flag because `herdr plugin install` has no terminal and a
+  scripted install must not stall on a question. It prompts for no harness
+  credential, and it cannot fail the install: no harness installed, every probe
+  timing out, or no Node >= 22 yet each produce a report and a successful install.
+  A machine that already has a generated `auth.toml` is left alone, and every run
+  says how to refresh it after installing a new harness.
+- A box can now boot into the **signed-in session** on your machine rather than a
+  pasted key. `e2b-box auth` records a Codex subscription login out of its own
+  `auth.json`, and the codex row goes from "signed in, but not a key this plugin can
+  use" to "signed-in session (expires in 8 days)". Per ADR 0007: the single-use
+  refresh token is never copied — a visible placeholder goes in its place, so a
+  borrowed copy can never revoke the login it came from — and unlike every other
+  discovered thing a session **outranks** your own `[templates.<name>.env]`, with
+  `prefer = "env"` on a template to take that back. It expires, so its expiry is
+  recorded and the report, the chooser mark and the fleet warning all render an
+  expired session as expired; an expired one is never injected, so a box falls back
+  to whatever credential still works instead of to a sign-in screen. Claude is
+  untouched — its credential is in the Keychain, which ADR 0007 does not reopen.
+- `e2b-box auth` now checks whether a variable it recorded by NAME is visible to a
+  **login shell**, and says so when it is not. herdr runs plugin commands as
+  `bash -lc`, which reads `~/.profile` and never a zsh rc, so a key exported only
+  from `~/.zshrc` was found at discovery and simply absent when the box was created —
+  the report said `key found` and the box still opened on a sign-in screen. The
+  warning names the variable, the template and both fixes. It is a real check rather
+  than a blanket caveat, so it stays quiet on the machines where the key does survive.
+- A forwarded name that cannot be resolved at box-create time is now named in the
+  provisioning log at the moment it goes missing, instead of being dropped silently.
+  The box is still created — an unauthenticated box is what was asked for and is
+  still useful.
   (Nothing reads `auth.toml` yet; boxes start using it in the next change.)
 - **Pick a region by name.** `[sandbox] region = "us" | "eu"` is the only way to
   say where a box runs (see `docs/adr/0007`). `us` is the default and needs no

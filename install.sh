@@ -219,11 +219,60 @@ else
   echo "  ! No E2B API key — set [secrets].e2b_api_key in $CFG, or export E2B_API_KEY"
 fi
 
+# Harness credentials: on first run, ask `e2b-box auth` which coding harnesses are
+# installed here and let it write its generated auth.toml, so the first box comes
+# up authenticated instead of on the agent's own sign-in screen. Sits alongside
+# the API key block above and follows its conventions — say what happened, and
+# say what to do later.
+#
+# This shells out to the subcommand a user types; there is ONE discovery
+# implementation and this is a second entry point into it, not a second copy.
+# `--yes` because `herdr plugin install` runs this with no TTY, and a scripted
+# install must not stall waiting for a confirmation that nobody can give.
+#
+# Best effort, always. No harness installed, every probe timing out, or no Node
+# >= 22 yet: each produces a report and a SUCCESSFUL install. Discovery is a
+# convenience, and a convenience may not fail an install.
+#
+# Only on first run: an auth.toml already there is a machine that has run this,
+# and regenerating it behind the user's back at every re-install would make the
+# only file `e2b-box auth` owns feel like it has two writers. Re-running the
+# subcommand is the documented way to refresh it, which is the whole reason
+# discovery is an explicit command and not a one-shot at install time.
+#
+# $1 = config dir, $2 = the e2b-box to call. A function so test/cli.test.sh can
+# drive it with a stub CLI instead of running the whole installer.
+harness_discovery() {
+  local cfg_dir="$1" cli="$2" out rc
+  if [ -f "$cfg_dir/auth.toml" ]; then
+    echo "herdr-e2b: harness credentials already discovered ($cfg_dir/auth.toml)."
+  else
+    echo "herdr-e2b: looking for coding harnesses whose credentials a box can borrow…"
+    rc=0
+    # Its own report, indented into this installer's voice. Nothing is
+    # re-summarised here: a second summary is a second thing to keep in step with
+    # the table, and it would be the one that goes stale.
+    out=$(HERDR_PLUGIN_CONFIG_DIR="$cfg_dir" "$cli" auth --yes 2>&1) || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      printf '%s\n' "$out" | sed 's/^./  &/'
+    else
+      echo "  ! discovery did not finish (exit $rc) — boxes still work, they just" >&2
+      echo "    start on the agent's sign-in screen until a credential is configured." >&2
+      printf '%s\n' "$out" | sed 's/^./  &/' >&2
+    fi
+  fi
+  echo "  re-run 'e2b-box auth' after installing a new harness — nothing probes on its own."
+}
 # The e2b SDK needs Node >= 22. herdr may launch under an older node; the plugin
 # auto-resolves a newer one (nvm/Homebrew) at runtime, but warn if PATH is old.
 if command -v node >/dev/null 2>&1 && ! node -e 'process.exit(+process.versions.node.split(".")[0]>=22?0:1)' 2>/dev/null; then
   echo "  ! Node $(node -v) on PATH is < 22 (e2b SDK needs >=22). The plugin will use a newer node if one is installed; else set HERDR_E2B_NODE=/path/to/node."
 fi
+
+# AFTER the node check on purpose: the commonest reason discovery declines is an
+# old node, and reading "discovery did not finish" before the line that explains
+# why turns one problem into two.
+harness_discovery "$CONFIG_DIR" "$DIR/bin/e2b-box"
 
 # Template recommendation — "base" (the default) is minimal & tight on disk.
 echo "herdr-e2b: tip — sandboxes default to the 'base' template (minimal). For real"

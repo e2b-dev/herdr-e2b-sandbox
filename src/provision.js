@@ -18,6 +18,7 @@ import {
   resolveTemplate,
   resolveLifecycle,
   resolveEnv,
+  unresolvedForwards,
   describeRegion,
   regionForDomain,
   CONFIG_PATH,
@@ -192,6 +193,18 @@ async function main() {
         // process.env is handed IN rather than read by the resolver: a credential
         // `e2b-box auth` recorded by name (never by value) lives in this process's
         // environment and is looked up here, at the one moment it is needed.
+        // A name auth.toml recorded that this process cannot resolve is the one
+        // failure that arrives disguised as success: the box boots, its agent opens a
+        // sign-in screen, and the report that promised the credential still says
+        // `key found`. herdr launches plugin commands as `bash -lc`, so a key exported
+        // only from ~/.zshrc is present at discovery and absent right here. Named in
+        // the log at the exact moment it goes missing — the box is still created,
+        // because an unauthenticated box is what was asked for and is still useful.
+        for (const missing of unresolvedForwards(cfg, template, process.env)) {
+          await log(
+            `warning: $${missing} was recorded by 'e2b-box auth' but is not set here, so this box will not get it — export it from ~/.profile (herdr uses a login shell), or set the box's own variable in ${CONFIG_PATH}`,
+          )
+        }
         sandbox = await Sandbox.create(template, { ...opts, envs: resolveEnv(cfg, template, process.env) })
       } catch (e) {
         // If a custom template isn't built yet, don't hard-fail — fall back to base.

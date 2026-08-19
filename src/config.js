@@ -251,15 +251,21 @@ function nameTable(raw) {
  */
 export function resolveEnvConfig({ sandbox = {}, templates = {} } = {}) {
   const byTemplate = {}
+  const prefer = {}
   if (templates && typeof templates === "object" && !Array.isArray(templates)) {
     for (const [template, section] of Object.entries(templates)) {
       const name = String(template).trim()
       if (!name) continue
       const env = envTable(section?.env)
       if (Object.keys(env).length) byTemplate[name] = env
+      // `prefer = "env"` — the documented way to take back the precedence a
+      // discovered SESSION otherwise wins (ADR 0007). Only that one value means
+      // anything; anything else is left unset rather than guessed at, so a typo
+      // cannot quietly change which credential a box gets.
+      if (String(section?.prefer ?? "").trim() === "env") prefer[name] = "env"
     }
   }
-  return { envShared: envTable(sandbox?.env), envByTemplate: byTemplate }
+  return { envShared: envTable(sandbox?.env), envByTemplate: byTemplate, templatePrefer: prefer }
 }
 
 /**
@@ -281,16 +287,66 @@ function forwardedValues(names, env) {
 }
 
 /**
- * The env a box booting from `template` should get. Four rungs, lowest first:
+ * Forwarded names this environment cannot resolve — the promise `auth.toml` made
+ * and this process cannot keep.
+ *
+ * A name is recorded because the value was in the shell when `e2b-box auth` ran.
+ * When herdr creates the box it runs `bash -lc`, a login shell that reads
+ * ~/.profile and never a zsh rc, so a key exported from ~/.zshrc is simply gone by
+ * then. `resolveEnv` drops it silently and correctly — nothing else it could do —
+ * and the box boots on a sign-in screen with the report still claiming `key found`.
+ *
+ * So the drop is made nameable. Pure, and separate from `resolveEnv` because that
+ * function answers "what does the box get" and this one answers "what did it not
+ * get, that it was told it would".
+ *
+ * @returns {string[]} host variable names, empty when everything resolved
+ */
+export function unresolvedForwards(cfg, template, env = {}) {
+  const names = cfg?.envForward?.[template]
+  if (!names) return []
+  return Object.values(names).filter((hostVar) => {
+    const v = env?.[hostVar]
+    return !(typeof v === "string" && v.trim())
+  })
+}
+
+/**
+ * The top rung: a borrowed session, or nothing.
+ *
+ * Nothing in three cases, and they are not the same case. No session was found;
+ * the user opted out with `prefer = "env"`; or the session expired. Only the last
+ * is a problem, and it is one the report and the fleet warning surface — this
+ * function's job is simply never to inject a credential that has stopped working.
+ */
+function sessionValue(cfg, template, now) {
+  const s = cfg?.envSession?.[template]
+  if (!s) return {}
+  if (cfg?.templatePrefer?.[template] === "env") return {}
+  const exp = new Date(s.expires).getTime()
+  if (!Number.isFinite(exp) || exp <= now) return {}
+  return { [s.var]: s.value }
+}
+
+/**
+ * The env a box booting from `template` should get. Five rungs, lowest first:
  *
  *   1. shipped template defaults   (behaviour we ship — AMP_EXECUTOR and friends)
  *   2. DISCOVERED by `e2b-box auth`  (auth.toml: a stored value, or a name to forward)
  *   3. the user's `[sandbox.env]`
  *   4. the user's `[templates.<name>.env]`
+ *   5. a DISCOVERED SESSION, unless expired or opted out of  (ADR 0007)
  *
- * Discovery sits below everything hand-written, so a value the user typed always
- * wins — the same principle the shipped defaults already obey: an override that
- * cannot override is a default nobody can escape.
+ * Rungs 2–4 obey the original principle: discovery is a default, so a value the user
+ * typed always wins. Rung 5 deliberately breaks it, and it is the only thing here
+ * that does — the machine's live signed-in session beats a key pasted months ago,
+ * because being handed the stale one while signed in is the exact surprise this
+ * feature exists to remove. It will read as a bug; it is ADR 0007.
+ *
+ * Two things keep that from being a trap. `prefer = "env"` on the template restores
+ * the original order, and an EXPIRED session is not injected at all — it loses to
+ * the hand-written value rather than shadowing it with something dead, so a box
+ * degrades to the credential that still works instead of to a sign-in screen.
  *
  * `env` is the environment forwarded names are resolved FROM, passed in rather
  * than read off `process`. That is what keeps this function pure, and purity is
@@ -303,7 +359,7 @@ function forwardedValues(names, env) {
  * written to the box record and must not be logged — the record is world-readable
  * state and the log is `herdr plugin log list`.
  */
-export function resolveEnv(cfg, template, env = {}) {
+export function resolveEnv(cfg, template, env = {}, now = Date.now()) {
   const merged = {
     ...(cfg?.templateEnvDefaults?.[template] || {}),
     // The discovered rung has two halves, and forwarding wins between them: a name
@@ -316,6 +372,7 @@ export function resolveEnv(cfg, template, env = {}) {
     ...forwardedValues(cfg?.envForward?.[template], env),
     ...(cfg?.envShared || {}),
     ...(cfg?.envByTemplate?.[template] || {}),
+    ...sessionValue(cfg, template, now),
   }
   return Object.keys(merged).length ? merged : undefined
 }
@@ -336,6 +393,7 @@ export function resolveEnv(cfg, template, env = {}) {
 export function resolveAuthConfig(parsed = {}) {
   const envDiscovered = {}
   const envForward = {}
+  const envSession = {}
   const templates = parsed?.templates
   if (templates && typeof templates === "object" && !Array.isArray(templates)) {
     for (const [template, section] of Object.entries(templates)) {
@@ -345,9 +403,18 @@ export function resolveAuthConfig(parsed = {}) {
       if (Object.keys(env).length) envDiscovered[name] = env
       const forward = nameTable(section?.forward)
       if (Object.keys(forward).length) envForward[name] = forward
+      // A borrowed session: one variable, one payload, one expiry. All three or
+      // nothing — a session without its expiry cannot be aged out, and injecting a
+      // credential we cannot age out is the silent-stale-token bug ADR 0007 accepted
+      // the risk of and required this field to close.
+      const sess = section?.session
+      const v = String(sess?.var ?? "").trim()
+      if (v && typeof sess?.value === "string" && sess.value && typeof sess?.expires === "string") {
+        envSession[name] = { var: v, value: sess.value, expires: sess.expires }
+      }
     }
   }
-  return { envDiscovered, envForward }
+  return { envDiscovered, envForward, envSession }
 }
 
 /**
@@ -361,7 +428,7 @@ export function readAuthConfig(file = AUTH_PATH) {
   try {
     return resolveAuthConfig(TOML.parse(readFileSync(file, "utf8")))
   } catch {
-    return { envDiscovered: {}, envForward: {} }
+    return { envDiscovered: {}, envForward: {}, envSession: {} }
   }
 }
 
@@ -389,6 +456,13 @@ export function discoveredSources(cfg) {
   const out = {}
   for (const t of Object.keys(cfg?.envDiscovered || {})) out[t] = "file"
   for (const t of Object.keys(cfg?.envForward || {})) out[t] = "env"
+  // Last, because it is what actually reaches the box — and told apart from a live
+  // one, since a mark that says "authenticated" over a dead session is the lie this
+  // whole annotation exists to prevent.
+  for (const [t, s] of Object.entries(cfg?.envSession || {})) {
+    const exp = new Date(s?.expires).getTime()
+    out[t] = Number.isFinite(exp) && exp > Date.now() ? "session" : "session-expired"
+  }
   return out
 }
 
@@ -667,6 +741,11 @@ export function loadConfig() {
     // Both lose to the two tables above; see resolveEnv for the whole ladder.
     envDiscovered: auth.envDiscovered,
     envForward: auth.envForward,
+    // A borrowed signed-in session (ADR 0007). Unlike the two above it OUTRANKS the
+    // user's own tables, so it is the one discovered thing that can override a
+    // hand-written value — and `templatePrefer` is how the user takes that back.
+    envSession: auth.envSession,
+    templatePrefer: env.templatePrefer,
     // Shipped per-template env (behaviour, never credentials). Carried through
     // from DEFAULTS rather than read from the file: nothing in config.toml sets
     // it, and resolveEnv puts the user's own tables OVER it.

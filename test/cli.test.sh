@@ -1346,10 +1346,37 @@ seed_out=$(seed_run "$SEED_CODEX" "$SHOME/codex-key" OPENAI_API_KEY="sk-oai-insi
   || bad "codex seeding (out=$seed_out, file=$(cat "$SHOME/codex-key/.codex/auth.json" 2>/dev/null))"
 
 seed_out=$(seed_run "$SEED_CODEX" "$SHOME/codex-nokey")
-{ printf '%s\n' "$seed_out" | grep -q "no OPENAI_API_KEY in this box" \
+{ printf '%s\n' "$seed_out" | grep -q "no codex credential in this box" \
   && [ ! -e "$SHOME/codex-nokey/.codex/auth.json" ]; } \
-  && ok "codex with no key writes no auth file at all — it just says it is unauthenticated" \
+  && ok "codex with no credential writes no auth file at all — it just says it is unauthenticated" \
   || bad "keyless codex seeding (out=$seed_out)"
+
+# ADR 0007: a borrowed session goes in verbatim, and it OUTRANKS the api-key branch.
+# Both variables are set here on purpose — that is the case where the precedence is
+# the whole behaviour, and the one a fallback written the other way round would pass.
+SESSION_JSON='{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"access_token":"at-borrowed","refresh_token":"herdr-e2b-placeholder-not-a-real-refresh-token","account_id":"acc"}}'
+seed_out=$(seed_run "$SEED_CODEX" "$SHOME/codex-session" CODEX_AUTH_JSON="$SESSION_JSON" OPENAI_API_KEY="$SEED_KEY")
+{ [ -f "$SHOME/codex-session/.codex/auth.json" ] \
+  && jq -e '.auth_mode == "chatgpt" and .tokens.access_token == "at-borrowed"' "$SHOME/codex-session/.codex/auth.json" >/dev/null \
+  && ! grep -q 'secret-head' "$SHOME/codex-session/.codex/auth.json"; } \
+  && ok "a borrowed session is seeded verbatim and beats the api key beside it" \
+  || bad "session seeding (out=$seed_out, file=$(cat "$SHOME/codex-session/.codex/auth.json" 2>/dev/null))"
+# `ls -l` and not `stat`: BSD's `stat -f` is a FORMAT string and GNU's is
+# "filesystem status", so `stat -f … || stat -c …` succeeds on Linux with entirely
+# the wrong output and the fallback never runs. The suite already reads modes this
+# way for auth.toml, so this is the idiom that is known to hold on both.
+[ "$(ls -l "$SHOME/codex-session/.codex/auth.json" 2>/dev/null | cut -c1-10)" = "-rw-------" ] \
+  && ok "a seeded session file is written at restrictive permissions" \
+  || bad "session auth.json mode is not 600"
+
+# A resumed box already signed in with a session has no OPENAI_API_KEY string in its
+# auth.json, so the old "does this file mention the key" guard would have overwritten
+# a live login on every reconnect. The guard is now "is there a file at all".
+seed_out=$(seed_run "$SEED_CODEX" "$SHOME/codex-session" CODEX_AUTH_JSON='{"auth_mode":"chatgpt","tokens":{"access_token":"at-SECOND-RUN"}}')
+{ printf '%s\n' "$seed_out" | grep -q "already authenticated" \
+  && jq -e '.tokens.access_token == "at-borrowed"' "$SHOME/codex-session/.codex/auth.json" >/dev/null; } \
+  && ok "a box already holding a session is left alone on the second run" \
+  || bad "session seeding clobbered an existing login (out=$seed_out)"
 
 # opencode's problem is an updater, not a wizard: it updates itself in the background
 # and drops a modal over the pane whenever a release lands, which can be long after
@@ -1737,6 +1764,109 @@ inst_helpers() {
   HERDR_E2B_RELEASE_REPO="unreachable-host-xyz/nope" fetch_asset e2b-dash-darwin-universal "$out" 2>/dev/null
   [ $? -ne 0 ] && [ ! -e "$out" ]
 ) && ok "fetch_asset: unreachable release → declines, no partial file" || bad "fetch_asset unreachable"
+
+echo "── installer: harness discovery on first run ──"
+# install.sh's harness_discovery, lifted out the same way fetch_asset is above —
+# running the real installer would link into ~/.local/bin and rebuild the TUI.
+# Driven against a STUB e2b-box for the contract assertions (what is called, with
+# which flags, and what a failure does), because none of those may depend on what
+# this machine happens to have installed. The real CLI is used once, at the end,
+# for the one claim a stub cannot make.
+# Run it the way install.sh does — under the installer's own shell options. Not
+# decoration: `harness_discovery` ends in an `echo`, so it returns 0 whatever
+# happened, and an rc assertion outside `set -e` is unfalsifiable. Inside it, a
+# non-zero anywhere in the function aborts before the trailing `echo reached`, so
+# `reached` in the output is the real claim "this would not have failed an
+# install". Every case below is run through here for that reason.
+run_discovery() (
+  set -euo pipefail
+  eval "$(sed -n '/^harness_discovery() {/,/^}$/p' "$ROOT/install.sh")"
+  harness_discovery "$@" 2>&1
+  echo "reached"
+)
+
+STUB="$TMP/stub-e2b-box"
+cat > "$STUB" <<'SH'
+#!/usr/bin/env bash
+{ printf 'argv=%s\n' "$*"; printf 'cfgdir=%s\n' "${HERDR_PLUGIN_CONFIG_DIR:-}"; } >> "$DISC_LOG"
+printf '%s\n' "${STUB_OUT:-2 of 7 harnesses have a credential this plugin can see.}"
+exit "${STUB_RC:-0}"
+SH
+chmod +x "$STUB"
+
+# A fresh machine: discovery runs, and it runs the subcommand rather than
+# reimplementing it. --yes is the whole reason a build step with no TTY gets a
+# file at all, so it is asserted literally.
+d="$TMP/disc-fresh"; mkdir -p "$d"
+# Its own name: STUB_LOG above belongs to the herdr stub and is still live.
+export DISC_LOG="$TMP/disc-calls.log"; : > "$DISC_LOG"
+out=$( run_discovery "$d" "$STUB" )
+{ printf '%s' "$out" | grep -qx reached && grep -qx "argv=auth --yes" "$DISC_LOG"; } \
+  && ok "first run calls 'e2b-box auth --yes'" || bad "first-run discovery (log=$(cat "$DISC_LOG"), out=$out)"
+grep -qx "cfgdir=$d" "$DISC_LOG" \
+  && ok "discovery writes into the config dir the installer reported" || bad "discovery config dir ($(cat "$DISC_LOG"))"
+printf '%s' "$out" | grep -q "^  2 of 7 harnesses" \
+  && ok "the installer reports what discovery found, in its own indented style" || bad "discovery report not relayed (out=$out)"
+printf '%s' "$out" | grep -q "re-run 'e2b-box auth' after installing a new harness" \
+  && ok "the installer says how to re-run discovery later" || bad "no re-run hint (out=$out)"
+
+# A machine with nothing installed is not an error, it is a finding.
+d="$TMP/disc-empty"; mkdir -p "$d"; : > "$DISC_LOG"
+out=$( STUB_OUT="0 of 7 harnesses have a credential this plugin can see." run_discovery "$d" "$STUB" )
+{ printf '%s' "$out" | grep -qx reached && printf '%s' "$out" | grep -q "0 of 7 harnesses"; } \
+  && ok "no harnesses installed → reported, install still succeeds" || bad "empty machine (out=$out)"
+
+# The claim the ticket turns on: discovery may not fail the install. A crashing
+# subcommand, a missing Node, every probe timing out — all arrive here, and under
+# `set -e` an unguarded non-zero assignment would abort before `reached` is
+# printed. That word is the assertion; the reported text is the courtesy.
+d="$TMP/disc-fail"; mkdir -p "$d"; : > "$DISC_LOG"
+out=$( STUB_RC=1 STUB_OUT="needs Node >= 22" run_discovery "$d" "$STUB" )
+printf '%s' "$out" | grep -qx reached \
+  && ok "a discovery failure does not abort a 'set -e' install" || bad "set -e aborts on discovery failure (out=$out)"
+printf '%s' "$out" | grep -q "discovery did not finish" \
+  && ok "a discovery failure is reported rather than swallowed" || bad "discovery failure unreported (out=$out)"
+printf '%s' "$out" | grep -q "needs Node >= 22" \
+  && ok "a failed discovery still shows what the subcommand said" || bad "failure output swallowed (out=$out)"
+
+# Re-running the installer on a configured machine: the generated file has one
+# writer, and re-install is not it.
+d="$TMP/disc-again"; mkdir -p "$d"; printf 'stale\n' > "$d/auth.toml"; : > "$DISC_LOG"
+out=$( run_discovery "$d" "$STUB" )
+{ printf '%s' "$out" | grep -qx reached && [ ! -s "$DISC_LOG" ] && [ "$(cat "$d/auth.toml")" = "stale" ]; } \
+  && ok "re-install with an auth.toml already there probes nothing and rewrites nothing" \
+  || bad "re-install re-ran discovery (log=$(cat "$DISC_LOG"), out=$out)"
+printf '%s' "$out" | grep -q "already discovered" \
+  && ok "re-install says the credentials are already discovered" || bad "no already-discovered line (out=$out)"
+
+# One secret is asked for by this installer and it is the E2B key. A harness
+# credential is DISCOVERED or pasted into config.toml by hand — never prompted
+# for here, where it would land in a file this script does not own. Asserted
+# against the source because the property IS "this script contains no second
+# prompt"; running the installer to find out would link into ~/.local/bin.
+reads=$(grep -cE '^[[:space:]]*read([[:space:]]|$)' "$ROOT/install.sh")
+[ "$reads" = "1" ] && ok "the installer prompts for exactly one secret (the E2B key)" \
+  || bad "install.sh has $reads read prompts — a harness credential prompt crept in"
+
+# The one claim a stub cannot make. The block above proves the installer never
+# CREATES a config.toml; this proves it never edits one that was already there,
+# which is the ticket's "does not clobber the user's own config" and the only
+# reason to pay for a real probe sweep here. Compared with `cmp` against a saved
+# copy rather than a hash: a hash tool missing from the preflight would compare
+# "" with "" and pass silently, which is the worst way for this to be wrong.
+# auth.toml's mode is asserted once already, against the verb itself — this path
+# runs the same binary, so re-asserting it would buy nothing.
+d="$TMP/disc-real"; mkdir -p "$d"
+printf '[sandbox]\ntemplate = "mine"\n' > "$d/config.toml"
+cp "$d/config.toml" "$TMP/disc-real-config.before"
+out=$( run_discovery "$d" "$E2B" </dev/null )
+{ printf '%s' "$out" | grep -qx reached && cmp -s "$d/config.toml" "$TMP/disc-real-config.before"; } \
+  && ok "installer-driven discovery never touches the user's own config.toml" \
+  || bad "config.toml changed during discovery (out=$out)"
+[ -f "$d/auth.toml" ] \
+  && ok "the real subcommand ran through the installer and left its generated file" \
+  || bad "no auth.toml after install-time discovery (out=$out)"
+unset DISC_LOG
 
 echo "── environment: a user's exported CDPATH must not break path resolution ──"
 # bash's `cd` PRINTS the resolved dir when CDPATH is set, so an unguarded
