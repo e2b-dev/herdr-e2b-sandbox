@@ -36,12 +36,14 @@ same thing and herdr's own "agent" means a *local* pane process
 **Region**:
 Where an E2B sandbox physically runs. **US** is the default and what every user
 gets unless they say otherwise; **EU** (`e2b-juliett.dev`) is opt-in. A box is
-created in one region and stays there for its whole life. A region is not the
-same thing as a hostname — US production answers at both `e2b.app` (current, and
-the SDK's default) and `e2b.dev` (an older name on a compatibility path), which
-are one environment, not two.
-_Avoid_: Cluster, foxtrot, juliett — those are E2B's internal names for the same
-thing, and neither reads as a location to a user choosing one
+created in one region and stays there for its whole life. The region is the only
+thing you choose; which host serves it is the plugin's business, and US answers at
+more than one (`e2b.app` today, `e2b.dev` on a compatibility path — one
+environment, two names).
+_Avoid_: Cluster, domain, host — a domain is what the region resolves to
+internally, never something a user picks
+_Avoid_: Foxtrot, juliett — E2B's internal names for the same thing, and neither
+reads as a location to someone choosing one
 
 **Project**:
 The E2B account a template and an API key belong to, and the namespace a

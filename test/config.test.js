@@ -163,7 +163,7 @@ test("resolveCredentials: env wins over everything", () => {
   const r = resolveCredentials({
     env: { E2B_API_KEY: "e2b_env", E2B_DOMAIN: "e2b.dev" },
     secrets: { e2b_api_key: "e2b_cfg" },
-    sandbox: { domain: "cfg.dev" },
+    sandbox: { region: "eu" },
     cli: CLI,
   })
   assert.equal(r.apiKey, "e2b_env")
@@ -195,13 +195,13 @@ test("resolveCredentials: same key in both places → the CLI's cluster is safe 
   assert.equal(r.credWarning, null)
 })
 
-test("resolveCredentials: an explicit [sandbox].domain silences the mismatch", () => {
+test("resolveCredentials: an explicit region silences the mismatch", () => {
   const r = resolveCredentials({
     secrets: { e2b_api_key: "e2b_cfg" },
-    sandbox: { domain: "pinned.dev" },
+    sandbox: { region: "eu" },
     cli: CLI,
   })
-  assert.equal(r.domain, "pinned.dev")
+  assert.equal(r.domain, "e2b-juliett.dev")
   assert.equal(r.credWarning, null)
 })
 
@@ -254,13 +254,14 @@ test("resolveCredentials: daemon env is still a last resort when nothing else re
   assert.equal(r.domainSource, "env")
 })
 
-test("resolveCredentials: an explicit [sandbox].domain still beats the CLI login", () => {
+test("resolveCredentials: an explicit region still beats the CLI login", () => {
   const r = resolveCredentials({
     env: { ...DAEMON, E2B_DOMAIN: "e2b-juliett.dev" },
-    sandbox: { domain: "pinned.dev" },
+    sandbox: { region: "us" },
     cli: { apiKey: "e2b_now", domain: "e2b.dev" },
   })
-  assert.equal(r.domain, "pinned.dev")
+  assert.equal(r.domain, null, "region us wins, and its answer is no domain")
+  assert.equal(r.domainSource, "config")
 })
 
 // ── [sandbox.env] / [templates.<name>.env] ────────────────────────────────────
@@ -429,17 +430,11 @@ test("resolveCredentials: region 'us' means NO domain, and does not borrow the C
   assert.equal(r.domainSource, "config")
 })
 
-test("resolveCredentials: an explicit domain outranks a region", () => {
-  const r = resolveCredentials({ sandbox: { region: "eu", domain: "your-own-e2b-host.example" } })
-  assert.equal(r.domain, "your-own-e2b-host.example")
-})
-
 test("resolveCredentials: an unknown region fails, naming the valid ones", () => {
   assert.throws(() => resolveCredentials({ sandbox: { region: "apac" } }), (e) => {
     assert.match(e.message, /apac/)
     assert.match(e.message, /us/)
     assert.match(e.message, /eu/)
-    assert.match(e.message, /domain/, "points at the escape hatch for other clusters")
     return true
   })
 })
@@ -527,26 +522,6 @@ test("resolveCredentials: env E2B_API_KEY still beats every config key", () => {
   })
   assert.equal(r.apiKey, "e2b_env")
   assert.equal(r.keySource, "env")
-})
-
-test("resolveCredentials: a domain that names a region picks that region's key", () => {
-  // Someone who pinned the domain before regions existed gets the same behaviour
-  // as someone who named the region — it is one table, read backwards.
-  const r = resolveCredentials({
-    sandbox: { domain: "e2b-juliett.dev" },
-    secrets: { e2b_api_key_us: "e2b_us", e2b_api_key_eu: "e2b_eu" },
-  })
-  assert.equal(r.apiKey, "e2b_eu")
-})
-
-test("resolveCredentials: a domain naming no region borrows no region's key", () => {
-  // A host outside the two regions. Silently reaching for the US key would send a
-  // credential to a cluster it has no business on.
-  const r = resolveCredentials({
-    sandbox: { domain: "your-own-e2b-host.example" },
-    secrets: { e2b_api_key_us: "e2b_us", e2b_api_key: "e2b_plain" },
-  })
-  assert.equal(r.apiKey, "e2b_plain")
 })
 
 test("resolveCredentials: with no key anywhere, nothing changes", () => {
@@ -668,16 +643,21 @@ test("describeRegion: a host that names no region is printed as itself", () => {
 // same environment — not two regions. So pinning either by hand is still US, and
 // must still select the US key.
 
-test("resolveCredentials: pinning a US hostname still selects the US key", () => {
-  const secrets = { e2b_api_key_us: "e2b_us", e2b_api_key_eu: "e2b_eu", e2b_api_key: "e2b_plain" }
-  for (const domain of ["e2b.app", "e2b.dev"]) {
-    const r = resolveCredentials({ sandbox: { domain }, secrets })
-    assert.equal(r.apiKey, "e2b_us", `${domain} is US production, so the US key applies`)
-    assert.equal(r.domain, domain, "an explicitly pinned host is still honoured verbatim")
-  }
-})
-
 test("describeRegion: a US hostname is named as US, not printed raw", () => {
   assert.equal(describeRegion("e2b.app"), "US (e2b.app)")
   assert.equal(describeRegion("e2b.dev"), "US (e2b.dev)")
+})
+
+test("resolveCredentials: [sandbox] domain is rejected, and names the region to use", () => {
+  // Ignoring it would move every box of an existing EU user to US without a word.
+  assert.throws(() => resolveCredentials({ sandbox: { domain: "e2b-juliett.dev" } }), (e) => {
+    assert.match(e.message, /no longer a config key/)
+    assert.match(e.message, /region = "eu"/, "names the exact replacement")
+    return true
+  })
+  // A host with no region name still errors, pointing at the two that exist.
+  assert.throws(
+    () => resolveCredentials({ sandbox: { domain: "your-own-e2b-host.example" } }),
+    /region = "us" or "eu"/,
+  )
 })

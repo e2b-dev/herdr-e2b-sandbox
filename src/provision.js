@@ -19,6 +19,7 @@ import {
   resolveLifecycle,
   resolveEnv,
   describeRegion,
+  regionForDomain,
   CONFIG_PATH,
 } from "./config.js"
 import { seedCommand } from "./fleet-seed.js"
@@ -110,10 +111,12 @@ async function main() {
     // Same remedies either way — each names a mechanism that ships with the
     // plugin or the `e2b` CLI, so they work on any machine: log in on the box's
     // cluster, pin it for this shell, pin it for good, or give the box up.
+    const box = regionForDomain(prev.domain)
     const remedy =
       `Run \`e2b auth login\` against ${prev.domain}, or \`export E2B_DOMAIN=${prev.domain}\` ` +
-      `alongside a key from that cluster, or pin \`[sandbox].domain = "${prev.domain}"\` in ` +
-      `${CONFIG_PATH} — or \`e2b-box kill\` the box first.`
+      `alongside a key from there` +
+      (box ? `, or pin \`[sandbox] region = "${box}"\` in ${CONFIG_PATH}` : "") +
+      ` — or \`e2b-box kill\` the box first.`
     throw new Error(
       cfg.domain
         ? `box '${key}' was created on ${prev.domain} but this shell resolves to ${cfg.domain}. ` +

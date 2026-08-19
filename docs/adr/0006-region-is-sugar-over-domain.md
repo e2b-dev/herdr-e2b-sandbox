@@ -1,5 +1,10 @@
 # Region is sugar over domain, not a replacement for it
 
+> **Status: superseded by [ADR-0007](./0007-region-is-the-only-way-to-choose.md).**
+> The escape hatch this ADR preserved was justified by hosts nobody had
+> verified, and by treating one environment's two hostnames as two regions.
+> `domain` is no longer a config key.
+
 Users pick where a box runs by **region** (`us`, `eu`), but the plugin keeps
 resolving, storing and passing a **domain**. `[sandbox] region` maps to a domain
 and an explicit `[sandbox] domain` still wins; box records keep carrying the
