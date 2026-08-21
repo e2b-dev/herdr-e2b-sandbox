@@ -137,8 +137,10 @@ sdk_kill() {
 }
 
 # Make sure the `e2b` CLI has BOTH halves of its credentials: the key and the
-# cluster it belongs to. Env wins; anything missing is resolved by
-# src/resolve-env.js (plugin config, then the `e2b` CLI login).
+# cluster it belongs to. Env wins in a direct shell; under the herdr daemon
+# (HERDR_PLUGIN_ID/HERDR_PLUGIN_ROOT) config wins over inherited ambient env,
+# and anything missing is resolved by src/resolve-env.js (plugin config, then the
+# `e2b` CLI login).
 #
 # Both matter because herdr runs plugin commands as `bash -lc` — a login shell
 # that never reads ~/.zshrc — so a region set up by a zsh hook is invisible here
@@ -148,7 +150,7 @@ sdk_kill() {
 # every verb acts on the cluster that actually holds that box.
 ensure_e2b_env() {
   local box_domain="${1:-}" line node_bin env_out got_key got_domain
-  if [ -z "${E2B_API_KEY:-}" ] || [ -z "${E2B_DOMAIN:-}" ]; then
+  if [ -z "${E2B_API_KEY:-}" ] || [ -z "${E2B_DOMAIN:-}" ] || [ -n "${HERDR_PLUGIN_ID:-}" ] || [ -n "${HERDR_PLUGIN_ROOT:-}" ]; then
     # e2b_node, not bare `node`: under `bash -lc` a version-managed node (mise,
     # nvm, volta) is often not on PATH at all, and silently resolving nothing is
     # how the credentials go missing in the first place.
