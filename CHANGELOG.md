@@ -6,6 +6,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-26
+
+### Added
+
+- **The board names the plugin version it is running.** The header's right side now reads
+  `theme: … · v0.3.0`, the version in the corner. It answers the question a plugin loaded
+  from a working tree raises constantly — is this the build I just made? — which nothing on
+  screen used to answer, and which otherwise takes reading `herdr plugin list`, checking
+  which directory it points at, and comparing a binary's mtime against its source. The
+  number is resolved from `herdr-plugin.toml`, the same manifest herdr's own marketplace
+  reads, so the board and herdr can never disagree about what is installed. A pane too
+  narrow for both drops the theme first and keeps the version, which stays anchored in the
+  corner rather than sliding left. With no version to resolve the header simply omits it: a
+  missing version costs nothing, a wrong one misleads.
+
 ## [0.2.0] - 2026-08-26
 
 ### Added
@@ -288,6 +303,7 @@ Initial public release. A herdr plugin that mirrors a git worktree into an E2B
 sandbox: `e2b-box` for a single box, `e2b-box fleet` for a branch-per-agent
 fleet, and the `e2b-dash` TUI for watching them.
 
-[Unreleased]: https://github.com/e2b-dev/herdr-e2b-sandbox/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/e2b-dev/herdr-e2b-sandbox/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/e2b-dev/herdr-e2b-sandbox/releases/tag/v0.3.0
 [0.2.0]: https://github.com/e2b-dev/herdr-e2b-sandbox/releases/tag/v0.2.0
 [0.1.0]: https://github.com/e2b-dev/herdr-e2b-sandbox/releases/tag/v0.1.0
