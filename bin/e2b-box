@@ -377,6 +377,21 @@ connect_shell() {
     # (`e2b template build`), or switch clusters and open again.
     want=$(field "$k" requestedTemplate)
     [ -n "$want" ] && echo "  ! '$want' isn't built on ${dom:-this cluster} — this box is '$(field "$k" template)'."
+    # And the other thing you only find out from inside: a box whose agent was
+    # handed no credential. The agent opens on a sign-in screen, the sandbox has no
+    # browser to finish one in, and by then the agent owns the pane — so the moment
+    # to say it is here, beside the box's own details.
+    #
+    # src/fleet-auth.js asks the question, over the box's ACTUAL template: not "did
+    # `e2b-box auth` discover something" but "was this box handed anything", which is
+    # the only form of it answerable from out here. Advisory in every direction —
+    # no Node, an unreadable config, or a template no harness claims, and it simply
+    # says nothing. A warning must never cost an attach.
+    local note nb
+    if nb=$(e2b_node 2>/dev/null); then
+      note=$("$nb" "$PLUGIN_DIR/src/fleet-auth.js" --box "$(field "$k" template)" 2>/dev/null)
+      [ -n "$note" ] && printf '%s\n' "$note"
+    fi
   fi
   local node_bin
   if ! node_bin=$(e2b_node); then

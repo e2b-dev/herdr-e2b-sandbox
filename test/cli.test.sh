@@ -541,7 +541,7 @@ authfleet() { ( cd "$FREPO" && HERDR_E2B_FLEET_RAND=ab12 HERDR_PLUGIN_CONFIG_DIR
 rm -f "$AUTHCFG/config.toml" "$AUTHCFG/auth.toml"
 out=$(authfleet --slug signin -t claude -t codex -t base -n); rc=$?
 { [ "$rc" -eq 0 ] \
-  && printf '%s\n' "$out" | grep -qE "signin-claude +claude +ANTHROPIC_API_KEY" \
+  && printf '%s\n' "$out" | grep -qE "signin-claude +claude +CLAUDE_CODE_OAUTH_TOKEN" \
   && printf '%s\n' "$out" | grep -qE "signin-codex +codex +OPENAI_API_KEY" \
   && printf '%s\n' "$out" | grep -q '\[templates.claude.env\]' \
   && printf '%s' "$out" | grep -q "nothing was created"; } \
@@ -1113,11 +1113,35 @@ out=$(spawn herdr-ok --slug ok-run -t claude -t codex); rc=$?
 rm -f "$PROBEDIR/spawned"
 out=$(PATH="$PROBEDIR:$PATH" spawn herdr-ok --slug unauth -t claude); rc=$?
 { [ "$rc" -eq 0 ] \
-  && printf '%s\n' "$out" | grep -qE "unauth-claude +claude +ANTHROPIC_API_KEY" \
+  && printf '%s\n' "$out" | grep -qE "unauth-claude +claude +CLAUDE_CODE_OAUTH_TOKEN" \
   && printf '%s\n' "$out" | grep -qx "1/1 up" \
   && [ ! -f "$PROBEDIR/spawned" ]; } \
   && ok "a member with no credential is named, the fleet launches anyway, and nothing probed" \
   || bad "unauthenticated member blocked the launch (rc=$rc, probed=$(cat "$PROBEDIR/spawned" 2>/dev/null), out=$out)"
+
+# A fresh checkout is a fresh PATH, and mise keys config trust to the absolute
+# path — so a member worktree starts untrusted and every shell opened in it,
+# beginning with the box's own pane, greets the user with `mise ERROR ... are not
+# trusted` before anything of ours prints. The fleet chose that path, so the fleet
+# clears it. Stubbed rather than run for real: the assertion is that the checkout
+# is trusted before the pane is used, not that mise works.
+MISEDIR="$TMP/mise-stub"; mkdir -p "$MISEDIR"
+printf '#!/bin/sh\necho "$@" >> "$MISE_LOG"\n' > "$MISEDIR/mise"; chmod +x "$MISEDIR/mise"
+MISE_LOG="$TMP/mise-calls"; rm -f "$MISE_LOG"
+MISE_WT="$TMP/mise-wt"; mkdir -p "$MISE_WT"
+out=$(MISE_LOG="$MISE_LOG" STUB_WT_PATH="$MISE_WT" PATH="$MISEDIR:$PATH" \
+      spawn herdr-ok --slug misetrust -t base); rc=$?
+{ [ "$rc" -eq 0 ] && grep -qx "trust $MISE_WT" "$MISE_LOG"; } \
+  && ok "a member's new checkout is trusted for mise before any shell opens in it" \
+  || bad "mise trust (rc=$rc, calls=$(cat "$MISE_LOG" 2>/dev/null), out=$out)"
+
+# …and no mise is not a broken fleet. This is cosmetic noise, never a gate: the
+# member boots on a machine that has never heard of mise.
+rm -f "$MISE_LOG"
+out=$(STUB_WT_PATH="$MISE_WT" spawn herdr-ok --slug nomise -t base); rc=$?
+{ [ "$rc" -eq 0 ] && [ ! -f "$MISE_LOG" ]; } \
+  && ok "a machine with no mise still launches the member" \
+  || bad "mise absent broke the launch (rc=$rc, out=$out)"
 
 out=$(spawn herdr-fail --slug bad-run -t claude -t codex); rc=$?
 { [ "$rc" -ne 0 ] \
@@ -1341,12 +1365,23 @@ seed_out=$(seed_run "$SEED_CLAUDE" "$SHOME/claude-key" ANTHROPIC_API_KEY="$SEED_
 # No key configured for this template: the member still gets past the wizard, is told
 # once that it is unauthenticated, and nothing pretends to be a credential.
 seed_out=$(seed_run "$SEED_CLAUDE" "$SHOME/claude-nokey")
-{ printf '%s\n' "$seed_out" | grep -q "no ANTHROPIC_API_KEY in this box" \
+{ printf '%s\n' "$seed_out" | grep -q "no ANTHROPIC_API_KEY and no CLAUDE_CODE_OAUTH_TOKEN in this box" \
   && [ "$(printf '%s\n' "$seed_out" | grep -c 'ANTHROPIC_API_KEY')" -eq 1 ] \
   && jq -e '.hasCompletedOnboarding == true and .customApiKeyResponses == null' \
        "$SHOME/claude-nokey/.claude.json" >/dev/null; } \
   && ok "a keyless template still arrives past the wizard and says so once" \
   || bad "keyless claude seeding (out=$seed_out)"
+
+# A subscription machine has no API key and needs none: the token authenticates the
+# box on its own, so the "unauthenticated" line must not fire — and there is still no
+# key tail to approve, because the prompt that answers is about API keys.
+seed_out=$(seed_run "$SEED_CLAUDE" "$SHOME/claude-token" CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-stub")
+{ ! printf '%s\n' "$seed_out" | grep -q "starts unauthenticated" \
+  && jq -e '.hasCompletedOnboarding == true and .customApiKeyResponses == null' \
+       "$SHOME/claude-token/.claude.json" >/dev/null \
+  && ! grep -q 'sk-ant-oat01-stub' "$SHOME/claude-token/.claude.json"; } \
+  && ok "a box holding only a subscription token is not called unauthenticated" \
+  || bad "token claude seeding (out=$seed_out, file=$(cat "$SHOME/claude-token/.claude.json" 2>/dev/null))"
 
 # The disclaimer is a SECOND gate behind the first, so a box that was onboarded but
 # never shown it — every member created before this key was seeded — must still be
@@ -1504,7 +1539,7 @@ for _ in $(seq 1 50); do grep -q 'done (rc=' "$FLEET_LOG" 2>/dev/null && break; 
 # run — which is precisely the window in which "this member will never start work"
 # is worth reading. Behind the board, the log is the pane.
 { grep -q "will start unauthenticated" "$FLEET_LOG" \
-  && grep -qE "boarded-claude +claude +ANTHROPIC_API_KEY" "$FLEET_LOG"; } \
+  && grep -qE "boarded-claude +claude +CLAUDE_CODE_OAUTH_TOKEN" "$FLEET_LOG"; } \
   && ok "the sign-in warning reaches the fleet log too, not only the pane the board covers" \
   || bad "fleet log auth warning (log=$(cat "$FLEET_LOG" 2>/dev/null))"
 

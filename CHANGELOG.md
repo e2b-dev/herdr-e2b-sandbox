@@ -4,10 +4,24 @@ All notable changes to herdr-e2b-sandbox are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0] - 2026-08-26
 
 ### Added
 
+- **A grok browser login is borrowable, refresh token included (ADR 0011).**
+  `grok login` stores an OIDC session in `~/.grok/auth.json`; `e2b-box auth` now
+  records it as a pointer and a box receives the file verbatim. Unlike codex's,
+  grok's refresh token is measured multi-use — re-using an old token after a new
+  one was issued still answers 200 — so shipping it cannot log the laptop out,
+  and the box re-mints its own six-hour bearers with no expiry wall. A real
+  `XAI_API_KEY` in the environment still outranks the session at discovery, and
+  `prefer = "env"` still opts a template out.
+- **`e2b-box auth` closes with a summary table.** One row per provider naming
+  the credential a box will actually get and where it comes from: a signed-in
+  session, a value hand-set in `[templates.<t>.env]` (your `config.toml` is now
+  read for display — still never written), a key-file pointer, or a variable
+  forwarded from the shell. A credential the report can see but a box cannot
+  receive is marked as a warning instead of a tick.
 - **`e2b-box auth` finds the credentials already on your machine.** It reads all
   seven harnesses behind a shipped template (`claude`, `codex`, `grok`,
   `opencode`, `amp`, `droid`, `prime`), each with a rule written against that
@@ -177,6 +191,27 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A Claude subscription is no longer invisible to discovery.** `claude` was
+  searched for under `ANTHROPIC_API_KEY` and nothing else, so a machine signed in
+  with Pro, Max or Team — which is most of them — had nothing to find, and the
+  remedy printed beside that result named the variable a `claude setup-token`
+  token is *rejected* under. Both `ANTHROPIC_API_KEY` and
+  `CLAUDE_CODE_OAUTH_TOKEN` are now searched, and whichever one holds a credential
+  is forwarded to the box under its own name. The advice, the paste block and the
+  fleet's warning all name the token, because that is what the advice produces.
+- **A box with no credential in it says so, on the way in.** `e2b-box open`
+  printed the sandbox, the preview URL and nothing about the fact that the agent
+  it just booted had been handed no credential — the first sign was the agent
+  itself answering `Not logged in`, several minutes later, in a sandbox with no
+  browser to finish a sign-in flow in. The box details now carry the same note the
+  fleet prints before it launches, naming the variable and the remedy. Silent when
+  the box has a credential, and never a gate.
+- **A fleet member's worktree is trusted for mise before a shell opens in it.**
+  mise keys config trust to the absolute path, so every fresh member checkout was
+  untrusted and every shell in it — the box's own pane first — opened on
+  `mise ERROR … are not trusted` for a `mise.toml` the base ref already carried.
+  The fleet chose that path, so the fleet trusts it. No mise, no config, or a mise
+  that refuses, and the member still boots.
 - **A broken plugin config no longer reports itself as a missing API key.** The
   credential pre-flight ran its resolver with stderr and the exit code both
   discarded, so a fatal config error such as a mistyped region degraded into the
@@ -209,5 +244,5 @@ Initial public release. A herdr plugin that mirrors a git worktree into an E2B
 sandbox: `e2b-box` for a single box, `e2b-box fleet` for a branch-per-agent
 fleet, and the `e2b-dash` TUI for watching them.
 
-[Unreleased]: https://github.com/e2b-dev/herdr-e2b-sandbox/compare/v0.0.1...HEAD
-[0.0.1]: https://github.com/e2b-dev/herdr-e2b-sandbox/releases/tag/v0.0.1
+[Unreleased]: https://github.com/e2b-dev/herdr-e2b-sandbox/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/e2b-dev/herdr-e2b-sandbox/releases/tag/v0.1.0
