@@ -15,7 +15,7 @@
 # usage: pr-status.sh [--json]
 set -euo pipefail
 
-FIELDS='number,title,isDraft,mergeable,mergeStateStatus,author,headRefName,headRepositoryOwner,statusCheckRollup,reviewDecision,url'
+FIELDS='number,title,isDraft,mergeable,mergeStateStatus,author,headRefName,headRefOid,headRepositoryOwner,statusCheckRollup,reviewDecision,url'
 
 raw=$(gh pr list --state open --limit 50 --json "$FIELDS")
 me=$(gh api user --jq .login 2>/dev/null || echo "")
@@ -42,7 +42,24 @@ if [ -n "$repo" ]; then
   done | jq -s 'add // {}')
 fi
 
-verdicts=$(jq -r --arg me "$me" --argjson drift "$drift" '
+# Workflow runs GitHub is refusing to start. A fork PR from a first-time contributor
+# has its workflows held at `action_required` until a maintainer releases them, and the
+# check rollup does not say so — it simply contains fewer entries, often only the CLA
+# status. That reads as "green, nothing running, nothing failed", which is the single
+# most dangerous shape this script can encounter: it looks READY and nothing has been
+# tested at all. Observed live on #21.
+gated="{}"
+if [ -n "$repo" ]; then
+  gated=$(jq -r '.[] | "\(.headRefName)\t\(.headRefOid)"' <<<"$raw" | while IFS=$'\t' read -r br sha; do
+    [ -n "$sha" ] || continue
+    n=$(gh api "repos/$repo/actions/runs?head_sha=$sha&per_page=30" \
+          --jq '[.workflow_runs[]? | select(.conclusion == "action_required" or .status == "action_required")] | length' 2>/dev/null || true)
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
+    jq -cn --arg br "$br" --argjson n "$n" '{($br): $n}'
+  done | jq -s 'add // {}')
+fi
+
+verdicts=$(jq -r --arg me "$me" --argjson drift "$drift" --argjson gated "$gated" '
   map({
     number, title, url,
     branch: .headRefName,
@@ -58,6 +75,7 @@ verdicts=$(jq -r --arg me "$me" --argjson drift "$drift" '
     draft: .isDraft,
     conflicts: (.mergeable != "MERGEABLE"),
     behind: ($drift[.headRefName] // null),
+    gated: ($gated[.headRefName] // 0),
     # Age of the newest finished check. A green run from last week proves less than a
     # green run from an hour ago, and says so out loud rather than in a timestamp
     # nobody reads.
@@ -69,6 +87,7 @@ verdicts=$(jq -r --arg me "$me" --argjson drift "$drift" '
       verdict: (
         if .draft then "HOLD"
         elif .conflicts then "HOLD"
+        elif .gated > 0 then "HOLD"
         elif .checks_total == 0 then "HOLD"
         elif .checks_failed > 0 then "HOLD"
         elif .checks_running > 0 then "WAIT"
@@ -77,6 +96,7 @@ verdicts=$(jq -r --arg me "$me" --argjson drift "$drift" '
       reason: (
         if .draft then "draft"
         elif .conflicts then "conflicts with main — rebase or merge main in"
+        elif .gated > 0 then "\(.gated) workflow run(s) HELD pending maintainer approval — the \(.checks_total) check(s) shown do not include CI"
         elif .checks_total == 0 then "no checks ran — nothing proves this is safe"
         elif .checks_failed > 0 then "\(.checks_failed) check(s) failed"
         elif .checks_running > 0 then "\(.checks_running) check(s) still running"

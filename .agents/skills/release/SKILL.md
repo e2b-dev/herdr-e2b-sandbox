@@ -38,6 +38,13 @@ counterintuitive:
 
 - A PR with **zero** checks is `HOLD`, not `READY`. Nothing has proven it safe, and "no news" is not
   good news.
+- A fork PR from a first-time contributor has its workflows **held** at `action_required` until a
+  maintainer releases them, and the check rollup does not say so — it just contains fewer entries,
+  sometimes only the CLA status. That is the most dangerous shape here, because "one check, green,
+  nothing running" reads as ready when nothing has been tested at all. The script probes the head
+  sha's workflow runs for held ones and calls that `HOLD`. Releasing a held run means letting an
+  outsider's code execute in CI, so read the diff first — then `gh api -X POST
+  repos/<owner>/<repo>/actions/runs/<id>/approve`, and wait for the real checks.
 - A PR can report `mergeable: MERGEABLE` while its CI is red, so the check rollup is consulted
   separately from GitHub's own mergeability field.
 - `STALE` is the one nothing in the GitHub API surfaces. A PR whose checks passed a week ago against
@@ -242,4 +249,5 @@ implies completeness it doesn't have is worse than one that names its gap.
 - **An empty changelog section fails the release** — after the slow build steps, not before.
 - **`CONTRIBUTING.md` step 3 is stale** on rebuilding `tui/prebuilt/`; the workflow does it.
 - **Never force-push.** Not to a release branch, not to main, not with `--force-with-lease`.
-- **A PR with no checks is not a passing PR.** Absence of evidence is not evidence.
+- **A PR with no checks is not a passing PR.** Absence of evidence is not evidence — and a fork
+  PR's CI is held for approval without saying so, so "one green check" can mean "no CI ran".
