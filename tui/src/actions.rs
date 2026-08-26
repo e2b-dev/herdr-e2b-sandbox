@@ -110,7 +110,8 @@ mod tests {
 
     use super::{action_command, key_only};
     use crate::state::{
-        branch_cell, branch_column_width, git_dir_link, head_branch, parse_head, resolve_branch,
+        branch_cell, branch_column_width, git_dir_link, head_branch, parse_head, region_label,
+        resolve_branch, status_detail, template_cell, template_downgraded, TEMPLATE_W,
     };
 
     /// A throwaway directory under the system temp dir. `head_branch` reads real
@@ -278,8 +279,71 @@ mod tests {
     fn the_column_gives_way_before_the_other_columns_do() {
         assert_eq!(branch_column_width(60), 0); // too narrow to afford one
         assert_eq!(branch_column_width(0), 0);
-        assert_eq!(branch_column_width(99), 8); // the narrowest it's worth
-        assert_eq!(branch_column_width(200), 28); // capped, STEP keeps the rest
-        assert!(branch_column_width(105) > branch_column_width(100));
+        assert_eq!(branch_column_width(95), 8); // the narrowest it's worth
+        assert_eq!(branch_column_width(200), 28); // capped, STATUS keeps the rest
+        assert!(branch_column_width(101) > branch_column_width(96));
+    }
+
+    // --- the TEMPLATE column ----------------------------------------------
+    // Which image a box runs decides which agent is installed in it, so the
+    // board names it — and says out loud when it is NOT the one asked for.
+
+    // --- STATUS carries what STEP used to -----------------------------------
+
+    #[test]
+    fn the_status_cell_only_adds_a_step_that_says_something_new() {
+        assert_eq!(
+            status_detail("provisioning", "uploading 210/540 files").as_deref(),
+            Some("uploading 210/540 files")
+        );
+        assert_eq!(
+            status_detail("failed", "provision failed · see logs").as_deref(),
+            Some("provision failed · see logs")
+        );
+        // The pair the dropped STEP column printed twice.
+        assert_eq!(status_detail("ready", "ready"), None);
+        // `ready` is the step's "nothing in flight" value — stale beside a
+        // paused box, not news.
+        assert_eq!(status_detail("paused", "ready"), None);
+        assert_eq!(status_detail("ready", ""), None);
+    }
+
+    // --- the header's region ----------------------------------------------
+
+    #[test]
+    fn a_domain_reads_as_the_region_a_person_would_have_picked() {
+        assert_eq!(region_label("e2b-juliett.dev"), "eu");
+        // US is served at two hosts, and both are the same environment.
+        assert_eq!(region_label("e2b.app"), "us");
+        assert_eq!(region_label("e2b.dev"), "us");
+        // Nothing pinned IS US: US production resolves to no domain at all.
+        assert_eq!(region_label(""), "us");
+        assert_eq!(region_label("  "), "us");
+        // An unknown host has no region name, so it prints as itself rather
+        // than being given an invented one.
+        assert_eq!(region_label("e2b-staging.internal"), "e2b-staging.internal");
+    }
+
+    #[test]
+    fn the_template_column_shows_the_image_the_box_actually_runs() {
+        assert_eq!(template_cell("claude", "", TEMPLATE_W), "claude");
+        // Nothing recorded (older record, or a box with no sandbox yet) reads
+        // like the FILES column's "nothing to show".
+        assert_eq!(template_cell("", "", TEMPLATE_W), "—");
+        // Column dropped: no text at all.
+        assert_eq!(template_cell("claude", "", 0), "");
+    }
+
+    #[test]
+    fn a_downgraded_template_is_marked_and_keeps_its_mark_when_cut() {
+        // Requested one wasn't built on this cluster; `base` booted instead.
+        assert_eq!(template_cell("base", "claude", TEMPLATE_W), "base ⚠");
+        // The mark holds its two cells, so the NAME is what gives way.
+        assert_eq!(template_cell("base-with-extras", "claude", 8), "base-… ⚠");
+        assert!(template_downgraded("base", "claude"));
+        // The node side clears requestedTemplate on a match, so neither an empty
+        // nor an equal value is a downgrade.
+        assert!(!template_downgraded("claude", ""));
+        assert!(!template_downgraded("claude", "claude"));
     }
 }

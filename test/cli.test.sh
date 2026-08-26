@@ -643,6 +643,15 @@ out=$( cd "$FREPO" && env -u E2B_DOMAIN E2B_API_KEY=e2b_uskey HERDR_PLUGIN_CONFI
   && ok "the pre-flight takes the key and the region as one pair" \
   || bad "credential pair split (got '$out', wanted 'e2b_eukey|e2b-juliett.dev')"
 
+# Daemon-spawned commands demote the inherited ambient E2B_* env vars so config.toml
+# updates take effect without restarting herdr. The pre-flight must invoke the
+# resolver under a daemon even when both E2B_API_KEY and E2B_DOMAIN were exported.
+out=$( cd "$FREPO" && env HERDR_PLUGIN_ID="e2b-dev.herdr-e2b" E2B_DOMAIN="e2b.dev" E2B_API_KEY="e2b_oldkey" HERDR_PLUGIN_CONFIG_DIR="$PAIRCFG" \
+       bash -c 'source "$1/bin/lib/paths.sh"; ensure_e2b_env; printf "%s|%s" "$E2B_API_KEY" "${E2B_DOMAIN:-}"' _ "$ROOT" 2>&1 )
+[ "$out" = "e2b_eukey|e2b-juliett.dev" ] \
+  && ok "the daemon pre-flight demotes inherited env and resolves from config" \
+  || bad "daemon pre-flight did not resolve config (got '$out', wanted 'e2b_eukey|e2b-juliett.dev')"
+
 # region "us" resolves to NO domain, so a domain left in the environment has to
 # go. Keeping it would send the US key wherever this shell last pointed.
 printf '[sandbox]\nregion = "us"\n[secrets]\ne2b_api_key_us = "e2b_uskey"\n' > "$PAIRCFG/config.toml"
