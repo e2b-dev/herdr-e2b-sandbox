@@ -77,4 +77,15 @@ ensure_e2b_env
 # with. Same resolver, so still one implementation.
 export E2B_DASH_DOMAIN_CMD="$PLUGIN_DIR/bin/e2b-domain"
 
+# The plugin version for the header, resolved HERE for the same reason the domain
+# is: `plugin_version` reads herdr-plugin.toml, which is the manifest herdr's own
+# marketplace reads, so the number on the board is the number herdr reports.
+#
+# Deliberately not the crate's `CARGO_PKG_VERSION`: tui/Cargo.toml carries its own
+# version that is only kept in sync by hand, and CI's version-check does not
+# compare it — so it drifts, and a drifted version in the header is worse than
+# none. Passing it in keeps one source of truth and nothing new to remember at
+# release time.
+export E2B_DASH_VERSION="$(plugin_version)"
+
 exec "$BIN" "$@"

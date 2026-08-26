@@ -27,15 +27,16 @@ use crossterm::event::{
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style, Stylize},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
     Frame,
 };
 
 use actions::{action_command, goto_worktree, key_only, Verb};
 use state::{
-    branch_cell, branch_column_width, current_domain, load_boxes, probe_domain, region_label, sh,
-    state_dir, status_detail, template_cell, template_downgraded, Box, TEMPLATE_W,
+    branch_cell, branch_column_width, current_domain, load_boxes, plugin_version, probe_domain,
+    region_label, sh, state_dir, status_detail, template_cell, template_downgraded, Box,
+    TEMPLATE_W,
 };
 use theme::{initial_theme_idx, save_theme, status_glyph_color, theme_from, Theme, THEMES};
 
@@ -51,6 +52,7 @@ struct App {
     post_open: Option<(String, String, String)>, // after a shell exits: (label, key, worktree)
     domain: String,                              // cluster shown in the header
     domain_checked: Instant,                     // last re-ask (see probe_domain)
+    version: Option<String>,                     // plugin version for the header
     table_area: Rect, // where draw() last put the table (mouse hit-testing)
     branch_w: u16,    // BRANCH column width draw() last used (0 = dropped)
 }
@@ -219,13 +221,18 @@ fn draw(f: &mut Frame, app: &mut App) {
     ])
     .split(f.area());
 
-    // Header: title + REGION on the left, the theme right-aligned on the SAME
-    // line. The region is the load-bearing half — it says where a box opened from
-    // here would land — so it sits beside the title and never gives way; the
-    // title gives up detail first, and the theme (a preference, not a fact about
-    // your boxes) is dropped entirely on a pane too narrow for both. Widths are
-    // counted in chars (all of it is ASCII plus `·`/`⚠`, one cell each in a
-    // terminal font).
+    // Header: title + REGION on the left, the VERSION and theme right-aligned on
+    // the SAME line. The region is the load-bearing half — it says where a box
+    // opened from here would land — so it sits beside the title and never gives
+    // way; the title gives up detail first, and the right-hand pair sheds items
+    // on a pane too narrow for all of it. Widths are counted in chars (all of it
+    // is ASCII plus `·`/`⚠`, one cell each in a terminal font).
+    //
+    // The right side drops theme before version. Both are context rather than
+    // live state, but the version answers "is the thing I am looking at the thing
+    // I just built?" — the question that actually gets asked of a plugin loaded
+    // from a working tree — while the theme is visible in every colour on screen
+    // and so is the cheapest thing to lose.
     //
     // Region, not the host: `eu` is what you asked for, `e2b-juliett.dev` is how
     // it happens to be served, and the resolver already speaks in regions.
@@ -241,7 +248,24 @@ fn draw(f: &mut Frame, app: &mut App) {
     let n = app.boxes.len();
     let theme_name = THEMES[app.theme_idx];
     let width = chunks[0].width as usize;
-    let theme_txt = format!("theme: {theme_name}  ");
+    let theme_txt = format!("theme: {theme_name}");
+    // `v` prefixed so a bare number can't read as a count of something.
+    let ver_txt = app
+        .version
+        .as_deref()
+        .map(|v| format!("v{v}"))
+        .unwrap_or_default();
+    // Richest first; the search below takes the first that fits, so the pane keeps
+    // as much of the pair as it can afford. Two trailing spaces hold it off the edge.
+    let tails: Vec<String> = if ver_txt.is_empty() {
+        vec![format!("{theme_txt}  "), String::new()]
+    } else {
+        vec![
+            format!("{ver_txt} · {theme_txt}  "),
+            format!("{ver_txt}  "),
+            String::new(),
+        ]
+    };
     // What the region costs on the left, mark included — it is never dropped, so
     // every title candidate has to be measured against it.
     let region_len = "region ".chars().count() + region.chars().count() + if mixed { 2 } else { 0 };
@@ -254,20 +278,23 @@ fn draw(f: &mut Frame, app: &mut App) {
         "  ".to_string(),
     ];
     let fits = |title: &String, tail: usize| title.chars().count() + region_len + tail < width;
-    // Prefer keeping the theme; give it up before shortening the title further,
-    // because a pane wide enough for the full title reads better with it than
-    // with a truncated title and a theme name.
-    let (title, right) = titles
+    // Prefer keeping the right-hand pair; give it up before shortening the title
+    // further, because a pane wide enough for the full title reads better with it
+    // than with a truncated title and a version.
+    let (tail_idx, title) = tails
         .iter()
-        .find(|s| fits(s, theme_txt.chars().count()))
-        .map(|s| (s.clone(), theme_txt.clone()))
-        .or_else(|| {
+        .enumerate()
+        .find_map(|(i, tail)| {
             titles
                 .iter()
-                .find(|s| fits(s, 0))
-                .map(|s| (s.clone(), String::new()))
+                .find(|s| fits(s, tail.chars().count()))
+                .map(|s| (i, s.clone()))
         })
-        .unwrap_or_default();
+        .unwrap_or((tails.len() - 1, String::new()));
+    // Which of the pair survived. Derived from the chosen candidate rather than
+    // re-measured, so the spans below cannot disagree with what was budgeted for.
+    let show_theme = tail_idx == 0;
+    let show_ver = !ver_txt.is_empty() && tail_idx <= 1;
 
     let mut spans = vec![
         title.fg(t.accent).add_modifier(Modifier::BOLD),
@@ -278,14 +305,21 @@ fn draw(f: &mut Frame, app: &mut App) {
         spans.push(" ⚠".fg(t.paused));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), chunks[0]);
-    if !right.is_empty() {
+    if show_ver || show_theme {
+        let mut right_spans: Vec<Span> = Vec::new();
+        if show_ver {
+            right_spans.push(ver_txt.clone().fg(t.accent).add_modifier(Modifier::BOLD));
+        }
+        if show_ver && show_theme {
+            right_spans.push(" · ".fg(t.dim));
+        }
+        if show_theme {
+            right_spans.push("theme: ".fg(t.dim));
+            right_spans.push(theme_name.fg(t.accent).add_modifier(Modifier::BOLD));
+        }
+        right_spans.push("  ".into());
         f.render_widget(
-            Paragraph::new(Line::from(vec![
-                "theme: ".fg(t.dim),
-                theme_name.fg(t.accent).add_modifier(Modifier::BOLD),
-                "  ".into(),
-            ]))
-            .alignment(Alignment::Right),
+            Paragraph::new(Line::from(right_spans)).alignment(Alignment::Right),
             chunks[0],
         );
     }
@@ -440,6 +474,9 @@ fn main() -> std::io::Result<()> {
         post_open: None,
         domain: String::new(),
         domain_checked: Instant::now(),
+        // Read once: the manifest cannot change under a running dashboard without
+        // the plugin being reloaded, which restarts this process anyway.
+        version: plugin_version(),
         table_area: Rect::default(),
         branch_w: 0,
     };
