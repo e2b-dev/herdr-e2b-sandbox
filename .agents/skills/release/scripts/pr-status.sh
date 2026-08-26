@@ -73,7 +73,12 @@ verdicts=$(jq -r --arg me "$me" --argjson drift "$drift" --argjson gated "$gated
     checks_failed: (.statusCheckRollup // [] | map(select(.conclusion == "FAILURE" or .conclusion == "TIMED_OUT" or .conclusion == "CANCELLED" or .state == "FAILURE" or .state == "ERROR")) | length),
     checks_running: (.statusCheckRollup // [] | map(select((.status // "COMPLETED") != "COMPLETED")) | length),
     draft: .isDraft,
-    conflicts: (.mergeable != "MERGEABLE"),
+    # Three states, not two: MERGEABLE, CONFLICTING, and UNKNOWN — which means GitHub
+    # is still computing the merge commit, not that anything is wrong. It shows up for
+    # a few seconds after every push or branch update, and calling it a conflict sends
+    # someone off to fix a rebase that was never needed. Observed live on #23.
+    conflicts: (.mergeable == "CONFLICTING"),
+    mergeability_unknown: (.mergeable == "UNKNOWN"),
     behind: ($drift[.headRefName] // null),
     gated: ($gated[.headRefName] // 0),
     # Age of the newest finished check. A green run from last week proves less than a
@@ -91,6 +96,7 @@ verdicts=$(jq -r --arg me "$me" --argjson drift "$drift" --argjson gated "$gated
         elif .checks_total == 0 then "HOLD"
         elif .checks_failed > 0 then "HOLD"
         elif .checks_running > 0 then "WAIT"
+        elif .mergeability_unknown then "WAIT"
         elif (.behind // 0) > 0 then "STALE"
         else "READY" end),
       reason: (
@@ -100,6 +106,7 @@ verdicts=$(jq -r --arg me "$me" --argjson drift "$drift" --argjson gated "$gated
         elif .checks_total == 0 then "no checks ran — nothing proves this is safe"
         elif .checks_failed > 0 then "\(.checks_failed) check(s) failed"
         elif .checks_running > 0 then "\(.checks_running) check(s) still running"
+        elif .mergeability_unknown then "GitHub is still computing mergeability — re-run this in a moment, nothing is wrong"
         elif (.behind // 0) > 0 then "green, but \(.behind) commit(s) behind main — CI never saw the tree that would ship\(if .checks_age_days != null and .checks_age_days > 1 then " (checks are \(.checks_age_days)d old)" else "" end)"
         else "green\(if .checks_age_days != null and .checks_age_days > 1 then ", though checks are \(.checks_age_days)d old" else "" end)" end)
     })
