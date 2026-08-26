@@ -141,6 +141,50 @@ const readCodexSession = (text) => {
     expires,
   }
 }
+const GROK_AUTH_JSON = "~/.grok/auth.json"
+
+/**
+ * A grok browser login (`grok login`), read out of ~/.grok/auth.json, ready to be
+ * handed to a box whole (ADR 0011).
+ *
+ * VERBATIM — including the REAL refresh token, which is the one thing
+ * `readCodexSession` above must never copy. The difference is measured, not
+ * assumed: xAI's refresh grant was exercised twice off the same refresh token
+ * (auth.x.ai/oauth2/token, 2026-08-26) and both calls answered 200 — the token is
+ * multi-use, so a box refreshing for itself rotates nothing and cannot log the
+ * laptop out. That multi-use refresh half is also the whole point of borrowing:
+ * the access bearer lives SIX HOURS (measured iat→exp), which ADR 0010's own
+ * arithmetic rejects as a credential — it is the file's ability to re-mint that
+ * makes a grok box outlast any wall codex's 10-day bearer merely postpones.
+ *
+ * The recorded expiry is still the BEARER's, deliberately conservative: a laptop
+ * that has not run grok in six hours yields a file whose only live half is the
+ * refresh token, and promising a box a credential on the strength of an opaque
+ * token with no readable expiry is the guess this table never makes. The cost is
+ * one graceful degradation — use grok locally and the next box borrows fresh.
+ *
+ * The file is a map keyed by "<issuer>::<client_id>"; the first OIDC entry that
+ * still has both halves is the session. Anything else — an empty map, an entry
+ * missing its key or refresh token, an unreadable expiry — is null, never a guess.
+ *
+ * @returns {{value: string, expires: string}|null} value is the file a box should get
+ */
+const readGrokSession = (text) => {
+  let j
+  try {
+    j = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (!j || typeof j !== "object" || Array.isArray(j)) return null
+  const entry = Object.values(j).find((e) => e?.auth_mode === "oidc" && e?.key && e?.refresh_token)
+  if (!entry) return null
+  const at = new Date(String(entry.expires_at ?? "")).getTime()
+  const expires = Number.isFinite(at) ? new Date(at).toISOString() : jwtExpiry(entry.key)
+  if (!expires) return null
+  return { value: text, expires }
+}
+
 const OPENCODE_AUTH_JSON = "~/.local/share/opencode/auth.json"
 
 export const HARNESSES = {
@@ -151,6 +195,27 @@ export const HARNESSES = {
     authArgs: ["auth", "status"],
     hostVar: "ANTHROPIC_API_KEY",
     boxVar: "ANTHROPIC_API_KEY",
+    // The only row with TWO credential variables, and they are not alternatives to
+    // each other so much as one per KIND of account. ANTHROPIC_API_KEY is a Console
+    // key (API usage billing); CLAUDE_CODE_OAUTH_TOKEN is the long-lived token
+    // `claude setup-token` mints against a Pro/Max/Team subscription, documented for
+    // exactly this — "CI pipelines and scripts where browser login isn't available"
+    // — and ranked above the keychain credential it is standing in for.
+    //
+    // Recording only the key is what put a subscription user (which is most of them)
+    // in front of a sign-in screen with the report claiming nothing was wrong: their
+    // machine has no ANTHROPIC_API_KEY to find and never will, so discovery had
+    // nothing to look for and the remedy it printed named a variable Claude Code
+    // would reject the token under. Both names are searched, and whichever one holds
+    // a credential is forwarded under ITS OWN name — a token pasted into
+    // ANTHROPIC_API_KEY does not authenticate anything.
+    envVars: [
+      { hostVar: "ANTHROPIC_API_KEY", boxVar: "ANTHROPIC_API_KEY" },
+      { hostVar: "CLAUDE_CODE_OAUTH_TOKEN", boxVar: "CLAUDE_CODE_OAUTH_TOKEN" },
+    ],
+    // Which of the two `advice` below actually produces, so the paste block and the
+    // sentence next to it cannot recommend different variables.
+    remedyVar: "CLAUDE_CODE_OAUTH_TOKEN",
     // The row that cannot be discovered, so its remedy has to carry the whole answer.
     // Claude keeps its subscription login in the macOS Keychain, which no path here
     // opens (ADR 0010) — and unlike codex, borrowing it would not help much anyway:
@@ -160,7 +225,7 @@ export const HARNESSES = {
     // long-lived token instead, and it is pasted like any other value — so the advice
     // names it rather than leaving "set ANTHROPIC_API_KEY" to imply the user should
     // go hunting for a key that lasts.
-    advice: "run `claude setup-token` for a long-lived token, then set ANTHROPIC_API_KEY to it",
+    advice: "run `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN to it (a Console API key goes in ANTHROPIC_API_KEY instead)",
     // No plain-key config file exists: on macOS the credential is in the Keychain,
     // which ADR 0009 puts out of scope. The environment is the only readable surface.
     keyFile: null,
@@ -177,6 +242,15 @@ export const HARNESSES = {
       }
       if (j.apiKeySource && env[j.apiKeySource]) {
         return { state: "authenticated", source: "env", hostVar: j.apiKeySource }
+      }
+      // A long-lived token from `claude setup-token`, exported as
+      // CLAUDE_CODE_OAUTH_TOKEN. Claude Code reports it as its own `authMethod`
+      // rather than through `apiKeySource` — that field is for API keys — so the
+      // branch above cannot see it however it is spelled. Confirmed against the
+      // environment for the same reason every other named variable is: a method name
+      // is not proof the value is still there to forward.
+      if (j.authMethod === "oauth_token" && env.CLAUDE_CODE_OAUTH_TOKEN) {
+        return { state: "authenticated", source: "env", hostVar: "CLAUDE_CODE_OAUTH_TOKEN" }
       }
       // Logged in by a route whose credential lives somewhere ADR 0009 will not read.
       // `login` is recorded so the report can say WHY nothing was borrowed.
@@ -249,6 +323,10 @@ export const HARNESSES = {
     hostVar: "XAI_API_KEY",
     boxVar: "XAI_API_KEY",
     keyFile: { path: "~/.grok/config.toml", field: "[model.<id>] api_key" },
+    // The grok.com counterpart of codex's ChatGPT login (ADR 0011). Same pointer
+    // discipline; the read itself is the one that ships the file verbatim — see
+    // readGrokSession for why grok's refresh token travels where codex's must not.
+    sessionFile: { path: GROK_AUTH_JSON, boxVar: "GROK_AUTH_JSON", read: readGrokSession },
     // Exit code says NOTHING here: 0 authenticated, 0 logged out. Only the shape of
     // line one distinguishes them.
     //
@@ -267,6 +345,13 @@ export const HARNESSES = {
           ? { state: "authenticated", source: "env", hostVar: named[1] }
           : null
       }
+      // A grok.com browser login — borrowable since ADR 0011: its auth.json is a
+      // plain file, and its refresh token is measured multi-use, so the whole file
+      // travels and the box re-mints its own six-hour bearers.
+      if (/^You are logged in with grok\.com\.?$/.test(line)) {
+        return { state: "authenticated", source: "session" }
+      }
+      // Some other login this table has no reader for — say so rather than guess.
       if (/^You are logged in with /.test(line)) return { state: "no-key", source: "login" }
       if (/^You are not authenticated\.?$/.test(line)) return { state: "no-key", source: null }
       return null
@@ -442,6 +527,42 @@ export const HARNESSES = {
 }
 
 /**
+ * Every environment variable this harness can be authenticated by, primary first,
+ * as `{hostVar, boxVar}` pairs.
+ *
+ * Six rows out of seven have exactly one, which is why the table states it as the
+ * two plain fields and this synthesises the pair for them. Claude Code has two, and
+ * they are not interchangeable spellings of one credential: a Console key and a
+ * subscription token authenticate different accounts and each is only accepted under
+ * its own name. Anything that asks "is this harness authenticated" or "what does its
+ * box get" has to ask over the whole list or it will miss half the users.
+ */
+export function credentialVars(h) {
+  if (Array.isArray(h?.envVars) && h.envVars.length) return h.envVars
+  return h?.hostVar ? [{ hostVar: h.hostVar, boxVar: h.boxVar }] : []
+}
+
+/**
+ * The box variable that carries what was found under `hostVar` here.
+ *
+ * Falls back to the row's own `boxVar` for a name the table does not list — a probe
+ * may report a variable of its own (grok names the one it used), and that is the
+ * pre-existing answer for those.
+ */
+export function boxVarForHost(h, hostVar) {
+  return credentialVars(h).find((v) => v.hostVar === hostVar)?.boxVar || h?.boxVar || null
+}
+
+/**
+ * The box variable `remedyFor`'s advice actually produces — what a paste block for
+ * this harness should name. Equal to `boxVar` everywhere except claude, whose advice
+ * mints a token that ANTHROPIC_API_KEY would reject.
+ */
+export function remedyVarFor(h) {
+  return h?.remedyVar || h?.boxVar || null
+}
+
+/**
  * What to tell the user to do about a harness with no borrowable key.
  *
  * Normally "set <VAR>", but opencode resolves providers from a registry of ~190
@@ -510,8 +631,12 @@ export function interpretProbe(id, probe = {}) {
   // it. So a variable sitting in the environment is borrowable whether the binary
   // answered, hung, answered unreadably, or was never installed at all. Checked
   // before anything else, so nothing can mask a key that is plainly there.
-  if (h.hostVar && env[h.hostVar]) {
-    return { installed, state: "authenticated", source: "env", hostVar: h.hostVar }
+  // Every variable this row accepts, primary first, so a harness with two of them
+  // is found under whichever one the user actually has. `find` and not a filter:
+  // the first hit is the answer, and a box needs one credential, not both.
+  const found = credentialVars(h).find((v) => env[v.hostVar])
+  if (found) {
+    return { installed, state: "authenticated", source: "env", hostVar: found.hostVar }
   }
 
   // Absent and unknown are different sentences. A binary that is not here is a fact;

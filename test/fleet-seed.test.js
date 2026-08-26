@@ -10,12 +10,12 @@ import { DEFAULT_SEEDS, seedCommand } from "../src/fleet-seed.js"
 test("seedCommand: a template with a shipped default gets it", () => {
   assert.equal(seedCommand("claude"), DEFAULT_SEEDS.claude)
   assert.equal(seedCommand("codex"), DEFAULT_SEEDS.codex)
+  assert.equal(seedCommand("grok"), DEFAULT_SEEDS.grok)
 })
 
 test("seedCommand: a template nobody has verified a schema for seeds nothing", () => {
   // Inventing first-run state for `grok` or `amp` would write junk into somebody's
   // home directory, so an unknown template waits for `[fleet.seed]` to say what to run.
-  assert.equal(seedCommand("grok"), "")
   assert.equal(seedCommand("base"), "")
   assert.equal(seedCommand(undefined), "")
 })

@@ -56,6 +56,45 @@ test("interpretProbe: a subscription login is NOT borrowable", () => {
   assert.equal(r.hostVar, "ANTHROPIC_API_KEY")
 })
 
+test("interpretProbe: a subscription TOKEN is borrowable, under its own name", () => {
+  // The other half of the row above, and the one most claude users actually have:
+  // `claude setup-token` mints a long-lived token for exactly this, and Claude Code
+  // reports it as an `authMethod` rather than through `apiKeySource`, so the
+  // API-key branch cannot see it.
+  const r = interpretProbe("claude", {
+    status: 0,
+    stdout: JSON.stringify({ loggedIn: true, authMethod: "oauth_token", apiProvider: "firstParty" }),
+    stderr: "",
+    env: { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-x" },
+  })
+  assert.equal(r.state, "authenticated")
+  assert.equal(r.source, "env")
+  assert.equal(r.hostVar, "CLAUDE_CODE_OAUTH_TOKEN")
+})
+
+test("interpretProbe: an authMethod with no variable behind it is not an answer", () => {
+  // A method name is not proof the value is still there to forward — the token may
+  // have come from a shell this process cannot see. Reporting `authenticated` here
+  // is the failure the whole feature exists to remove: a box that boots on a
+  // sign-in screen while the report claimed a credential was found.
+  const r = interpretProbe("claude", {
+    status: 0,
+    stdout: JSON.stringify({ loggedIn: true, authMethod: "oauth_token" }),
+    stderr: "",
+    env: {},
+  })
+  assert.equal(r.state, "no-key")
+  assert.equal(r.source, "login")
+})
+
+test("interpretProbe: a token in the environment is found with no probe at all", () => {
+  // Same rule as the API key below it: the environment answers on its own. This is
+  // the path that matters when herdr creates the box, where nothing is spawned.
+  const r = interpretProbe("claude", { notFound: true, env: { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-x" } })
+  assert.equal(r.state, "authenticated")
+  assert.equal(r.hostVar, "CLAUDE_CODE_OAUTH_TOKEN")
+})
+
 test("interpretProbe: a probe that timed out is unknown, never 'no key'", () => {
   // The difference matters: `no-key` tells the user to go set a variable, which is
   // wrong and wastes their time if the key was there all along and the probe hung.
@@ -266,10 +305,38 @@ test("interpretProbe: grok names the variable it is using, and it is checked", (
   assert.equal(r.hostVar, "XAI_API_KEY")
 })
 
-test("interpretProbe: a grok browser login exits 0 too, and is still not borrowable", () => {
+test("interpretProbe: a grok browser login IS borrowable, as a session", () => {
+  // Reversed by ADR 0011. It was `no-key` while grok's six-hour bearer failed ADR
+  // 0010's lifetime test — but the refresh token beside it is measured MULTI-USE,
+  // so the whole file travels and the box re-mints bearers for itself.
   const r = interpretProbe("grok", {
     status: 0,
     stdout: "You are logged in with grok.com.\n\nDefault model: grok-4.6\n",
+    stderr: "",
+    env: {},
+  })
+  assert.equal(r.state, "authenticated")
+  assert.equal(r.source, "session")
+})
+
+test("interpretProbe: a real XAI_API_KEY still outranks a grok session", () => {
+  // Same pin as codex's: the env check runs first, and a key the user set is a
+  // deliberate choice a session must not shadow.
+  const r = interpretProbe("grok", {
+    status: 0,
+    stdout: "You are logged in with grok.com.\n\nDefault model: grok-4.6\n",
+    stderr: "",
+    env: { XAI_API_KEY: "xai-real" },
+  })
+  assert.equal(r.source, "env")
+})
+
+test("interpretProbe: a grok login this table has no reader for stays no-key", () => {
+  // The catch-all below the grok.com branch — a future `logged in with <idp>` must
+  // not be silently claimed as borrowable just because it says "logged in".
+  const r = interpretProbe("grok", {
+    status: 0,
+    stdout: "You are logged in with example-sso.org.\n\nDefault model: grok-4.6\n",
     stderr: "",
     env: {},
   })
