@@ -33,8 +33,8 @@ import path from "node:path"
 import { pathToFileURL } from "node:url"
 import TOML from "@iarna/toml"
 
-import { AUTH_PATH, CONFIG_PATH } from "./config.js"
-import { HARNESSES, readHarnessFile, remedyFor } from "./harnesses.js"
+import { AUTH_PATH, CONFIG_PATH, resolveEnvConfig } from "./config.js"
+import { HARNESSES, boxVarForHost, readHarnessFile, remedyFor, remedyVarFor } from "./harnesses.js"
 import { formatReport, probeAll, untilExpiry } from "./harness-probe.js"
 
 // One reader for every documented path this feature touches — it lives in
@@ -62,7 +62,11 @@ export function buildPlan(rows, { readText = readTextFile } = {}) {
   for (const r of rows) {
     const h = HARNESSES[r.id]
     if (!h) continue // a harness not in the table is not guessed at
-    const gap = (why) => gaps.push({ id: r.id, template: h.template, installed: !!r.installed, hostVar: r.hostVar ?? h.hostVar, boxVar: h.boxVar, why })
+    // `remedyVarFor` and not `h.boxVar`: the paste block this feeds prints the box
+    // variable while the sentence beside it prints `remedyFor`'s advice, and for
+    // claude those are two different variables — a `setup-token` token pasted into
+    // ANTHROPIC_API_KEY authenticates nothing. One source for the pair or they drift.
+    const gap = (why) => gaps.push({ id: r.id, template: h.template, installed: !!r.installed, hostVar: r.hostVar ?? h.hostVar, boxVar: remedyVarFor(h), why })
 
     if (r.state !== "authenticated") {
       // Nothing to fix for a harness that is not here — the report already says so,
@@ -76,8 +80,9 @@ export function buildPlan(rows, { readText = readTextFile } = {}) {
     if (r.source === "session") {
       // A subscription login, borrowed whole out of the file it already lives in
       // (ADR 0010). It differs from every other entry in two ways the rest of the
-      // pipeline has to carry: it EXPIRES, and its refresh half is replaced by a
-      // placeholder before it is written anywhere.
+      // pipeline has to carry: it EXPIRES, and its refresh half is decided per
+      // harness — replaced by a placeholder where it rotates (codex, ADR 0010),
+      // shipped for real where it is measured multi-use (grok, ADR 0011).
       const text = h.sessionFile ? readText(h.sessionFile.path) : null
       let session = null
       try {
@@ -157,7 +162,11 @@ export function buildPlan(rows, { readText = readTextFile } = {}) {
       gap("its credential has no single variable name to record")
       continue
     }
-    entries.push({ id: r.id, template: h.template, kind: "forward", boxVar: h.boxVar, hostVar })
+    // The box variable PAIRED with the name we found, not the row's primary one.
+    // A harness with two credential variables accepts each only under its own name,
+    // so forwarding a subscription token as ANTHROPIC_API_KEY would produce a box
+    // that is confidently misconfigured rather than plainly unauthenticated.
+    entries.push({ id: r.id, template: h.template, kind: "forward", boxVar: boxVarForHost(h, hostVar), hostVar })
   }
 
   return { entries, gaps }
@@ -362,6 +371,82 @@ export function formatForwardWarning(plan, invisible) {
   return out.join("\n")
 }
 
+// ── the closing summary table ───────────────────────────────────────────────────
+//
+// Everything above answers "what can this machine lend?". The table answers the
+// question the user actually walked in with: WHICH credential does a box booting
+// each template end up using? That needs the one input the rest of this command
+// deliberately ignores — the user's own config.toml — because a hand-set
+// [templates.<t>.env] outranks anything discovered here (resolveEnv's ladder in
+// src/config.js), so a summary without it claims a box is unauthenticated when it
+// is not. The file is parsed for DISPLAY and never written, which keeps the
+// one-writer / one-editor split intact: auth.toml is still the only file this
+// command writes, config.toml still has exactly one editor.
+
+const SUMMARY_MARKS = { ok: "✅", warn: "⚠️", no: "❌" }
+
+/**
+ * One row per probed harness: which credential a box booting its template gets.
+ *
+ * Pure over the probe rows, the write plan, and the (already normalized) user
+ * config — the same discipline as buildPlan, and for the same reason: every branch
+ * is testable with no harness installed.
+ *
+ * The ranking mirrors resolveEnv's ladder rather than inventing its own: a LIVE
+ * session wins unless `prefer = "env"` takes it back, a hand-set value beats
+ * everything discovered, and a discovered pointer or forwarded name is what
+ * remains. An EXPIRED session is not a method — resolveEnv drops it at create
+ * time, so claiming it here would be the exact misreport this table exists to end.
+ *
+ * @param {Array} rows      probe results, as src/harness-probe.js returns them
+ * @param {object} plan     buildPlan's output over the same rows
+ * @param {object} cfg      resolveEnvConfig's output over the user's config.toml
+ */
+export function buildSummary(rows, plan, { envByTemplate = {}, templatePrefer = {} } = {}) {
+  return rows.map((r) => {
+    const h = HARNESSES[r.id]
+    if (!h) return { id: r.id, mark: "no", method: "not a harness this plugin knows" }
+    const entry = plan.entries.find((e) => e.id === r.id)
+    // The variables that authenticate THIS harness, by box name. opencode is the
+    // deliberate exception: it resolves providers from a registry of ~190 variable
+    // names, so any hand-set entry in its section is taken at the user's word.
+    const credVars = new Set(
+      [h.boxVar, remedyVarFor(h), h.sessionFile?.boxVar, ...(h.envVars || []).map((v) => v.boxVar)].filter(Boolean),
+    )
+    const cfgVar = Object.keys(envByTemplate[h.template] || {}).find((k) => credVars.has(k) || !h.hostVar)
+    const live = entry?.kind === "session" && untilExpiry(entry.expires) !== "expired"
+    if (live && templatePrefer[h.template] !== "env") {
+      return { id: r.id, mark: "ok", method: `signed-in session, read from ${entry.path} at box create (${untilExpiry(entry.expires)})` }
+    }
+    if (cfgVar) return { id: r.id, mark: "ok", method: `${cfgVar} hand-set in config.toml — always wins` }
+    if (entry?.kind === "value") return { id: r.id, mark: "ok", method: `${entry.boxVar} read from ${entry.path} at box create` }
+    if (entry?.kind === "forward") return { id: r.id, mark: "ok", method: `$${entry.hostVar} forwarded from this shell` }
+    // Authenticated on the host with nothing a box can be handed. A tick here would
+    // repeat the lie the report row already risks — the harness LOOKS healthy and
+    // the box still boots signed out — so it is the one row that warns instead.
+    if (r.state === "authenticated") return { id: r.id, mark: "warn", method: "credential on this host only — a box receives nothing" }
+    if (!r.installed) return { id: r.id, mark: "no", method: "not installed, nothing configured" }
+    return { id: r.id, mark: "no", method: "nothing — see the remedy above" }
+  })
+}
+
+/** The table itself. Widths are measured, not guessed, so a long path cannot break
+ * the frame; the marks are emoji because that is what the eye scans for. */
+export function formatSummary(summary) {
+  if (!summary.length) return ""
+  const idW = Math.max("provider".length, ...summary.map((s) => s.id.length))
+  const mW = Math.max("credential a box gets".length, ...summary.map((s) => s.method.length))
+  const bar = (l, m, r) => `${l}${"─".repeat(idW + 2)}${m}${"─".repeat(4)}${m}${"─".repeat(mW + 2)}${r}`
+  const line = (id, mark, method) => `│ ${id.padEnd(idW)} │ ${mark} │ ${method.padEnd(mW)} │`
+  return [
+    bar("┌", "┬", "┐"),
+    line("provider", "  ", "credential a box gets"),
+    bar("├", "┼", "┤"),
+    ...summary.map((s) => line(s.id, SUMMARY_MARKS[s.mark], s.method)),
+    bar("└", "┴", "┘"),
+  ].join("\n")
+}
+
 async function main(argv) {
   const yes = argv.includes("--yes") || argv.includes("-y")
   const unknown = argv.find((a) => a !== "--yes" && a !== "-y")
@@ -378,7 +463,18 @@ async function main(argv) {
     plan,
     invisibleToLoginShell(plan.entries.filter((e) => e.kind === "forward").map((e) => e.hostVar)),
   )
-  process.stdout.write(`${formatReport(rows)}\n\n${formatPlan(plan)}\n${warning ? `${warning}\n` : ""}`)
+  // The one read of the user's config.toml in this command, and it is read-only:
+  // without it the summary would claim a box is unauthenticated when a hand-set
+  // [templates.<t>.env] says otherwise. Absent or malformed reads as "nothing
+  // hand-set" — a broken config is loadConfig's error to raise, not this one's.
+  let userCfg = {}
+  try {
+    userCfg = TOML.parse(readFileSync(CONFIG_PATH, "utf8"))
+  } catch {
+    userCfg = {}
+  }
+  const summary = formatSummary(buildSummary(rows, plan, resolveEnvConfig({ sandbox: userCfg.sandbox, templates: userCfg.templates })))
+  process.stdout.write(`${formatReport(rows)}\n\n${formatPlan(plan)}\n${warning ? `${warning}\n` : ""}\n${summary}\n`)
 
   // Not a terminal and no flag: report and stop. Guessing consent from a pipe is
   // how a scripted caller ends up with a file it never asked for — and the
