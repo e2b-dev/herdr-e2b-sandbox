@@ -31,7 +31,7 @@ One row per open PR, each with a verdict:
 | `READY` | not a draft, no conflicts, every check green against current main | merge it (subject to the rules below) |
 | `STALE` | green, but the checks ran against a base that has since moved | re-run CI or update the branch, then merge |
 | `WAIT` | checks still in flight | do not merge; either wait or leave it for the next sweep |
-| `HOLD` | draft, conflicts, red CI, or **no checks at all** | a human decides; report it and move on |
+| `HOLD` | draft, conflicts, red CI, **no checks at all**, or CI **held pending approval** | a human decides; report it and move on |
 
 The script computes this rather than leaving it to inspection because three of these are
 counterintuitive:
