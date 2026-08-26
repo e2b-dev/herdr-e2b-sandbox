@@ -14,6 +14,8 @@ import {
   formatPlan,
   invisibleToLoginShell,
   formatForwardWarning,
+  buildSummary,
+  formatSummary,
 } from "../src/harness-auth.js"
 
 // Rows here are what src/harness-probe.js hands back — the SHAPE interpretProbe
@@ -39,6 +41,37 @@ test("a key found in the environment records the NAME and never the value", () =
     },
   ])
   assert.doesNotMatch(renderAuthToml(plan), /sk-ant-secret/)
+})
+
+test("a second credential variable is forwarded under ITS OWN box name", () => {
+  // claude accepts a Console key or a subscription token, and only under the name
+  // each belongs to. Recording the token as ANTHROPIC_API_KEY would produce a box
+  // that is confidently misconfigured rather than plainly unauthenticated.
+  const plan = buildPlan(
+    [row({ id: "claude", state: "authenticated", source: "env", hostVar: "CLAUDE_CODE_OAUTH_TOKEN" })],
+    { readText: noFiles },
+  )
+  assert.deepEqual(plan.entries, [
+    {
+      id: "claude",
+      template: "claude",
+      kind: "forward",
+      boxVar: "CLAUDE_CODE_OAUTH_TOKEN",
+      hostVar: "CLAUDE_CODE_OAUTH_TOKEN",
+    },
+  ])
+})
+
+test("claude's gap names the variable its advice actually produces", () => {
+  // The paste block and the sentence beside it have to agree: `claude setup-token`
+  // mints a token, and ANTHROPIC_API_KEY is not where that token goes.
+  const plan = buildPlan([row({ id: "claude", state: "no-key", source: "login" })], { readText: noFiles })
+  assert.deepEqual(plan.entries, [])
+  assert.equal(plan.gaps.length, 1)
+  assert.equal(plan.gaps[0].boxVar, "CLAUDE_CODE_OAUTH_TOKEN")
+  const text = formatPlan(plan, "/tmp/config.toml")
+  assert.match(text, /CLAUDE_CODE_OAUTH_TOKEN = "…"/)
+  assert.match(text, /claude setup-token/)
 })
 
 test("a key found in a file is recorded as a POINTER, not copied", () => {
@@ -383,4 +416,120 @@ test("nothing invisible → no warning at all", () => {
   assert.equal(formatForwardWarning(plan, []), "")
   // ...and a name that is invisible but was never forwarded is not our business.
   assert.equal(formatForwardWarning(plan, ["SOMETHING_ELSE"]), "")
+})
+
+// ── the closing summary table ───────────────────────────────────────────────────
+// The one place the user's own config.toml enters this command, read-only. These
+// pin the ladder the table claims to mirror (resolveEnv's, src/config.js).
+
+test("the summary credits a hand-set config.toml value, which discovery cannot see", () => {
+  const rows = [row({ id: "claude", state: "no-key", source: "login" })]
+  const plan = buildPlan(rows, { readText: noFiles })
+  const s = buildSummary(rows, plan, { envByTemplate: { claude: { CLAUDE_CODE_OAUTH_TOKEN: "x" } } })
+  assert.deepEqual(s, [{ id: "claude", mark: "ok", method: "CLAUDE_CODE_OAUTH_TOKEN hand-set in config.toml — always wins" }])
+})
+
+test("a hand-set value outranks a discovered forward, mirroring resolveEnv", () => {
+  const rows = [row({ id: "claude", state: "authenticated", source: "env", hostVar: "ANTHROPIC_API_KEY" })]
+  const plan = buildPlan(rows, { readText: noFiles })
+  const s = buildSummary(rows, plan, { envByTemplate: { claude: { CLAUDE_CODE_OAUTH_TOKEN: "x" } } })
+  assert.match(s[0].method, /config\.toml/)
+})
+
+test("a live session outranks a hand-set value, unless prefer = env takes it back", () => {
+  const exp = Math.floor(Date.now() / 1000) + 240 * HOUR
+  const plan = buildPlan([sessionRow], { readText: () => sessionFile(exp) })
+  const cfg = { envByTemplate: { codex: { OPENAI_API_KEY: "sk-x" } } }
+  assert.match(buildSummary([sessionRow], plan, cfg)[0].method, /signed-in session/)
+  assert.match(
+    buildSummary([sessionRow], plan, { ...cfg, templatePrefer: { codex: "env" } })[0].method,
+    /config\.toml/,
+  )
+})
+
+test("an expired session is not a method — the row degrades honestly", () => {
+  const exp = Math.floor(Date.now() / 1000) - HOUR
+  const plan = buildPlan([sessionRow], { readText: () => sessionFile(exp) })
+  const s = buildSummary([sessionRow], plan, {})
+  assert.equal(s[0].mark, "warn")
+  assert.doesNotMatch(s[0].method, /session/)
+})
+
+test("opencode: any hand-set variable counts, because its registry has no one name", () => {
+  const rows = [row({ id: "opencode", state: "authenticated", source: "env", hostVar: null })]
+  const plan = buildPlan(rows, { readText: noFiles })
+  assert.equal(buildSummary(rows, plan, { envByTemplate: { opencode: { ANTHROPIC_API_KEY: "x" } } })[0].mark, "ok")
+  // ...and without one, "key found (env)" above must not read as a tick here: the
+  // credential is real and a box still receives nothing.
+  const bare = buildSummary(rows, plan, {})
+  assert.equal(bare[0].mark, "warn")
+  assert.match(bare[0].method, /receives nothing/)
+})
+
+test("nothing anywhere is a plain no, and not-installed says so", () => {
+  const rows = [row({ id: "droid", state: "no-key" }), row({ id: "grok", installed: false })]
+  const plan = buildPlan(rows, { readText: noFiles })
+  const s = buildSummary(rows, plan, {})
+  assert.equal(s[0].mark, "no")
+  assert.match(s[1].method, /not installed/)
+})
+
+test("formatSummary draws one framed row per provider, marks as emoji", () => {
+  const out = formatSummary([
+    { id: "claude", mark: "ok", method: "hand-set" },
+    { id: "opencode", mark: "warn", method: "host only" },
+    { id: "droid", mark: "no", method: "nothing" },
+  ])
+  assert.match(out, /│ claude {3}│ ✅ │/)
+  assert.match(out, /│ opencode │ ⚠️ │/)
+  assert.match(out, /│ droid {4}│ ❌ │/)
+  assert.match(out, /┌─+┬─+┬─+┐/)
+  assert.match(out, /└─+┴─+┴─+┘/)
+  assert.equal(formatSummary([]), "")
+})
+
+// ── ADR 0011: grok's session ships whole, refresh token included ───────────────
+
+const grokSessionRow = { id: "grok", installed: true, state: "authenticated", source: "session" }
+const grokFile = (expires_at) =>
+  JSON.stringify({
+    "https://auth.x.ai::b1a00492-cli": {
+      key: "eyJ-grok-access-token",
+      auth_mode: "oidc",
+      refresh_token: "grok-rt-REAL-AND-MEANT-TO-TRAVEL",
+      expires_at,
+    },
+  })
+
+test("a grok session is a POINTER whose payload is the file VERBATIM", () => {
+  const exp = new Date(Date.now() + 3 * 3600e3).toISOString()
+  const plan = buildPlan([grokSessionRow], { readText: () => grokFile(exp) })
+  assert.equal(plan.entries.length, 1)
+  const e = plan.entries[0]
+  assert.equal(e.kind, "session")
+  assert.equal(e.boxVar, "GROK_AUTH_JSON")
+  assert.equal(e.path, "~/.grok/auth.json")
+  assert.equal(e.supersedes, "XAI_API_KEY")
+  assert.equal(e.expires, exp)
+  // The pointer rule still holds: auth.toml itself carries NO credential — the
+  // refresh token travels at box-create time, not through the generated file.
+  const body = renderAuthToml(plan)
+  assert.ok(!body.includes("grok-rt-REAL"), "refresh token leaked into auth.toml")
+  assert.match(body, /\[templates\.grok\.session\]/)
+})
+
+test("a grok file with no live oidc entry is a gap, not a guess", () => {
+  // An api_key-style config, an empty map, a missing refresh half, an unreadable
+  // expiry — none of them are a session, and none of them may be shipped as one.
+  for (const text of [
+    "{}",
+    JSON.stringify({ "x::y": { auth_mode: "apikey", key: "k" } }),
+    JSON.stringify({ "x::y": { auth_mode: "oidc", key: "k" } }),
+    JSON.stringify({ "x::y": { auth_mode: "oidc", key: "not-a-jwt", refresh_token: "rt", expires_at: "garbage" } }),
+    "not json",
+  ]) {
+    const plan = buildPlan([grokSessionRow], { readText: () => text })
+    assert.equal(plan.entries.length, 0, `shipped a session out of: ${text}`)
+    assert.equal(plan.gaps.length, 1)
+  }
 })
