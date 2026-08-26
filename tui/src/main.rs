@@ -34,7 +34,8 @@ use ratatui::{
 
 use actions::{action_command, goto_worktree, key_only, Verb};
 use state::{
-    branch_cell, branch_column_width, current_domain, load_boxes, probe_domain, sh, state_dir, Box,
+    branch_cell, branch_column_width, current_domain, load_boxes, probe_domain, region_label, sh,
+    state_dir, status_detail, template_cell, template_downgraded, Box, TEMPLATE_W,
 };
 use theme::{initial_theme_idx, save_theme, status_glyph_color, theme_from, Theme, THEMES};
 
@@ -95,7 +96,7 @@ impl App {
         (i < self.boxes.len()).then_some(i)
     }
     /// The SANDBOX column's x range: border(1) + "▸ "(2) + NAME(18)+gap +
-    /// BRANCH(+gap, when the pane was wide enough for one) + STATUS(16)+gap.
+    /// BRANCH(+gap, when the pane was wide enough for one) + TEMPLATE+gap.
     /// Keep in sync with the `widths` array in draw().
     fn sandbox_col(&self, x: u16) -> bool {
         let branch = if self.branch_w > 0 {
@@ -103,7 +104,7 @@ impl App {
         } else {
             0
         };
-        let start = self.table_area.x + 1 + 2 + 18 + 1 + branch + 16 + 1;
+        let start = self.table_area.x + 1 + 2 + 18 + 1 + branch + TEMPLATE_W + 1;
         x >= start && x < start + 22
     }
     /// `z`: pause a live box (stops its billing clock; files AND memory are
@@ -218,55 +219,73 @@ fn draw(f: &mut Frame, app: &mut App) {
     ])
     .split(f.area());
 
-    // Header: title on the left, the E2B cluster right-aligned on the SAME line.
-    // The cluster is the load-bearing half — it says where a box opened from here
-    // would land — so when the pane is too narrow the TITLE gives up detail, not
-    // the cluster. Widths are counted in chars (all of it is ASCII plus `·`/`⚠`,
-    // which occupy one cell each in a terminal font).
+    // Header: title + REGION on the left, the theme right-aligned on the SAME
+    // line. The region is the load-bearing half — it says where a box opened from
+    // here would land — so it sits beside the title and never gives way; the
+    // title gives up detail first, and the theme (a preference, not a fact about
+    // your boxes) is dropped entirely on a pane too narrow for both. Widths are
+    // counted in chars (all of it is ASCII plus `·`/`⚠`, one cell each in a
+    // terminal font).
+    //
+    // Region, not the host: `eu` is what you asked for, `e2b-juliett.dev` is how
+    // it happens to be served, and the resolver already speaks in regions.
     let domain = app.domain.clone();
     // A box created on another cluster can't be reached from this one, so flag a
-    // mixed list rather than implying the header's cluster holds all of them.
+    // mixed list rather than implying the header's region holds all of them.
     let mixed = app
         .boxes
         .iter()
         .any(|b| !b.domain.is_empty() && b.domain != domain);
-    let right = if domain.is_empty() {
-        String::new()
-    } else {
-        format!("cluster {domain}{}  ", if mixed { " ⚠" } else { "" })
-    };
+    let region = region_label(&domain);
 
     let n = app.boxes.len();
     let theme_name = THEMES[app.theme_idx];
     let width = chunks[0].width as usize;
-    // Widest title that still leaves room for the cluster, in order of preference.
-    let left = [
-        format!("  herdr-e2b-sandbox · {n} sandboxes · theme: {theme_name}"),
-        format!("  herdr-e2b-sandbox · {n} sandboxes"),
-        "  herdr-e2b-sandbox".to_string(),
-        "  e2b".to_string(),
-    ]
-    .into_iter()
-    .find(|s| s.chars().count() + right.chars().count() < width)
-    .unwrap_or_default();
+    let theme_txt = format!("theme: {theme_name}  ");
+    // What the region costs on the left, mark included — it is never dropped, so
+    // every title candidate has to be measured against it.
+    let region_len = "region ".chars().count() + region.chars().count() + if mixed { 2 } else { 0 };
+    // Widest title that still leaves room for the region, in order of preference;
+    // the last one is region-only, for a pane that can afford nothing else.
+    let titles = [
+        format!("  herdr-e2b-sandbox · {n} sandboxes · "),
+        "  herdr-e2b-sandbox · ".to_string(),
+        "  e2b · ".to_string(),
+        "  ".to_string(),
+    ];
+    let fits = |title: &String, tail: usize| title.chars().count() + region_len + tail < width;
+    // Prefer keeping the theme; give it up before shortening the title further,
+    // because a pane wide enough for the full title reads better with it than
+    // with a truncated title and a theme name.
+    let (title, right) = titles
+        .iter()
+        .find(|s| fits(s, theme_txt.chars().count()))
+        .map(|s| (s.clone(), theme_txt.clone()))
+        .or_else(|| {
+            titles
+                .iter()
+                .find(|s| fits(s, 0))
+                .map(|s| (s.clone(), String::new()))
+        })
+        .unwrap_or_default();
 
-    f.render_widget(
-        Paragraph::new(
-            Line::from(left).style(Style::default().fg(t.accent).add_modifier(Modifier::BOLD)),
-        ),
-        chunks[0],
-    );
+    let mut spans = vec![
+        title.fg(t.accent).add_modifier(Modifier::BOLD),
+        "region ".fg(t.dim),
+        region.clone().fg(t.accent).add_modifier(Modifier::BOLD),
+    ];
+    if mixed {
+        spans.push(" ⚠".fg(t.paused));
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), chunks[0]);
     if !right.is_empty() {
-        let mut spans = vec![
-            "cluster ".fg(t.dim),
-            domain.clone().fg(t.accent).add_modifier(Modifier::BOLD),
-        ];
-        if mixed {
-            spans.push(" ⚠".fg(t.paused));
-        }
-        spans.push("  ".into());
         f.render_widget(
-            Paragraph::new(Line::from(spans)).alignment(Alignment::Right),
+            Paragraph::new(Line::from(vec![
+                "theme: ".fg(t.dim),
+                theme_name.fg(t.accent).add_modifier(Modifier::BOLD),
+                "  ".into(),
+            ]))
+            .alignment(Alignment::Right),
             chunks[0],
         );
     }
@@ -282,7 +301,10 @@ fn draw(f: &mut Frame, app: &mut App) {
     if branch_w > 0 {
         titles.push("BRANCH");
     }
-    titles.extend(["STATUS", "SANDBOX", "FILES", "STEP"]);
+    // STATUS is LAST and elastic: it absorbed the old STEP column, which said
+    // "ready" beside a "ready" status and only ever carried anything new while a
+    // box was provisioning or had failed.
+    titles.extend(["TEMPLATE", "SANDBOX", "FILES", "STATUS"]);
     let header = Row::new(titles)
         .style(Style::default().fg(t.accent).add_modifier(Modifier::BOLD))
         .bottom_margin(1);
@@ -292,22 +314,40 @@ fn draw(f: &mut Frame, app: &mut App) {
         .iter()
         .map(|b| {
             let (dot, col) = status_glyph_color(t, &b.status);
-            let status = Line::from(vec![format!("{dot} ").fg(col), b.status.clone().into()]);
+            // The step is the only part of the old STEP column worth its width:
+            // "uploading 210/540 files" while provisioning, "provision failed ·
+            // see logs" after a failure. A step that merely repeats the status is
+            // dropped rather than printed twice.
+            let mut status = vec![format!("{dot} ").fg(col), b.status.clone().into()];
+            if let Some(detail) = status_detail(&b.status, &b.step) {
+                status.push(format!(" · {detail}").fg(t.dim));
+            }
+            let status = Line::from(status);
             let sid = b.sandbox_id.clone();
             let files = if b.files > 0 {
                 b.files.to_string()
             } else {
                 "—".into()
             };
+            // TEMPLATE: which image the box runs — the fact that says whether
+            // the agent you wanted is even installed in there. Amber when the
+            // requested template wasn't available and `base` booted instead.
+            let downgraded = template_downgraded(&b.template, &b.requested_template);
+            let template = Cell::from(template_cell(
+                &b.template,
+                &b.requested_template,
+                TEMPLATE_W,
+            ))
+            .fg(if downgraded { t.paused } else { t.dim });
             let mut cells = vec![Cell::from(b.label.clone())];
             if branch_w > 0 {
                 cells.push(Cell::from(branch_cell(&b.branch, branch_w)).fg(t.dim));
             }
             cells.extend([
-                Cell::from(status),
+                template,
                 Cell::from(sid),
                 Cell::from(files),
-                Cell::from(b.step.clone()),
+                Cell::from(status),
             ]);
             Row::new(cells)
         })
@@ -318,11 +358,13 @@ fn draw(f: &mut Frame, app: &mut App) {
         widths.push(Constraint::Length(branch_w));
     }
     widths.extend([
-        Constraint::Length(16),
+        Constraint::Length(TEMPLATE_W),
         // Full E2B sandbox id (~21 chars) — truncating it made rows useless for
         // `e2b sandbox connect <id>` / dashboard lookups.
         Constraint::Length(22),
         Constraint::Length(6),
+        // STATUS takes the rest: it is the one cell whose text grows (the
+        // provisioning step rides along in it).
         Constraint::Min(20),
     ]);
     let table = Table::new(rows, widths)

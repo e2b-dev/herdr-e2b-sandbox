@@ -320,6 +320,18 @@ press `prefix+shift+d` (bound in [Install](#install)).
 x kill · c copy id · r refresh · T theme · q quit
 ```
 
+The header names the **region** a new box would land on (`us` / `eu`, resolved the
+same way every other verb resolves it, re-asked while the board is open) with the
+current theme right-aligned beside it. A `⚠` after the region means the list is not
+all one cluster — those boxes can't be reached from here.
+
+Columns are `NAME · BRANCH · TEMPLATE · SANDBOX · FILES · STATUS`. `TEMPLATE` is
+the template the box actually booted; `base ⚠` in amber means the requested one was
+not built on this cluster and `base` booted instead. `BRANCH` is read live from the
+worktree's `HEAD` and is dropped on a pane too narrow for it. `STATUS` comes last
+and carries the provisioning step when there is one to carry
+(`◐ provisioning · uploading 210/540 files`).
+
 `sync`/`pull`/`kill` confirm first and name the exact worktree. `w` jumps to the
 row's local worktree, focusing that herdr workspace if it is already open. `T`
 cycles `terminal · solarized-light · tokyo-night · dracula · nord · gruvbox`;

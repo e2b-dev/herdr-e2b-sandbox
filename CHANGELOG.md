@@ -118,8 +118,34 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   It fails open. Anything short of a definite "no" falls through to the create,
   because the check is stricter than creating is and must never cost a box that
   would have booted.
+- **The dashboard names each box's template.** A `TEMPLATE` column sits beside
+  `SANDBOX`, reading the template the sandbox actually booted from its record —
+  which decides whether the agent you wanted is even installed in there.
+  A box that fell back to `base` because its template was not built on this
+  cluster is marked `base ⚠` in amber, so a silent downgrade is visible on the
+  board instead of only in the create-time log. The column is fixed-width and
+  never gives way; `BRANCH` is still the one that yields on a narrow pane.
 
 ### Changed
+
+- **The dashboard header names a region, not a host.** `region eu` instead of
+  `cluster e2b-juliett.dev` — a region is what you pick, a hostname is how it
+  happens to be served, and the header now reads the way `[sandbox] region` and
+  the error messages already do. US says `us` rather than going blank: US
+  production resolves to no domain at all, so "nothing pinned" and "US" were
+  always the same state. An unrecognised host still prints as itself.
+- **`STATUS` is the last column and `STEP` is gone.** The two said `ready`
+  beside `ready` on every settled box; the step only ever carried news while a
+  box was provisioning or after it failed, so it rides in the STATUS cell now
+  (`◐ provisioning · uploading 210/540 files`) and is dropped when it repeats the
+  status or is the step's own idle value. Column order is
+  `NAME · BRANCH · TEMPLATE · SANDBOX · FILES · STATUS`, which puts the three
+  facts about the sandbox itself together and gives the growing cell the width
+  left over.
+- **The theme moved to the right of the header**, where the cluster used to sit,
+  and the region took its place beside the title. The region is a fact about
+  where your boxes go and never gives way; the theme is a preference and is
+  dropped first on a narrow pane, after the title has shortened.
 
 - **Boxes pause at the idle timeout by default** (`auto_pause = true`) instead of
   being killed, with a full memory snapshot, so the running agent and everything
