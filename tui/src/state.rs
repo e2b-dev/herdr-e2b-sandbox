@@ -293,6 +293,24 @@ pub(crate) fn probe_domain() -> Option<String> {
     (!d.is_empty()).then_some(d)
 }
 
+/// The plugin version for the header, or None.
+///
+/// `bin/e2b-dash` resolves it from herdr-plugin.toml — the manifest herdr's own
+/// marketplace reads — and passes it in `E2B_DASH_VERSION`, so the board and herdr
+/// can never disagree about what is installed. The TUI deliberately does not use
+/// its own `CARGO_PKG_VERSION`: tui/Cargo.toml holds a separate number kept in sync
+/// only by hand, and nothing in CI compares it, so it drifts.
+///
+/// None when the TUI was launched directly, or when the manifest could not be read
+/// (the shell prints `unknown` for that, which is not something worth showing).
+/// The header then just omits it — a missing version costs nothing, a wrong one
+/// misleads.
+pub(crate) fn plugin_version() -> Option<String> {
+    let v = std::env::var("E2B_DASH_VERSION").ok()?;
+    let v = v.trim();
+    (!v.is_empty() && v != "unknown").then(|| v.to_string())
+}
+
 /// POSIX shell single-quote a value so it's a single safe token (paths with
 /// spaces, $, backticks, quotes can't expand or break out of `bash -lc`).
 pub(crate) fn sh(s: &str) -> String {

@@ -110,8 +110,9 @@ mod tests {
 
     use super::{action_command, key_only};
     use crate::state::{
-        branch_cell, branch_column_width, git_dir_link, head_branch, parse_head, region_label,
-        resolve_branch, status_detail, template_cell, template_downgraded, TEMPLATE_W,
+        branch_cell, branch_column_width, git_dir_link, head_branch, parse_head, plugin_version,
+        region_label, resolve_branch, status_detail, template_cell, template_downgraded,
+        TEMPLATE_W,
     };
 
     /// A throwaway directory under the system temp dir. `head_branch` reads real
@@ -322,6 +323,31 @@ mod tests {
         // An unknown host has no region name, so it prints as itself rather
         // than being given an invented one.
         assert_eq!(region_label("e2b-staging.internal"), "e2b-staging.internal");
+    }
+
+    // --- the header's version ----------------------------------------------
+    // Env-driven, so these run without a shell. Serialised into one test because
+    // std::env::set_var is process-global and cargo runs tests in threads.
+
+    #[test]
+    fn the_version_is_taken_from_the_shell_or_omitted() {
+        // The happy path: whatever `bin/e2b-dash` resolved from herdr-plugin.toml.
+        std::env::set_var("E2B_DASH_VERSION", "0.2.0");
+        assert_eq!(plugin_version().as_deref(), Some("0.2.0"));
+        std::env::set_var("E2B_DASH_VERSION", "  0.2.0  ");
+        assert_eq!(plugin_version().as_deref(), Some("0.2.0"));
+
+        // `unknown` is what the shell prints when the manifest could not be read.
+        // Showing it would put a word where a version belongs, so it is nothing.
+        std::env::set_var("E2B_DASH_VERSION", "unknown");
+        assert_eq!(plugin_version(), None);
+        std::env::set_var("E2B_DASH_VERSION", "");
+        assert_eq!(plugin_version(), None);
+
+        // Launched directly, with no shell to resolve it: the header omits it
+        // rather than inventing one from the crate's own drifting version.
+        std::env::remove_var("E2B_DASH_VERSION");
+        assert_eq!(plugin_version(), None);
     }
 
     #[test]
