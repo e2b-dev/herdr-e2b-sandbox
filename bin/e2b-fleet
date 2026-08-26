@@ -934,6 +934,29 @@ wt_create_try() { # $1 = branch, $2 = label, $3 = "" | "cwd"
   wt_create_err=""
 }
 
+# A fresh checkout is a fresh PATH, and mise keys config trust to the absolute path
+# — so every member worktree starts untrusted and mise refuses to parse the
+# `mise.toml` the base ref already carried:
+#
+#   mise ERROR Config files in ~/_wt/<repo>/<branch>/mise.toml are not trusted.
+#   mise ERROR Trust them with `mise trust`.
+#
+# That lands on every shell opened in the member, before anything of ours prints,
+# including the one `e2b-box open` runs in — so the first thing a fleet says is an
+# error about a file the user has been working in for months.
+#
+# Trusting it here is not a decision made on the user's behalf: the config is the one
+# already in their base ref, and the only thing that changed is a path THIS COMMAND
+# chose for them. Nothing is trusted that they were not already running.
+#
+# Advisory in every direction. No mise on PATH, no config in the checkout, or a mise
+# that refuses — the member still boots. Cosmetic noise is never a gate.
+mise_trust() { # $1 = the new checkout
+  [ -n "${1:-}" ] && [ -d "$1" ] || return 0
+  command -v mise >/dev/null 2>&1 || return 0
+  mise trust "$1" >/dev/null 2>&1 || true
+}
+
 # The member's agent, same shared-argv rule. herdr's `agent start` refuses a pane
 # that already has a foreground command and every member pane is running
 # `e2b sandbox connect`, so the agent is TYPED into the sandbox shell instead —
@@ -1377,6 +1400,10 @@ spawn_member() {
     wt_path=$("$HERDR" workspace list 2>/dev/null \
       | jq -r --arg w "$ws" '.result.workspaces[] | select(.workspace_id == $w) | .worktree.checkout_path // empty' 2>/dev/null)
   fi
+  # Before anything opens a shell in it — the box's own pane is the first one, and
+  # an untrusted mise config greets it there.
+  mise_trust "$wt_path"
+
   # The create response carries the root pane; asking the new workspace for its
   # panes is the fallback for a herdr that answers without one.
   if [ -z "$pane" ] && [ -n "$ws" ]; then
