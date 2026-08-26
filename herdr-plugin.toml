@@ -1,6 +1,6 @@
 id = "e2b-dev.herdr-e2b"
 name = "herdr-e2b-sandbox"
-version = "0.2.0"
+version = "0.3.0"
 min_herdr_version = "0.7.0"
 description = "Send a git worktree to a fresh E2B cloud sandbox on demand — a snapshot upload of the live tree, uncommitted changes and all. Press prefix+shift+e to boot a box for the current worktree and drop into a shell; the box is torn down when the worktree is removed."
 platforms = ["macos", "linux"]
