@@ -100,7 +100,8 @@ own agent reads and every box boots ready to work — keyed by template, so a
 
 ```toml
 [templates.claude.env]
-ANTHROPIC_API_KEY = "sk-ant-…"
+CLAUDE_CODE_OAUTH_TOKEN = "sk-ant-oat01-…"   # `claude setup-token`, on a subscription
+# ANTHROPIC_API_KEY = "sk-ant-…"             # …or a Console key, if that is what you have
 [templates.codex.env]
 OPENAI_API_KEY = "sk-…"
 
@@ -110,7 +111,7 @@ HTTPS_PROXY = "http://proxy.internal:3128"
 
 | Agent | Template | Key it reads | Started unattended as |
 | --- | --- | --- | --- |
-| Claude Code | `claude` | `ANTHROPIC_API_KEY` | `claude --dangerously-skip-permissions` |
+| Claude Code | `claude` | `CLAUDE_CODE_OAUTH_TOKEN` (a `claude setup-token` token, on a Pro/Max/Team subscription) or `ANTHROPIC_API_KEY` (a Console key) | `claude --dangerously-skip-permissions` |
 | Codex | `codex` | `OPENAI_API_KEY` | `codex --dangerously-bypass-approvals-and-sandbox` |
 | Grok | `grok` | `XAI_API_KEY` | `grok --always-approve` |
 | OpenCode | `opencode` | whichever provider key you point it at | `opencode --auto --prompt` |

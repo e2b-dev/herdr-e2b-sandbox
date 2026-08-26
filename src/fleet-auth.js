@@ -23,7 +23,7 @@ import { readFileSync } from "node:fs"
 import { pathToFileURL } from "node:url"
 
 import { CONFIG_PATH, loadConfig, resolveEnv } from "./config.js"
-import { harnessForTemplate } from "./harnesses.js"
+import { credentialVars, harnessForTemplate, remedyFor, remedyVarFor } from "./harnesses.js"
 
 /**
  * The members of `members` whose box will boot with no credential in it.
@@ -72,12 +72,20 @@ export function unauthenticatedMembers(members = [], cfg = {}, env = {}) {
     // false alarm that teaches people to ignore this warning. An expired session
     // never reaches here: resolveEnv drops it, so the member correctly reads as
     // unauthenticated and gets named.
-    const value = resolved?.[h.boxVar] ?? (h.sessionFile ? resolved?.[h.sessionFile.boxVar] : undefined)
+    // EVERY variable that would authenticate this member, not just the row's
+    // primary one: claude accepts a Console key or a subscription token under two
+    // different names, and a warning that only knew the first one told a properly
+    // configured member it would start on a sign-in screen.
+    //
     // Blank is missing. An empty credential is the failure that shows up furthest
     // from its cause — the agent boots, reads it and dies authenticating, which
     // reads as a broken key rather than an absent one.
-    if (typeof value === "string" && value.trim()) continue
-    gaps.push({ label: m.label, template: m.template, boxVar: h.boxVar })
+    const boxVars = credentialVars(h).map((v) => v.boxVar)
+    if (h.sessionFile) boxVars.push(h.sessionFile.boxVar)
+    if (boxVars.some((v) => typeof resolved?.[v] === "string" && resolved[v].trim())) continue
+    // The variable the remedy actually produces — the same one `e2b-box auth`'s own
+    // gap block prints, so the two places a user is told what to set agree.
+    gaps.push({ label: m.label, template: m.template, boxVar: remedyVarFor(h) })
   }
   return gaps
 }
@@ -120,6 +128,30 @@ export function formatFleetAuthWarning(gaps = [], file = CONFIG_PATH) {
   return out.join("\n")
 }
 
+/**
+ * The note `e2b-box open` prints for ONE box, or "" when it has a credential.
+ *
+ * The fleet's warning exists because nobody is in front of a member. This one exists
+ * for the opposite reason: somebody IS in front of it, and a sign-in screen in a
+ * sandbox is still a dead end — the browser flow needs a browser, and the box has
+ * none. Without this the first sign is the agent itself saying `Not logged in`,
+ * minutes later, with nothing on screen connecting that to a variable this machine
+ * never had.
+ *
+ * Same question as the fleet's, asked over one member: not "did `e2b-box auth` find
+ * something" but "was this box handed anything", which is the only version of the
+ * question whose answer is visible from outside the box.
+ */
+export function formatBoxAuthNote(template, cfg = {}, env = {}, file = CONFIG_PATH) {
+  const [gap] = unauthenticatedMembers([{ template, label: String(template ?? "") }], cfg, env)
+  if (!gap) return ""
+  const h = harnessForTemplate(template)
+  return [
+    `  ! no credential in this box — ${template} will open on a sign-in screen it cannot finish here.`,
+    `    ${remedyFor(h?.id)}, then \`e2b-box auth\`; or set ${gap.boxVar} in ${file}`,
+  ].join("\n")
+}
+
 // --- CLI ---------------------------------------------------------------------
 // bin/e2b-fleet asks for the warning rather than composing it, so the harness table
 // stays out of bash and `node --test` can execute the wording.
@@ -137,6 +169,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   } catch {
     // An unreadable config is not a warning, and least of all a refusal — the same
     // rule src/fleet-seed.js follows when it cannot read `[fleet.seed]`.
+  }
+  // `--box <template>` is the single-box note bin/e2b-box prints on attach; without
+  // it this reads a member plan off stdin, which is what bin/e2b-fleet wants.
+  const boxAt = process.argv.indexOf("--box")
+  if (boxAt !== -1) {
+    if (cfg) process.stdout.write(formatBoxAuthNote(process.argv[boxAt + 1] || "", cfg, process.env))
+    process.exit(0)
   }
   const members = readFileSync(0, "utf8")
     .split("\n")

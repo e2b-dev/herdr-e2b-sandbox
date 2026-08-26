@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { formatFleetAuthWarning, unauthenticatedMembers } from "../src/fleet-auth.js"
+import { formatBoxAuthNote, formatFleetAuthWarning, unauthenticatedMembers } from "../src/fleet-auth.js"
 
 // The question this module answers is NOT "did `e2b-box auth` find a credential"
 // but "will this member's box be handed one" — the full resolveEnv ladder, because
@@ -13,7 +13,10 @@ const member = (template, label) => ({ template, label: label || `t-1-${template
 test("a roster with no credential anywhere warns per member, naming the BOX variable", () => {
   const gaps = unauthenticatedMembers([member("claude"), member("codex")], {}, {})
   assert.deepEqual(gaps, [
-    { label: "t-1-claude", template: "claude", boxVar: "ANTHROPIC_API_KEY" },
+    // The variable the REMEDY produces, not the row's primary one: claude's advice
+    // is `claude setup-token`, and that token authenticates nothing when it is
+    // pasted into ANTHROPIC_API_KEY.
+    { label: "t-1-claude", template: "claude", boxVar: "CLAUDE_CODE_OAUTH_TOKEN" },
     // Not CODEX_API_KEY: the variable a box needs is not the one this machine is
     // searched under, and they differ for three of the seven harnesses.
     { label: "t-1-codex", template: "codex", boxVar: "OPENAI_API_KEY" },
@@ -40,8 +43,24 @@ test("a forwarded NAME authenticates the member only when this shell holds it", 
   // Recorded in auth.toml, unset here: resolveEnv injects nothing, so the box gets
   // nothing, so this is exactly the member the warning exists for.
   assert.deepEqual(unauthenticatedMembers([member("claude")], cfg, {}), [
-    { label: "t-1-claude", template: "claude", boxVar: "ANTHROPIC_API_KEY" },
+    { label: "t-1-claude", template: "claude", boxVar: "CLAUDE_CODE_OAUTH_TOKEN" },
   ])
+})
+
+test("either of claude's two credential variables authenticates the member", () => {
+  // A Console key and a subscription token are different accounts under different
+  // names, and a box needs one of them, not both. Warning about a member that holds
+  // the token is the false alarm that teaches people to ignore this warning.
+  const token = { envByTemplate: { claude: { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-x" } } }
+  assert.deepEqual(unauthenticatedMembers([member("claude")], token, {}), [])
+  const key = { envByTemplate: { claude: { ANTHROPIC_API_KEY: "sk-ant-x" } } }
+  assert.deepEqual(unauthenticatedMembers([member("claude")], key, {}), [])
+  // A forwarded token counts too — same ladder, same two names.
+  const forwarded = { envForward: { claude: { CLAUDE_CODE_OAUTH_TOKEN: "CLAUDE_CODE_OAUTH_TOKEN" } } }
+  assert.deepEqual(
+    unauthenticatedMembers([member("claude")], forwarded, { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-x" }),
+    [],
+  )
 })
 
 test("a credential the user wrote by hand authenticates the member", () => {
@@ -68,10 +87,26 @@ test("a blank credential is a missing one", () => {
   // An empty key is the failure that shows up furthest from its cause: the agent
   // boots, reads it, and dies authenticating — which reads as a broken key rather
   // than an absent one.
-  const cfg = { envByTemplate: { claude: { ANTHROPIC_API_KEY: "   " } } }
+  const cfg = { envByTemplate: { claude: { ANTHROPIC_API_KEY: "   ", CLAUDE_CODE_OAUTH_TOKEN: "" } } }
   assert.deepEqual(unauthenticatedMembers([member("claude")], cfg, {}), [
-    { label: "t-1-claude", template: "claude", boxVar: "ANTHROPIC_API_KEY" },
+    { label: "t-1-claude", template: "claude", boxVar: "CLAUDE_CODE_OAUTH_TOKEN" },
   ])
+})
+
+// --- the single-box note -----------------------------------------------------
+
+test("the box note names the remedy and the variable, and is silent when there is one", () => {
+  const note = formatBoxAuthNote("claude", {}, {}, "/tmp/config.toml")
+  assert.match(note, /sign-in screen/)
+  assert.match(note, /claude setup-token/)
+  assert.match(note, /CLAUDE_CODE_OAUTH_TOKEN/)
+  assert.match(note, /\/tmp\/config\.toml/)
+  // A box that WAS handed something says nothing — this prints on every attach, so
+  // anything it says when nothing is wrong is noise the user learns to skip past.
+  const cfg = { envByTemplate: { claude: { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-x" } } }
+  assert.equal(formatBoxAuthNote("claude", cfg, {}, "/tmp/config.toml"), "")
+  // …and so does a template with no agent in it to sign in.
+  assert.equal(formatBoxAuthNote("base", {}, {}, "/tmp/config.toml"), "")
 })
 
 // --- the warning itself ------------------------------------------------------
