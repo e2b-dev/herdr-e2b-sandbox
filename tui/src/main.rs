@@ -261,7 +261,7 @@ fn draw(f: &mut Frame, app: &mut App) {
         vec![format!("{theme_txt}  "), String::new()]
     } else {
         vec![
-            format!("{ver_txt} · {theme_txt}  "),
+            format!("{theme_txt} · {ver_txt}  "),
             format!("{ver_txt}  "),
             String::new(),
         ]
@@ -307,15 +307,17 @@ fn draw(f: &mut Frame, app: &mut App) {
     f.render_widget(Paragraph::new(Line::from(spans)), chunks[0]);
     if show_ver || show_theme {
         let mut right_spans: Vec<Span> = Vec::new();
-        if show_ver {
-            right_spans.push(ver_txt.clone().fg(t.accent).add_modifier(Modifier::BOLD));
+        if show_theme {
+            right_spans.push("theme: ".fg(t.dim));
+            right_spans.push(theme_name.fg(t.accent).add_modifier(Modifier::BOLD));
         }
         if show_ver && show_theme {
             right_spans.push(" · ".fg(t.dim));
         }
-        if show_theme {
-            right_spans.push("theme: ".fg(t.dim));
-            right_spans.push(theme_name.fg(t.accent).add_modifier(Modifier::BOLD));
+        // Outermost on purpose: it is the one thing here that answers "is this the
+        // build I just made?", so it keeps the corner and is the last to go.
+        if show_ver {
+            right_spans.push(ver_txt.clone().fg(t.accent).add_modifier(Modifier::BOLD));
         }
         right_spans.push("  ".into());
         f.render_widget(
