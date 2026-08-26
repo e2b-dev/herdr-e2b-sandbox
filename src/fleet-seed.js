@@ -42,7 +42,11 @@ import { loadConfig } from "./config.js"
 //                         where an approved entry is the LAST 20 CHARACTERS of the key
 //                         it approves — which is why the tail is computed in the box,
 //                         from the variable, and is the only part of a key that is
-//                         ever written down. `projects.<dir>.hasTrustDialogAccepted`
+//                         ever written down. Only ANTHROPIC_API_KEY has a tail to
+//                         approve: the prompt this answers is "use this API key?",
+//                         and a CLAUDE_CODE_OAUTH_TOKEN never raises it. That is also
+//                         why the box only says it is unauthenticated when BOTH are
+//                         absent — a subscription machine has no key and needs none. `projects.<dir>.hasTrustDialogAccepted`
 //                         is the per-directory trust prompt; `$PWD` is the member's
 //                         project dir, so the box fills that in for itself too.
 //                         `bypassPermissionsModeAccepted` is the Bypass Permissions
@@ -83,7 +87,7 @@ import { loadConfig } from "./config.js"
 // Written as template literals ONLY because they contain both quote kinds and no `${`
 // or backtick — check that still holds before editing one.
 export const DEFAULT_SEEDS = {
-  claude: `k=$(printf %s "$ANTHROPIC_API_KEY" | tail -c 20); [ -n "$k" ] || echo "herdr-e2b: no ANTHROPIC_API_KEY in this box - claude starts unauthenticated"; node -e 'const f=process.env.HOME+"/.claude.json",fs=require("fs");let c={};try{c=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}if(c.hasCompletedOnboarding===true&&c.bypassPermissionsModeAccepted===true){console.log("herdr-e2b: claude onboarding already done - leaving it alone");process.exit(0)}c.hasCompletedOnboarding=true;c.bypassPermissionsModeAccepted=true;if(!c.theme)c.theme="dark";if(c.autoUpdates===undefined)c.autoUpdates=false;const k=process.argv[1];if(k){c.customApiKeyResponses=c.customApiKeyResponses||{};const a=c.customApiKeyResponses.approved||[];if(!a.includes(k))a.push(k);c.customApiKeyResponses.approved=a;c.customApiKeyResponses.rejected=c.customApiKeyResponses.rejected||[]}c.projects=c.projects||{};c.projects[process.cwd()]=Object.assign({},c.projects[process.cwd()],{hasTrustDialogAccepted:true});fs.writeFileSync(f,JSON.stringify(c))' "$k"; node -e 'const fs=require("fs"),d=process.env.HOME+"/.claude",f=d+"/settings.json";let s={};try{s=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}if(s.skipDangerousModePermissionPrompt===true){console.log("herdr-e2b: claude already skips the bypass disclaimer - leaving it alone");process.exit(0)}s.skipDangerousModePermissionPrompt=true;fs.mkdirSync(d,{recursive:true});fs.writeFileSync(f,JSON.stringify(s))'`,
+  claude: `k=$(printf %s "$ANTHROPIC_API_KEY" | tail -c 20); [ -n "$k" ] || [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || echo "herdr-e2b: no ANTHROPIC_API_KEY and no CLAUDE_CODE_OAUTH_TOKEN in this box - claude starts unauthenticated"; node -e 'const f=process.env.HOME+"/.claude.json",fs=require("fs");let c={};try{c=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}if(c.hasCompletedOnboarding===true&&c.bypassPermissionsModeAccepted===true){console.log("herdr-e2b: claude onboarding already done - leaving it alone");process.exit(0)}c.hasCompletedOnboarding=true;c.bypassPermissionsModeAccepted=true;if(!c.theme)c.theme="dark";if(c.autoUpdates===undefined)c.autoUpdates=false;const k=process.argv[1];if(k){c.customApiKeyResponses=c.customApiKeyResponses||{};const a=c.customApiKeyResponses.approved||[];if(!a.includes(k))a.push(k);c.customApiKeyResponses.approved=a;c.customApiKeyResponses.rejected=c.customApiKeyResponses.rejected||[]}c.projects=c.projects||{};c.projects[process.cwd()]=Object.assign({},c.projects[process.cwd()],{hasTrustDialogAccepted:true});fs.writeFileSync(f,JSON.stringify(c))' "$k"; node -e 'const fs=require("fs"),d=process.env.HOME+"/.claude",f=d+"/settings.json";let s={};try{s=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}if(s.skipDangerousModePermissionPrompt===true){console.log("herdr-e2b: claude already skips the bypass disclaimer - leaving it alone");process.exit(0)}s.skipDangerousModePermissionPrompt=true;fs.mkdirSync(d,{recursive:true});fs.writeFileSync(f,JSON.stringify(s))'`,
   // Session FIRST, key as the fallback (ADR 0010). $CODEX_AUTH_JSON carries a whole
   // auth.json — the user's own signed-in session, with its single-use refresh token
   // already replaced by a placeholder host-side — so the box writes the file
@@ -104,6 +108,13 @@ export const DEFAULT_SEEDS = {
   // ~/.codex/config.toml (Codex config reference). Appended, never rewritten: the
   // file may already carry a model or an MCP server the image put there.
   codex: `mkdir -p "$HOME/.codex"; if [ -s "$HOME/.codex/auth.json" ]; then echo "herdr-e2b: codex is already authenticated - leaving it alone"; elif [ -n "$CODEX_AUTH_JSON" ]; then printf %s "$CODEX_AUTH_JSON" > "$HOME/.codex/auth.json" && chmod 600 "$HOME/.codex/auth.json" && echo "herdr-e2b: codex signed in with your borrowed session"; elif [ -n "$OPENAI_API_KEY" ]; then printf '{"auth_mode":"apikey","OPENAI_API_KEY":"%s"}' "$OPENAI_API_KEY" > "$HOME/.codex/auth.json" && chmod 600 "$HOME/.codex/auth.json"; else echo "herdr-e2b: no codex credential in this box - codex starts unauthenticated"; fi; mkdir -p "$HOME/.codex"; node -e 'const fs=require("fs"),p=process.cwd(),f=process.env.HOME+"/.codex/config.toml",NL=String.fromCharCode(10),h="[projects."+JSON.stringify(p)+"]";let t="";try{t=fs.readFileSync(f,"utf8")}catch{}if(t.includes(h)){console.log("herdr-e2b: codex already trusts "+p+" - leaving it alone");process.exit(0)}fs.appendFileSync(f,NL+h+NL+"trust_level = "+JSON.stringify("trusted")+NL)'`,
+  // Session FIRST, exactly codex's shape one entry up: $GROK_AUTH_JSON carries the
+  // user's whole ~/.grok/auth.json — refresh token INCLUDED, which is safe for grok
+  // alone (measured multi-use, ADR 0011) and is what lets the box re-mint its own
+  // six-hour bearers instead of dying on the first one. Schema read off a real
+  // laptop file (2026-08-26). XAI_API_KEY needs no file at all — grok reads it from
+  // the environment — so the key branch only says what the box is running on.
+  grok: `mkdir -p "$HOME/.grok"; if [ -s "$HOME/.grok/auth.json" ]; then echo "herdr-e2b: grok is already authenticated - leaving it alone"; elif [ -n "$GROK_AUTH_JSON" ]; then printf %s "$GROK_AUTH_JSON" > "$HOME/.grok/auth.json" && chmod 600 "$HOME/.grok/auth.json" && echo "herdr-e2b: grok signed in with your borrowed session"; elif [ -n "$XAI_API_KEY" ]; then echo "herdr-e2b: grok authenticates from XAI_API_KEY - no file to seed"; else echo "herdr-e2b: no grok credential in this box - grok starts unauthenticated"; fi`,
   // Not a wizard — an UPDATER. opencode updates itself in the background and then
   // puts a modal over the pane ("Successfully updated to vX. Please restart the
   // application.", observed live on test-12). That is worse than a first-run prompt,
@@ -143,7 +154,7 @@ export const DEFAULT_SEEDS = {
  *
  * Looked up by KEY PRESENCE, exactly like `[fleet.agents]`: a template mapped to the
  * empty string is a deliberate "seed nothing" and must not fall back to the default.
- * A template nobody has verified a schema for (`grok`, `amp`, `opencode`, …) has no
+ * A template nobody has verified a schema for (`amp`, `prime`, …) has no
  * default — inventing one would write junk into somebody's home directory — so it
  * seeds nothing until `[fleet.seed]` says what to run.
  */
