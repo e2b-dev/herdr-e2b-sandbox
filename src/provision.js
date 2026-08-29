@@ -4,7 +4,9 @@
 // can render a spinner.
 //
 // Usage: node provision.js '<json>'
-//   json: { key, branch, worktreePath, workspaceId, op?, template? }
+//   json: { key, branch, head?, worktreePath, workspaceId, op?, template? }
+//   head: the local HEAD sha, recorded in the box's baseline commit message so the
+//         box can say which commit it was cut from (it never receives .git).
 //   template: explicit choice for a NEW sandbox (picker / --template); overrides
 //             the per-branch rules. Ignored when reconnecting to an existing box.
 //   op:  "ensure" (default) — reconnect-or-create; upload only a FRESH sandbox, so
@@ -259,23 +261,23 @@ async function main() {
   // down first (`e2b-box pull`) if you want them locally.
   let files = prev?.files ?? 0
   if (created || op === "sync") {
-    const { count, viaGit } = await uploadSnapshot({
+    // The upload also leaves a baseline commit in the box (ADR 0012): with a local
+    // HEAD it is HEAD's tree, and the box's `git status` then reads as the laptop's
+    // does; without one it is the uploaded files. Both shapes live in upload.js.
+    const up = await uploadSnapshot({
       sandbox,
       localRoot: worktreePath,
       remoteRoot: projectPath,
       ignore: cfg.ignore,
       batchSize: cfg.batchSize,
       onProgress: (done, total) => step(`uploading ${done}/${total} files`),
+      baseline: { branch, label: displayLabel, head: input.head || "", created },
     })
-    files = count
-    await log(`uploaded ${count} files (${viaGit ? "git-tracked, .gitignore honored" : "filesystem walk"})`)
-
-    await step("initializing git")
-    const safeBranch = (branch || "main").replace(/'/g, "") // git needs a real ref
-    await sandbox.commands.run(
-      `cd '${projectPath}' && ` +
-        `(git rev-parse --git-dir >/dev/null 2>&1 || git init -b '${safeBranch}') && ` +
-        `git add -A >/dev/null 2>&1 || true`,
+    files = up.count
+    await log(
+      up.mode === "mirror"
+        ? `mirrored ${up.count} files (HEAD tree as one archive + ${up.dirty} dirty written, ${up.deleted} deleted; baseline committed)`
+        : `uploaded ${up.count} files (${up.viaGit ? "git-tracked, .gitignore honored" : "filesystem walk"}; baseline committed)`,
     )
   }
 

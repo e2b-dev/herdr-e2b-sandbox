@@ -15,7 +15,13 @@ export function isIgnored(rel, ignore) {
 // `e2b` CLI login — see resolveCredentials() in config.js for the precedence.
 // Pass the loaded config so config-dir keys work without touching the env.
 export function requireApiKey(cfg) {
-  const k = process.env.E2B_API_KEY?.trim() || cfg?.apiKey
+  // `cfg.apiKey` is the RESOLVED key (resolveCredentials, config.js): env-wins in
+  // a shell you typed in, config/CLI first under the herdr daemon, and key+domain
+  // always taken as a pair. Reading process.env here again used to undo all of
+  // that — a daemon-spawned pull with a stale or foreign E2B_API_KEY in its env
+  // sent that key to the box's cluster and got `Invalid API key … Cannot get the
+  // team`, while the resolver had already picked the right one.
+  const k = cfg?.apiKey
   if (!k) {
     throw new Error(
       "No E2B API key. Run `e2b auth login`, or set [secrets].e2b_api_key in " +
@@ -102,4 +108,33 @@ export function notify(title, body) {
   } catch {
     // herdr not on PATH — fine.
   }
+}
+
+/**
+ * `git status --porcelain=v1 -z --untracked-files=all --no-renames` → the files a
+ * pull has to look at, and the ones it can only report.
+ *
+ * With a baseline commit in the box (ADR 0012) this is the whole question: what
+ * differs from what the laptop sent. Every entry is `XY<space><path>\0`, two status
+ * letters then the path — index side then worktree side. Anything with a `D` on
+ * either side is gone from the box, and a pull that writes files in place has no
+ * business deleting a local one over that, so those are handed back separately for
+ * the caller to say out loud. `--no-renames` is what makes the format this simple:
+ * a rename would otherwise carry a second NUL-terminated path.
+ *
+ * Pure, and tested: this decides which local files a pull touches.
+ *
+ * @returns {{ changed: string[], deleted: string[] }}
+ */
+export function parseStatusZ(stdout) {
+  const changed = []
+  const deleted = []
+  for (const entry of String(stdout ?? "").split("\0")) {
+    if (entry.length < 4 || entry[2] !== " ") continue
+    const xy = entry.slice(0, 2)
+    const rel = entry.slice(3)
+    if (!rel || rel.endsWith("/")) continue
+    ;(xy.includes("D") ? deleted : changed).push(rel)
+  }
+  return { changed, deleted }
 }
