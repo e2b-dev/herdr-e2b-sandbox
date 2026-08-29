@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# e2b-box-pull — the `pull` keybinding/action: pull the box's changes into this
+# worktree and SAY what landed.
+#
+# Why not bind `e2b-box pull` directly: a herdr action has no terminal, so its
+# output goes to the plugin command log, where nobody is looking at the moment they
+# pressed the key. The pull itself is unchanged — the same clobber guard, the same
+# changed-set read — this wraps it in the two things a keypress needs:
+#
+#   1. a herdr notification, bottom-right, with the files that came down (or the
+#      files the guard refused to overwrite, or the error), and
+#   2. an `r` to a reviewr pane in THIS tab, so a diff you are looking at redraws
+#      now instead of on its next 2 s poll.
+#
+# Never prompts: with no TTY the guard aborts instead, and the abort message is
+# what the toast shows. Exit code is the pull's own.
+set -uo pipefail
+# Resolve through the ~/.local/bin symlink to the real script dir so we can find
+# lib/*.sh (BSD readlink has no -f, so walk the links manually).
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  ldir="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [ "${SOURCE#/}" = "$SOURCE" ] && SOURCE="$ldir/$SOURCE"
+done
+DIR="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+source "$DIR/lib/paths.sh"
+source "$DIR/lib/pane.sh"
+
+REVIEWR_TITLE="reviewr"   # persiyanov.reviewr's [[panes]] title; `r` is its refresh key
+
+# herdr runs a workspace action in the worktree, which is also what e2b-box keys on.
+label=$(basename "$PWD")
+HERDR=$(pane_herdr) || HERDR=""
+
+# One toast, retried until herdr takes it. herdr shows ONE notification at a
+# time and answers `busy` while it is up (measured: the slot frees after ~3 s), so
+# a result posted while the "pulling…" toast is still showing would simply be
+# dropped. Retrying for a few seconds is what turns two toasts into a sequence.
+# Prints nothing on success; says so on stdout (the plugin log) when herdr never
+# took it, so a silent keypress is diagnosable.
+toast() {  # title body sound tries
+  local title="$1" body="$2" sound="$3" tries="${4:-1}" reason=""
+  [ -n "$HERDR" ] || return 0
+  while [ "$tries" -gt 0 ]; do
+    reason=$("$HERDR" notification show "$title" --body "$body" --position bottom-right --sound "$sound" 2>/dev/null \
+      | jq -r '.result.reason // "error"' 2>/dev/null)
+    [ "$reason" = shown ] && return 0
+    [ "$reason" = busy ] || break     # disabled / rate_limited / no client: don't wait on it
+    tries=$((tries - 1)); [ "$tries" -gt 0 ] && sleep 0.5
+  done
+  echo "notification not shown (${reason:-no herdr}): $title"
+  return 1
+}
+
+# Feedback at the keypress, not at the end. herdr's notification API is show-only
+# (title, body, position, sound — no id to update or dismiss), so "progress" is two
+# toasts: this one the instant the key lands, the result one when the pull is
+# done. A pull is a few seconds of SDK reads that would otherwise look like a key
+# that did nothing. One try: if another toast is up, the result is still coming.
+toast "e2b: pulling into ${label}…" "reading what changed in the box" none 1
+
+# The pull, headless on purpose: `</dev/null` guarantees the guard cannot block on a
+# prompt that nothing would ever answer. Everything it printed still reaches the
+# plugin log through our own stdout.
+out=$("$DIR/e2b-box" pull </dev/null 2>&1); rc=$?
+printf '%s\n' "$out"
+
+# Turn the pull's report into a title, a body and a sound. The pull's own lines are
+# the source of truth here — this only re-shapes them for a small box in a corner.
+files=$(printf '%s\n' "$out" | grep -E '^  [+~!-] ' \
+  | sed -E 's/^  //; s/  \((new|overwrote local)\)$//; s/  \(deleted in sandbox — kept locally\)$/  (deleted in box, kept here)/; s/  \(skipped — unsafe path\/symlink\)$/  (skipped)/')
+summary=$(printf '%s\n' "$out" | grep -E '^(pulled |nothing to pull)' | tail -1)
+abort=$(printf '%s\n' "$out" | grep -E '^aborted' | tail -1)
+sound=none
+if [ "$rc" -eq 0 ] && [ -n "$summary" ]; then
+  case "$summary" in
+    pulled*)
+      n=$(printf '%s' "$summary" | sed -E 's/^pulled ([0-9]+) file.*/\1/')
+      title="e2b: pulled $n file$([ "$n" = 1 ] || printf s) into $label"
+      sound=done ;;
+    *)
+      title="e2b: nothing to pull — $label already matches the box" ;;
+  esac
+  # The files, capped so the toast stays a toast; the pull's summary line carries
+  # the counts (incl. deletions kept locally) when the list is longer than that.
+  body=$(printf '%s\n' "$files" | grep -c . | { read -r c; printf '%s\n' "$files" | head -8; [ "$c" -gt 8 ] && echo "… and $((c - 8)) more"; true; })
+  [ -n "$body" ] || body="$summary"
+elif [ -n "$abort" ]; then
+  title="e2b: pull refused for $label"
+  body=$(printf '%s' "$abort" | sed -E 's/^aborted \(non-interactive\) — //')
+  sound=request
+else
+  title="e2b: pull failed for $label"
+  body=$(printf '%s\n' "$out" | grep -v '^\s*$' | tail -3)
+  sound=request
+fi
+
+if [ -n "$HERDR" ]; then
+  # Up to ~6 s of retries: long enough to outlive the "pulling…" toast, short
+  # enough that a result never lands minutes after the key.
+  toast "$title" "$body" "$sound" 12
+  # A reviewr pane in the SAME tab redraws on `r`. Anywhere else is someone else's
+  # tab and not our key to press; pane_query's third field is this tab's pane ids.
+  if [ "$rc" -eq 0 ] && NODE=$(pane_node); then
+    read -r _focus rv mates <<EOF
+$(pane_query "$HERDR" "$NODE" "$REVIEWR_TITLE")
+EOF
+    case ",${mates:--}," in
+      *",$rv,"*) [ "$rv" != "-" ] && "$HERDR" pane send-keys "$rv" r >/dev/null 2>&1 ;;
+    esac
+  fi
+fi
+exit "$rc"

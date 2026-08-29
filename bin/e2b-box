@@ -50,6 +50,10 @@ git_branch() {
     || true
 }
 
+# The commit the box is cut from. Empty for a non-repo or an unborn branch; the
+# box never gets .git, so this is the only way the sha reaches it (ADR 0012).
+git_head() { git -C "$PWD" rev-parse --short=12 HEAD 2>/dev/null || true; }
+
 # The folder we mirror into the sandbox: always the dir you're in. NOT the git
 # toplevel — a loose folder inside a big mono-checkout would otherwise resolve
 # to the whole enclosing repo and upload thousands of files.
@@ -99,8 +103,8 @@ miss() {
 # Marks the record "provisioning" but PRESERVES a known sandboxId so the worker
 # can reconnect to (and resume) an existing sandbox instead of always creating fresh.
 provision_from_cwd() {
-  local k="$1" op="${2:-ensure}" want="${3:-}" b p l sid tpl tpid tcols trows payload node_bin
-  b=""; at_repo_root && b=$(git_branch); [ "$b" = "HEAD" ] && b=""
+  local k="$1" op="${2:-ensure}" want="${3:-}" b h p l sid tpl tpid tcols trows payload node_bin
+  b=""; h=""; at_repo_root && { b=$(git_branch); h=$(git_head); }; [ "$b" = "HEAD" ] && b=""
   p=$(box_root)
   l=$(label_from_cwd)
   # This fn REPLACES the record wholesale (not a merge), so carry the identity
@@ -142,8 +146,8 @@ provision_from_cwd() {
        + (if ($tcols | test("^[0-9]+$")) then {terminalCols: ($tcols | tonumber)} else {} end)
        + (if ($trows | test("^[0-9]+$")) then {terminalRows: ($trows | tonumber)} else {} end)' \
     > "$BOXES_DIR/$k.json"
-  payload=$(jq -cn --arg k "$k" --arg b "$b" --arg p "$p" --arg l "$l" --arg op "$op" --arg t "$want" \
-    '{key:$k, label:$l, branch:$b, worktreePath:$p, workspaceId:"", op:$op}
+  payload=$(jq -cn --arg k "$k" --arg b "$b" --arg h "$h" --arg p "$p" --arg l "$l" --arg op "$op" --arg t "$want" \
+    '{key:$k, label:$l, branch:$b, head:$h, worktreePath:$p, workspaceId:"", op:$op}
        + (if $t != "" then {template:$t} else {} end)')
   nohup "$node_bin" "$PLUGIN_DIR/src/provision.js" "$payload" >>"$BOXES_DIR/$k.log" 2>&1 &
   # Remembered so an interrupt can stop the worker, not just the spinner in front
@@ -266,6 +270,39 @@ pull_risk() {
   fi
 }
 
+# The precise form of pull_risk. "The tree is dirty" is true of every tree with work
+# in flight, and it stopped pulls that would not have touched a single dirty file —
+# which is the everyday case: the agent edited its files, you edited yours. The one
+# way a pull loses work is a file that BOTH differs in the box AND carries
+# uncommitted local edits, and download.js --check names exactly those.
+#
+# Sets RISK and returns 0 when the pull may proceed without asking:
+#   clean tree                          → RISK empty, 0
+#   dirty, but no dirty file is touched → RISK empty, 0 (says so)
+#   dirty, N files at stake             → RISK names them, 1
+#   non-git folder, or the box could not be asked (unreachable, a stale record)
+#                                       → the coarse answer from pull_risk, 1
+pull_guard() {  # key dest node_bin
+  local k="$1" d="$2" nb="$3" overlap n
+  RISK=$(pull_risk "$d"); PULL_OVERLAP=""
+  [ -n "$RISK" ] || return 0
+  RISK="$RISK — pull overwrites files from the sandbox."
+  git -C "$d" rev-parse --git-dir >/dev/null 2>&1 || return 1
+  # A failed check falls back to the coarse answer, so its reason must land
+  # somewhere readable: the box's own log, beside the pull it was guarding.
+  overlap=$("$nb" "$PLUGIN_DIR/src/download.js" \
+    "$(jq -cn --arg k "$k" --arg d "$d" '{key:$k, destRoot:$d, check:true}')" 2>>"$BOXES_DIR/$k.log") || return 1
+  if [ -z "$overlap" ]; then
+    echo "  local tree has uncommitted changes, but this pull touches none of them"
+    RISK=""; return 0
+  fi
+  n=$(printf '%s\n' "$overlap" | grep -c .)
+  PULL_OVERLAP=$(printf '%s\n' "$overlap" | paste -sd, - | sed 's/,/, /g')
+  RISK="$n uncommitted local file(s) would be overwritten by the sandbox's version: $PULL_OVERLAP
+   commit or stash them first, or re-run with --force"
+  return 1
+}
+
 # After you exit the sandbox shell, decide what to do with the sandbox: pull your work
 # back down, kill it, or leave it. What "leave it" means depends on the box's own
 # lifecycle, fixed at create time and recorded as `onTimeout`: by default it pauses
@@ -290,13 +327,41 @@ on_close_prompt() {
     *)    idle="paused or killed at its idle timeout, per its auto_pause setting; 'e2b-box open' reconciles" ;;
   esac
   echo
-  # A paused box needs a way back IN, and "leave running" would be a lie for it.
+  # The same arrow chooser the template picker uses (lib/chooser.sh), so leaving
+  # a box feels like booting one: ↑/↓ or a number to move, Enter to take the
+  # selected row, or the row's letter outright. A paused box needs a way back IN,
+  # and "leave running" would be a lie for it, so its list differs. q/Esc mean
+  # "leave it", the default — the one choice that changes nothing.
+  local rows chosen
   if [ "$st" = paused ]; then
-    printf "'%s' is paused — [r]esume & reattach · [p]ull changes down · [k]ill it · [L]eave paused: " "$lbl"
+    rows=$'resume|r|resume & reattach|back where you left off\npull|p|pull changes down|box → this worktree\nkill|k|kill sandbox|destroys it\nleave|L|leave it paused|nothing is billing'
   else
-    printf "left sandbox '%s' — [p]ull changes down · [k]ill it · [L]eave running: " "$lbl"
+    rows=$'pull|p|pull changes down|box → this worktree\nkill|k|kill sandbox|destroys it\nleave|L|leave it running|'
   fi
-  read -r ans
+  if chosen=$(ask_action_tty "left sandbox '$lbl' · $([ "$st" = paused ] && echo paused || echo "still running")" leave "$rows"); then
+    ans="$chosen"
+  else
+    case "$?" in
+      2) ans=leave ;;
+      *)
+        # No terminal the chooser can draw on — the plain stacked prompt instead.
+        local B=$'\033[1m' N=$'\033[0m'
+        echo "● left sandbox '$lbl' · $([ "$st" = paused ] && echo paused || echo "still running")"
+        [ "$st" = paused ] && echo "  ${B}[r]${N} resume & reattach"
+        echo "  ${B}[p]${N} pull changes down"
+        echo "  ${B}[k]${N} kill sandbox"
+        echo "  ${B}[L]${N} leave it $([ "$st" = paused ] && echo paused || echo running)"
+        printf '› '
+        read -r ans ;;
+    esac
+  fi
+  # Echo the choice where the menu was: the alternate screen took it with it.
+  case "$ans" in
+    resume|r|R) echo "● left sandbox '$lbl' · resume & reattach" ;;
+    pull|p|P)   echo "● left sandbox '$lbl' · pull changes down" ;;
+    kill|k|K)   echo "● left sandbox '$lbl' · kill sandbox" ;;
+    *)          echo "● left sandbox '$lbl' · leave it $([ "$st" = paused ] && echo paused || echo running)" ;;
+  esac
   case "${ans:-L}" in
     r|R|resume)
       # Re-exec rather than recurse: `open` resumes the box on the way in and
@@ -309,9 +374,8 @@ on_close_prompt() {
       dest=$(box_root)
       # Same clobber guard as `e2b-box pull`: confirm before overwriting a dirty or
       # non-git tree. (This prompt is interactive — on_close only runs with a TTY.)
-      risk=$(pull_risk "$dest")
-      if [ -n "$risk" ]; then
-        echo "  ⚠️  $risk — pull overwrites files from the sandbox."
+      if ! pull_guard "$k" "$dest" "$node_bin"; then
+        echo "  ⚠️  $RISK"
         printf "  continue? [y/N] "; read -r a2
         case "$a2" in [Yy]*) ;; *) echo "  skipped pull — sandbox left running."; return 0 ;; esac
       fi
@@ -321,6 +385,10 @@ on_close_prompt() {
       echo "  sandbox left running — $idle. 'e2b-box kill' to stop it now."
       ;;
     k|K|kill)
+      # One keypress chose this, and `k` is a finger away from the j/k the other
+      # picker navigates with, so the irreversible step still asks once.
+      printf "  kill '%s'? [y/N] " "$lbl"; read -r a2
+      case "$a2" in [Yy]*) ;; *) echo "  kept — $idle."; return 0 ;; esac
       if sdk_kill "$sid" "$(field "$k" domain)" >/dev/null 2>&1; then
         echo "  killed sandbox '$lbl'."; rm -f "$BOXES_DIR/$k.json" "$BOXES_DIR/$k.log"
       else
@@ -367,10 +435,21 @@ connect_shell() {
   dom=$(field "$k" domain)
   [ -n "$sid" ] || return 1
   if [ "${E2B_DASH:-}" != 1 ]; then
-    echo "● E2B sandbox ready for '$lbl'"
-    [ -n "$url" ]   && echo "  preview : $url"
-    [ -n "$ppath" ] && echo "  project : $ppath  (run: cd $ppath)"
-    echo "  sandbox : $sid"
+    # One header line names the box the way the dashboard row does — label,
+    # template, region — then an aligned block of the three things you copy.
+    # The region comes from the same table the config resolves it from
+    # (src/config.js, ADR 0006), not a second copy of it here; no Node → domain.
+    local tpl reg nb0
+    tpl=$(field "$k" template)
+    if [ -z "$dom" ]; then reg=us
+    elif nb0=$(e2b_node 2>/dev/null); then
+      reg=$("$nb0" -e 'import(process.argv[1]).then(m=>console.log(m.regionForDomain(process.argv[2])||process.argv[2]))' \
+        "$PLUGIN_DIR/src/config.js" "$dom" 2>/dev/null) || reg="$dom"
+    else reg="$dom"; fi
+    echo "● $lbl${tpl:+ · $tpl}${reg:+ · $reg}"
+    echo "  sandbox   $sid"
+    [ -n "$url" ]   && echo "  preview   $url"
+    [ -n "$ppath" ] && echo "  project   $ppath"
     # A template that isn't on this box's cluster gets silently downgraded to
     # `base` at creation. Say it here — otherwise the first sign is the agent you
     # asked for not being installed. Templates are per-cluster: build it there
@@ -408,8 +487,32 @@ connect_shell() {
   # what happened through its exit code instead of leaving us to guess.
   # It needs a raw TTY; without one, show instructions instead of dying silently.
   if [ -t 0 ] && [ -t 1 ]; then
-    [ "${E2B_DASH:-}" != 1 ] && { echo "  attaching a shell in the sandbox — type 'exit' when done, then you'll pick: [p]ull changes · [k]ill · [L]eave running"; echo; }
+    # The first line is a MARKER: bin/e2b-fleet waits for exactly this text in
+    # the pane before it types the agent command (BOX_SHELL_MARKER), and
+    # test/cli.test.sh pins the two together. Reword the second line freely.
+    [ "${E2B_DASH:-}" != 1 ] && {
+      echo
+      echo "  ▸ attaching a shell in the sandbox"
+      echo "    exit it to choose   [p]ull · [k]ill · [L]eave running"
+      echo
+    }
+    # Name the pane after what is in it. Inside herdr the pane's id is in the
+    # env; its label becomes the template (`drew-claude`) for as long as the box
+    # shell is attached, and goes back to what it was — or to none — on exit, so
+    # a sidebar full of panes says which are boxes and which box each is.
+    local hb pane_prev="" pane_renamed=""
+    if [ -n "${HERDR_PANE_ID:-}" ]; then
+      hb="${HERDR_BIN_PATH:-}"; [ -x "$hb" ] || hb=$(command -v herdr 2>/dev/null || true)
+      if [ -n "$hb" ]; then
+        pane_prev=$("$hb" pane list 2>/dev/null | jq -r --arg p "$HERDR_PANE_ID" '.result.panes[]? | select(.pane_id == $p) | .label // empty' 2>/dev/null)
+        "$hb" pane rename "$HERDR_PANE_ID" "$(field "$k" template)" >/dev/null 2>&1 && pane_renamed=1
+      fi
+    fi
     "$node_bin" "$PLUGIN_DIR/src/attach.js" "$k"; local rc=$?   # blocks until you exit the shell
+    if [ -n "$pane_renamed" ]; then
+      if [ -n "$pane_prev" ]; then "$hb" pane rename "$HERDR_PANE_ID" "$pane_prev" >/dev/null 2>&1
+      else "$hb" pane rename "$HERDR_PANE_ID" --clear >/dev/null 2>&1; fi
+    fi
     # The client's exit code says what actually happened — no more inferring
     # "never attached" from a stopwatch:
     #   0  clean exit            → the close prompt below
@@ -932,11 +1035,11 @@ case "$cmd" in
     # worker + record-poll can't tell this sync's result from a concurrent one).
     # provision.js streams its steps to stderr on a TTY, so this isn't silent.
     node_bin=$(e2b_node) || { echo "needs Node >= 22 (set HERDR_E2B_NODE=/path/to/node)"; exit 1; }
-    b=""; at_repo_root && b=$(git_branch); [ "$b" = "HEAD" ] && b=""
+    b=""; h=""; at_repo_root && { b=$(git_branch); h=$(git_head); }; [ "$b" = "HEAD" ] && b=""
     p=$(box_root)
     l=$(label_from_cwd)
-    payload=$(jq -cn --arg k "$key" --arg b "$b" --arg p "$p" --arg l "$l" \
-      '{key:$k, label:$l, branch:$b, worktreePath:$p, workspaceId:"", op:"sync"}')
+    payload=$(jq -cn --arg k "$key" --arg b "$b" --arg h "$h" --arg p "$p" --arg l "$l" \
+      '{key:$k, label:$l, branch:$b, head:$h, worktreePath:$p, workspaceId:"", op:"sync"}')
     # sync provisions a fresh box when none is tracked yet — say so, so it isn't a
     # silent (billable) surprise for someone who expected an existing box to update.
     if [ -z "$(field "$key" sandboxId)" ]; then
@@ -952,15 +1055,18 @@ case "$cmd" in
     st=$(field "$key" status)
     [ "$st" = "ready" ] || { echo "no ready sandbox for '$key' — nothing to pull"; exit 1; }
     dest=$(box_root)
-    # Safety: pull overwrites local files with the sandbox's versions. On a dirty git
-    # tree (uncommitted work at risk) or a non-git folder (no `git diff`/undo), require
-    # explicit consent — prompt when interactive, else ABORT unless --force is given.
-    # Never silently clobber a non-interactive caller (e.g. a herdr action, a script).
-    risk=$(pull_risk "$dest")
-    if [ -n "$risk" ] && [ "$force" -ne 1 ]; then
-      echo "⚠️  $risk — pull overwrites files from the sandbox."
+    # Safety: pull overwrites local files with the sandbox's versions. When a file
+    # with uncommitted local edits would be overwritten (pull_guard names them), or
+    # the folder is not a git repo (no `git diff`/undo), require explicit consent —
+    # prompt when interactive, else ABORT unless --force is given. Never silently
+    # clobber a non-interactive caller (the dashboard's `p`, a herdr action, a script).
+    # --force skips the check entirely: consent was given up front.
+    if [ "$force" -ne 1 ] && ! pull_guard "$key" "$dest" "$node_bin"; then
+      echo "⚠️  $RISK"
       if [ -t 0 ]; then
         printf "continue? [y/N] "; read -r ans; case "$ans" in [Yy]*) ;; *) echo "aborted"; exit 0 ;; esac
+      elif [ -n "$PULL_OVERLAP" ]; then
+        echo "aborted (non-interactive) — would overwrite uncommitted local edits in: $PULL_OVERLAP · commit/stash them, or re-run with --force." >&2; exit 1
       else
         echo "aborted (non-interactive) — re-run with --force to overwrite." >&2; exit 1
       fi

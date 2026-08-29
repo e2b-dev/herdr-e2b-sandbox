@@ -50,7 +50,8 @@ reads the same state and delegates actions back to `e2b-box`.
    - reconnect to the tracked sandbox (auto-resumes a paused one), **or** create a
      fresh one on `NotFoundError` (a transient error rethrows — never a second box);
    - upload the worktree **only for a fresh box** (`uploadSnapshot`, git-aware);
-   - `git init` + shell personalization; write `status: ready` + preview URL.
+   - commit the upload as the box's **baseline** (`baselineCommand`, ADR 0012) +
+     shell personalization; write `status: ready` + preview URL.
 5. `spin_until_ready` polls the record (spinner on a TTY; quiet when headless) until
    `ready` / `failed` / timeout.
 6. `connect_shell` prints the box details and attaches through `src/attach.js` —
@@ -166,8 +167,8 @@ when the other two never ran. Rubrics, LLM judging and ranking stay out
 | File | Responsibility |
 | --- | --- |
 | `provision.js` | The worker. `ensure` (reconnect-or-create) / `sync` (ensure + always upload). Single source of truth for sandbox liveness. Persists the resolved template. |
-| `upload.js` | `uploadSnapshot` — git-aware file selection (`git ls-files --cached --others --exclude-standard`, honoring `.gitignore`), additive, symlinks skipped, batched `sandbox.files.write`. |
-| `download.js` | `pull` — reverse of upload. **Path-safety guards** (`relIsUnsafe`, `safeDest`) so a write can never escape the worktree. Only writes files that differ; reports each. |
+| `upload.js` | `uploadSnapshot` — two modes (ADR 0012). **mirror** (worktree has a HEAD): `git archive HEAD` as one tarball, extracted and committed as the baseline, then only the locally dirty files written on top and locally deleted files removed, so the box's `git status` matches the laptop's. **snapshot** (no HEAD): git-aware file selection (`ls-files --cached --others --exclude-standard`) or a filesystem walk, written then committed. `planMirror` (pure) decides keep/drop/changed/deleted; `baselineCommand` (pure) builds the commit (fresh: `add -A`; sync: `--pathspec-from-file`). Symlinks skipped, exec bits restored on overlaid files. |
+| `download.js` | `pull` — reverse of upload. `check: true` writes nothing and names the files that would be overwritten AND carry local uncommitted edits (the input to `pull_guard`). Asks the box's git for the **changed set** against the baseline (`parseStatusZ`, pure) and reads only that; a box with no `HEAD` falls back to listing everything. Deletions in the box are reported, never applied. **Path-safety guards** (`relIsUnsafe`, `safeDest`) so a write can never escape the worktree. Only writes files that differ; reports each. |
 | `kill.js` | `Sandbox.kill` (bounded), idempotent — "already gone" vs "killed". |
 | `exec.js` | One command inside a tracked box → one JSON object on stdout (`{ok, exitCode, stdout, stderr, error}`). Started in the background and awaited by hand, because the SDK's `requestTimeoutMs` bounds the handshake, not the run; on the bound the process is **killed**. Draws the line the grader depends on: `ok:false` = never measured, `ok:true` = the command's own exit code. |
 | `lifecycle.js` | `pause` / `resume` for a tracked box — `Sandbox.pause` (files + memory snapshot) and `Sandbox.connect` (the resume path; there is no separate resume call). Writes the record's `paused` / `ready` status for both (a box that pauses underneath an attached session gets its `paused` written by `attach.js` on the way out — the client is the only thing present at that moment). |
@@ -246,8 +247,21 @@ fleet still isn't (`docs/adr/0005`). The member list is never stored.
 - **`pull` never escapes the worktree.** `relIsUnsafe` (traversal/absolute) +
   `safeDest` (won't follow a dest symlink; realpath-parent must stay within the
   root). Covered by `test/download.test.js`.
-- **`pull` never silently clobbers.** Dirty/non-git tree → prompt (interactive) or
-  abort (headless) unless `--force`. Covered by `test/cli.test.sh`.
+- **`pull` never silently clobbers.** A file the pull would overwrite that also has
+  uncommitted local edits (`download.js --check`, via `pull_guard`) → prompt
+  (interactive) or abort naming the files (headless) unless `--force`; a dirty tree
+  with no such file proceeds. Non-git folder, or a box that cannot be asked → the
+  coarse dirty-tree answer, same prompt/abort. Covered by `test/cli.test.sh`.
+- **`pull` never deletes.** A file the agent removed in the box is named in the
+  output and left on disk; deleting it is the user's `git rm`. Covered by
+  `test/download.test.js` (`parseStatusZ` routes every `D` to the report list).
+- **A sync never hides agent work.** The sync baseline stages only the paths the
+  sync uploaded (`--pathspec-from-file`), never `git add -A`, so an agent edit to an
+  untouched file stays uncommitted and a changed-set pull still sees it. Covered by
+  `test/upload.test.js`.
+- **The baseline is HEAD, not the worktree.** A locally dirty file is written on top
+  of the committed tree and stays uncommitted in the box; a locally deleted file is
+  removed after the commit so it reads `D`. `planMirror` in `test/upload.test.js`.
 - **Upload honors git/.gitignore.** Inside a repo it always trusts git (even an empty
   selection) — never FS-walks and leaks ignored files; the `ignore` list is an extra
   filter (keeps `.env` out even if tracked).

@@ -6,6 +6,68 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A daemon-spawned command no longer sends the shell's stale key.** `requireApiKey`
+  read `process.env.E2B_API_KEY` before the resolved key, undoing the resolver's
+  daemon rule (config and CLI login first, env last, key and domain as a pair): a
+  keybinding or action running with a US key frozen in herdr's env, against a box
+  in the EU, got `Invalid API key … Cannot get the team` while `resolveCredentials`
+  had already chosen the right key. It now trusts the resolved key alone.
+
+### Changed
+
+- **The box's git reads like the laptop's** (ADR 0012). A fresh box used to get `git
+  init` and `git add -A` and stop there: a repo with a staged index and no commit, so
+  `git status` in the box read as every file being new (`main +197`), and `git diff
+  HEAD`, `git log` and `git blame` had nothing to work with. Now the laptop's `HEAD`
+  tree arrives as one `git archive` tarball and is committed as the baseline,
+  `herdr-e2b: snapshot of <label> @ <branch> <sha>`, and only the files that differ
+  from HEAD locally are written on top, uncommitted; files deleted locally are removed.
+  A clean local `main` opens as a clean `main`; a dirty one opens with the same
+  modified and untracked files. Staging is not carried over. A folder with no commits
+  gets the old full upload, committed. A sync commits only the tracked paths, never the
+  agent's own work. Side effect: upload is one tarball plus the dirty set instead of one
+  write per file.
+- **The pull clobber guard names the files at stake, and only fires when there are
+  some.** "The tree is dirty" stopped every pull from the dashboard's `p` (no TTY, so
+  no prompt), even when the agent's files and your uncommitted files did not overlap.
+  The guard now asks the box which files the pull would actually overwrite and
+  intersects that with your local uncommitted changes: none in common → the pull runs
+  and says so; some → the prompt (or the non-interactive abort) lists them, with
+  "commit/stash them, or re-run with --force". A non-git folder, or a box that cannot be
+  reached, still gets the old coarse answer.
+- **The ready banner reads like the dashboard row.** `e2b-box open` used to print a
+  sentence per fact and a long one about what to type when. It now prints one header
+  (`● <label> · <template> · <region>`), an aligned block of the three things you copy
+  (sandbox, preview, project), and a two-line attach note. The `attaching a shell in the
+  sandbox` marker `e2b-fleet` waits on is unchanged. The `(run: cd …)` hint is gone; the
+  shell lands in the project already. The on-close prompt (`left sandbox '…'`) takes
+  the same shape: a header line, one choice per line with its key in bold brackets, a
+  bare `›` prompt.
+- **`prefix+shift+p` pulls, and tells you what landed.** The `pull` action now runs
+  `bin/e2b-box-pull`: the same guarded `e2b-box pull`, then a herdr notification in
+  the bottom-right with the files that came down (or the files it refused to overwrite,
+  or the error), and an `r` sent to a reviewr pane in the current tab so the diff
+  redraws now rather than on its next poll. An action's own output goes to the plugin
+  log, which is why a toast was needed. A `pulling…` toast lands the instant the key
+  does; herdr shows one notification at a time, so the result toast waits for the slot. The suggested binding is `prefix+shift+p`,
+  herdr's `rename_pane` by default; move that first.
+- **Leaving a box uses the same arrow chooser as booting one.** The on-close
+  question (pull / kill / leave, plus resume for a paused box) is drawn by
+  `lib/chooser.sh` like the template picker: ↑/↓ or a number to move, Enter to take
+  the row, or its letter outright. q/Esc leave the box alone. Kill asks once more,
+  since one keypress is enough to choose but not to lose a box.
+- **The pane is named after the template while a box shell is attached.** Inside
+  herdr, `e2b-box open` renames its pane to the box's template (`drew-claude`) and
+  puts the old label back, or clears it, when the shell exits.
+- **`pull` reads only what changed.** With a baseline to ask about, pull takes the
+  box's `git status` as its file list instead of reading every file over the SDK and
+  byte-comparing each one locally; four files touched is four reads. Files the agent
+  deleted in the box are now named in the output (`- path  (deleted in sandbox — kept
+  locally)`) and left alone. A box provisioned before this release has no baseline and
+  gets the old full pull, unchanged.
+
 ## [0.3.0] - 2026-08-26
 
 ### Added

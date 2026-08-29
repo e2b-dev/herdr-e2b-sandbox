@@ -63,10 +63,18 @@ key = "prefix+shift+f"                                          # a fleet, off t
 command = "herdr plugin action invoke fleet --plugin e2b-dev.herdr-e2b"
 
 [[keys.command]]
+key = "prefix+shift+p"                                          # pull the box's changes down
+command = "herdr plugin action invoke pull --plugin e2b-dev.herdr-e2b"
+
+[[keys.command]]
 key = "prefix+shift+d"                                          # the board, every box
 command = "herdr plugin action invoke dashboard-toggle --plugin e2b-dev.herdr-e2b"
 ```
 
+`prefix+shift+p` is herdr's own `rename_pane` out of the box; move it first
+(`rename_pane = "alt+r"` in the `[keys]` table) or the pull never fires. The pull
+reports as a herdr notification and refuses to overwrite uncommitted local edits,
+naming the files when it does.
 `prefix+shift+d` is herdr's own `close_workspace` out of the box — this takes it
 over. Keep that verb by moving it first (`close_workspace = "prefix+shift+x"` in
 the `[keys]` table), or give the board a different key.
