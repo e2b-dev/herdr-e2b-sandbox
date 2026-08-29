@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-29
+
 ### Fixed
 
 - **A daemon-spawned command no longer sends the shell's stale key.** `requireApiKey`
@@ -365,7 +367,8 @@ Initial public release. A herdr plugin that mirrors a git worktree into an E2B
 sandbox: `e2b-box` for a single box, `e2b-box fleet` for a branch-per-agent
 fleet, and the `e2b-dash` TUI for watching them.
 
-[Unreleased]: https://github.com/e2b-dev/herdr-e2b-sandbox/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/e2b-dev/herdr-e2b-sandbox/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/e2b-dev/herdr-e2b-sandbox/releases/tag/v0.4.0
 [0.3.0]: https://github.com/e2b-dev/herdr-e2b-sandbox/releases/tag/v0.3.0
 [0.2.0]: https://github.com/e2b-dev/herdr-e2b-sandbox/releases/tag/v0.2.0
 [0.1.0]: https://github.com/e2b-dev/herdr-e2b-sandbox/releases/tag/v0.1.0
