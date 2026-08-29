@@ -4,11 +4,12 @@
 # so a second script can source them without also sourcing a 600-line CLI (and
 # its side effects: the `jq` check, the context-json cd, the argument grammar).
 #
-# Three entry points, one look and one feel:
+# Four entry points, one look and one feel:
 #   ask_template_tty  one template for one box       (`e2b-box open`)
 #   ask_slug_tty      a line of text, plus an
 #                     optional second one            (`e2b-fleet`, screen one)
 #   ask_roster_tty    several templates at once      (`e2b-fleet`, screen two)
+#   ask_action_tty    one verb from a short list     (the on-close prompt)
 #
 # Self-contained on purpose: bash builtins only, no lib/paths.sh, no node, no
 # state dir. Source it from anywhere, in any order. That is also why neither
@@ -318,4 +319,78 @@ EOF
     [ "${on[$i]}" -eq 1 ] && printf '%s\n' "${items[$i]}"
     i=$((i + 1))
   done
+}
+
+# One verb from a short list, drawn like the template chooser so leaving a box
+# feels like booting one. Rows are `id|hotkey|label|note`, one per line:
+#
+#   ask_action_tty <title> <default-id> <rows>
+#
+# Prints the chosen id on stdout. Returns 1 with no terminal, 2 on q/Esc/timeout —
+# and the CALLER decides what an abort means (for the close prompt it is the
+# default, since "get me out of here" and "leave it" are the same wish there).
+#
+# Two deliberate differences from the template chooser. A row's hotkey takes it
+# outright, so `p` pulls and `L` leaves with one press, as the old line prompt
+# did; and because `k` is a hotkey here, j/k do NOT navigate — arrows and numbers
+# do. Anything destructive is the caller's to confirm: one keypress is enough to
+# choose, not enough to lose a box.
+ask_action_tty() {
+  local title="$1" resolved="$2" rows="$3" sel=0 i n=0 key rest hit=""
+  local ids=() keys=() labels=() notes=() wide=0 t
+  while IFS='|' read -r id hk lb nt; do
+    [ -n "$id" ] || continue
+    ids+=("$id"); keys+=("$hk"); labels+=("$lb"); notes+=("${nt:-}")
+    [ "${#nt}" -gt "$wide" ] && wide=${#nt}
+    [ "$id" = "$resolved" ] && sel=$n
+    n=$((n + 1))
+  done <<EOF
+$rows
+EOF
+  [ "$n" -gt 0 ] || return 1
+  chooser_open_tty || return 1
+  printf '\033[?1049h\033[?25l' >&3
+  while :; do
+    printf '\033[2J\033[H' >&3
+    printf '\n  \033[1m%s\033[0m\n\n' "$title" >&3
+    i=0
+    while [ "$i" -lt "$n" ]; do
+      if [ "$i" -eq "$sel" ]; then
+        printf '  \033[7m ▸ [%s] %-24s \033[0m' "${keys[$i]}" "${labels[$i]}" >&3
+      else
+        printf '     [%s] %-24s ' "${keys[$i]}" "${labels[$i]}" >&3
+      fi
+      [ "$wide" -gt 0 ] && printf ' \033[2m%-*s\033[0m' "$wide" "${notes[$i]}" >&3
+      [ "${ids[$i]}" = "$resolved" ] && printf ' \033[2mdefault\033[0m' >&3
+      printf '\n' >&3
+      i=$((i + 1))
+    done
+    printf '\n  \033[2m↑/↓ move   enter confirm   letter picks   number jumps   q/esc %s\033[0m\n' "$resolved" >&3
+    IFS= read -rsn1 -t 120 key <&4 || { chooser_close_tty; return 2; }
+    case "$key" in
+      ''|$'\n'|$'\r') hit="${ids[$sel]}" ;;
+      [1-9]) [ "$key" -le "$n" ] && hit="${ids[$((key - 1))]}" ;;
+      q|Q)   chooser_close_tty; return 2 ;;
+      $'\e')
+        IFS= read -rsn2 -t 1 rest <&4
+        case "$rest" in
+          '[A'|'OA') sel=$(((sel - 1 + n) % n)) ;;
+          '[B'|'OB') sel=$(((sel + 1) % n)) ;;
+          '')        chooser_close_tty; return 2 ;;
+        esac ;;
+      *)
+        # A hotkey, either case: the menu shows one case, the finger may use the other.
+        i=0
+        while [ "$i" -lt "$n" ]; do
+          t="${keys[$i]}"
+          if [ "$key" = "$t" ] || [ "$key" = "$(printf '%s' "$t" | tr '[:upper:]' '[:lower:]')" ] || [ "$key" = "$(printf '%s' "$t" | tr '[:lower:]' '[:upper:]')" ]; then
+            hit="${ids[$i]}"; break
+          fi
+          i=$((i + 1))
+        done ;;
+    esac
+    [ -n "$hit" ] && break
+  done
+  chooser_close_tty
+  printf '%s' "$hit"
 }

@@ -16,7 +16,7 @@ skip() { SKIP=$((SKIP+1)); printf '  skip %s\n' "$1"; }
 for t in jq git node; do command -v "$t" >/dev/null || { echo "cli.test: '$t' not on PATH"; exit 1; }; done
 
 echo "── lint: bash -n ──"
-for f in "$ROOT"/bin/e2b-box "$ROOT"/bin/e2b-box-open "$ROOT"/bin/e2b-fleet "$ROOT"/bin/e2b-fleet-open \
+for f in "$ROOT"/bin/e2b-box "$ROOT"/bin/e2b-box-open "$ROOT"/bin/e2b-box-pull "$ROOT"/bin/e2b-fleet "$ROOT"/bin/e2b-fleet-open \
          "$ROOT"/bin/e2b-dash "$ROOT"/bin/e2b-dash-toggle "$ROOT"/bin/e2b-bench \
          "$ROOT"/bin/e2b-domain "$ROOT"/bin/teardown-worktree "$ROOT"/bin/lib/*.sh "$ROOT"/install.sh; do
   if bash -n "$f" 2>/dev/null; then ok "bash -n $(basename "$f")"; else bad "bash -n $(basename "$f")"; fi
@@ -915,10 +915,13 @@ out=$(fleet create mixed -t claude --agents claude,codex -n)
 echo "── fleet: a roster name nobody configured is refused ──"
 # An unknown name used to plan fine and only fail minutes later, when its box tried
 # to boot. It is caught before anything exists, and the refusal names the list.
+# The list is the OPERATOR's roster (this test reads the real plugin config), so
+# only membership is asserted, not position: a custom template listed first is a
+# configuration, not a regression.
 out=$(fleet create typo --agents clade,codex -n); rc=$?
 { [ "$rc" -eq 2 ] \
   && printf '%s' "$out" | grep -q "no template named 'clade'" \
-  && printf '%s' "$out" | grep -q "configured: claude" \
+  && printf '%s' "$out" | grep -Eq "configured: .*\bclaude\b" \
   && ! printf '%s' "$out" | grep -q "herdr worktree create"; } \
   && ok "an unknown agent is refused, with the configured list" \
   || bad "unknown agent refusal (rc=$rc, out=$out)"
@@ -2369,7 +2372,7 @@ PYATTACH
     *) bad "attach.js never ran (got: $(printf '%s' "$out" | tail -3))" ;;
   esac
   case "$out" in
-    *"left sandbox 'attachbox'"*"left running"*) ok "clean exit → the unchanged pull/kill/leave prompt" ;;
+    *"left sandbox 'attachbox'"*"leave it running"*) ok "clean exit → the unchanged pull/kill/leave prompt" ;;
     *) bad "clean exit didn't reach the close prompt (got: $(printf '%s' "$out" | tail -3))" ;;
   esac
 

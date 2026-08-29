@@ -60,12 +60,22 @@ title = "Sync worktree → sandbox"
 contexts = ["workspace"]
 command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box\" sync"]
 
-# Download the box's files back into this folder (box → local).
+# Download the box's files back into this folder (box → local), then say what
+# landed. An action has no terminal, so `e2b-box pull` alone would report into the
+# plugin log where nobody is looking; e2b-box-pull runs the same guarded pull and
+# turns its result into a herdr notification (bottom-right), and nudges a reviewr
+# pane in the tab to redraw. The clobber guard still applies: a pull that would
+# overwrite your uncommitted edits is refused and the toast names the files.
+# Suggested binding:
+#   [[keys.command]]
+#   key = "prefix+shift+p"
+#   command = "herdr plugin action invoke pull --plugin e2b-dev.herdr-e2b"
+# (That key is herdr's own `rename_pane` by default — move it first.)
 [[actions]]
 id = "pull"
 title = "Pull sandbox → worktree"
 contexts = ["workspace"]
-command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box\" pull"]
+command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box-pull\""]
 
 # Print this worktree's box record (status, sandbox id, url).
 [[actions]]
