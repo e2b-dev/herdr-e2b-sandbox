@@ -115,6 +115,16 @@ herdr-managed worktree additionally gets the automatic teardown when it is remov
 In user-facing prose prefer *branch* for the pitch, *checkout* for mechanics, and
 *worktree* only where the herdr lifecycle (teardown, fleet members) is the point.
 
+**Baseline**:
+The commit in a box that holds the laptop's `HEAD` tree, as `herdr-e2b: snapshot of
+<label> @ <branch> <sha>`. The laptop's uncommitted changes sit on top of it,
+uncommitted, so the box's `git status` reads as the laptop's does. The box has no
+`.git` of its own, so this is the only history it has, and it is the reference point
+for two questions: what differs from HEAD (`git status` in the box) and what does
+`pull` need to read. A worktree with no HEAD gets its whole upload as the baseline
+instead. A sync adds a new baseline covering only the tracked paths.
+_Avoid_: Initial commit, root commit, snapshot commit
+
 **Workspace**:
 herdr's sidebar entry for a worktree. Created by herdr, not by this plugin.
 
