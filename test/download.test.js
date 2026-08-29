@@ -39,3 +39,33 @@ test("relIsUnsafe: allows ordinary relative paths", () => {
   assert.equal(relIsUnsafe("a/b/c.txt"), false)
   assert.equal(relIsUnsafe("file..name.js"), false) // ".." inside a name, not a segment
 })
+
+// --- parseStatusZ: the changed-set a pull reads (ADR 0012) ----------------------
+// Decides which local files a pull touches, so it gets the same scrutiny as the
+// path guards above.
+import { parseStatusZ } from "../src/download.js"
+
+const NUL = "\0"
+
+test("parseStatusZ: modified, added, untracked are 'changed'; any D is 'deleted'", () => {
+  const out = [" M src/a.js", "A  src/new.js", "?? notes.md", " D gone.txt", "D  staged-gone.txt", "MD both.txt"].join(NUL) + NUL
+  assert.deepEqual(parseStatusZ(out), {
+    changed: ["src/a.js", "src/new.js", "notes.md"],
+    deleted: ["gone.txt", "staged-gone.txt", "both.txt"],
+  })
+})
+
+test("parseStatusZ: empty status means nothing changed", () => {
+  assert.deepEqual(parseStatusZ(""), { changed: [], deleted: [] })
+  assert.deepEqual(parseStatusZ(NUL), { changed: [], deleted: [] })
+  assert.deepEqual(parseStatusZ(undefined), { changed: [], deleted: [] })
+})
+
+test("parseStatusZ: paths keep spaces and leading dashes; directory entries are dropped", () => {
+  const out = ["?? with space.md", "?? -dash.txt", "?? dir/"].join(NUL) + NUL
+  assert.deepEqual(parseStatusZ(out), { changed: ["with space.md", "-dash.txt"], deleted: [] })
+})
+
+test("parseStatusZ: garbage entries are skipped, not thrown", () => {
+  assert.deepEqual(parseStatusZ("x" + NUL + "??" + NUL + "?? ok.js" + NUL), { changed: ["ok.js"], deleted: [] })
+})
