@@ -25,22 +25,39 @@ function emit(out) {
   process.exit(out.ok && out.exitCode === 0 ? 0 : 1)
 }
 
-const payload = JSON.parse(process.argv[2] || "{}")
-const key = payload.key
-const cmd = payload.cmd
-const timeoutMs = Number(payload.timeoutMs) || 15 * 60 * 1000
+let payload
+try {
+  payload = JSON.parse(process.argv[2] || "{}")
+} catch (e) {
+  emit({ error: `exec.js: invalid JSON payload: ${(e && e.message) || String(e)}` })
+}
+
+const key = payload?.key
+const cmd = payload?.cmd
+const timeoutMs = Number(payload?.timeoutMs) || 15 * 60 * 1000
 if (!key || !cmd) {
   emit({ error: "exec.js: need a box key and a command" })
 }
 
-const rec = await readRecord(key)
+let rec
+try {
+  rec = await readRecord(key)
+} catch (e) {
+  emit({ error: `exec.js: failed reading store for '${key}': ${(e && e.message) || String(e)}` })
+}
 if (!rec?.sandboxId) {
   emit({ error: `no sandbox tracked for '${key}'` })
 }
 
-const cfg = loadConfig()
-warnCredentials(cfg)
-const conn = sdkConn(cfg, rec.domain)
+let cfg
+let conn
+try {
+  cfg = loadConfig()
+  warnCredentials(cfg)
+  conn = sdkConn(cfg, rec.domain)
+} catch (e) {
+  emit({ error: (e && e.message) || String(e) })
+}
 
 let sandbox
 try {
