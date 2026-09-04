@@ -21,7 +21,7 @@ from a template that already ships a coding agent, and drops you in its shell.
 `pull` brings the diff home.
 
 **2 · Race a fleet, then grade it.** One task, one box per agent, all at once —
-Claude Code, Codex, Grok, OpenCode, Amp, Droid and Prime work the same starting
+Claude Code, Codex, Grok, OpenCode, Amp, Droid, Prime and Muse Code work the same starting
 point in parallel, and `e2b-bench` runs one held-out check inside every box to
 say which of them actually did it. Best-of-N, or one harness's feature you can't
 get from the others.
@@ -126,6 +126,7 @@ HTTPS_PROXY = "http://proxy.internal:3128"
 | Amp | `amp` | `AMP_API_KEY` | `amp --dangerously-allow-all` |
 | Droid | `droid` | `FACTORY_API_KEY` | `droid` |
 | Prime | `prime` | `PRIME_API_KEY`, or an `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` you already pay for | `prime-agent` |
+| Muse Code | `muse` | `META_API_KEY` (a Meta API key; it outranks the browser login, which sits in the Keychain and is not borrowed) | `muse --yolo` |
 | — | `base` | — | nothing (a control arm) |
 
 These are E2B's public [agent templates](https://e2b.dev/docs/agents); names are
@@ -166,6 +167,7 @@ either, you get the chooser:
      [6] grok
      [7] droid
      [8] prime
+     [9] muse
 
   ↑/↓ · j/k move   enter confirm   number jumps   t type a name   q default
 ```

@@ -6,6 +6,27 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Muse Code is a template.** `muse`, E2B's public template for Meta's coding agent, is in
+  the `open` picker and the fleet roster, and `e2b-box auth` detects the local install. A
+  member starts as `muse --yolo`, the posture Meta documents for "a disposable, isolated
+  container": approvals off, Muse's own OS sandbox off (inside an E2B box that sandbox only
+  blocks network and out-of-tree writes, the same reason Codex's is bypassed), and the
+  workspace trusted for the run, so no first-run seed is needed. The credential is
+  `META_API_KEY`, forwarded under its own name; Meta documents it as outranking any stored
+  login, so a box handed the variable never sees a sign-in screen.
+  What is deliberately NOT borrowed is the browser login. Muse's `~/.config/muse/auth.json`
+  is a pointer whose `storage` field reads `keychain` on macOS; the token itself sits where
+  ADR 0009 does not look, exactly as Claude Code's does. A signed-in Muse therefore reports
+  `signed in, but not a key this plugin can use` and names the variable to set, rather than
+  becoming a borrowable session the way codex (ADR 0010) and grok (ADR 0011) did.
+  Muse has no status subcommand, so the probe is a headless `exec` aimed at a loopback port
+  nothing listens on: an unauthenticated install refuses before it opens a stream, an
+  authenticated one fails its transport in about two seconds, and neither sends a byte off
+  the machine, spends a token, or writes a session log. Findings in
+  `docs/research/0002-harness-detection-and-credentials.md`.
+
 ## [0.4.0] - 2026-08-29
 
 ### Fixed
