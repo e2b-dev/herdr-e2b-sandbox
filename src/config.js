@@ -54,6 +54,7 @@ const DEFAULTS = {
     "grok",
     "droid",
     "prime",
+    "muse",
     // `pi` is deliberately absent: its template needs config of its own before it
     // is usable, so offering it in the picker only produces a box that can't work.
     // Add it back with `[sandbox] templates` once that config exists.
@@ -106,6 +107,13 @@ const DEFAULTS = {
     // No approve flag is listed here because none has been verified — a made-up
     // one would just fail to launch, which is worse than an extra prompt.
     prime: "prime-agent",
+    // Meta's own flag for "a disposable, isolated container": approvals off, Muse's
+    // OS sandbox off, and the workspace trusted for the run. The sandbox half is the
+    // same point as codex's: Muse sandboxing itself inside an E2B box blocks network
+    // and out-of-tree writes for no added safety. The trust half is what makes the
+    // trust prompt not need a seed. Verified on the `muse` template (0.2.1) and
+    // locally (1.0.2); `muse [OPTIONS] [PROMPT]` takes the fleet's task positionally.
+    muse: "muse --yolo",
   },
   // Environment a template's box needs to come up USABLE, merged UNDER anything
   // `[templates.<name>.env]` says, so a user can always override it. This is for
