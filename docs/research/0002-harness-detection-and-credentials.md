@@ -8,7 +8,8 @@ harness's own documented config location, and no OAuth store or Keychain item is
 
 Versions probed: `claude` 2.1.235, `codex-cli` 0.147.0, `grok` 1.0.5, `opencode` 1.18.18,
 `amp` 0.0.1787045288, `droid` 0.199.0, `prime-agent` 0.7.0 (`prime` 0.6.21). `gemini` was
-not installed; its rows come from source and docs only.
+not installed; its rows come from source and docs only. `muse` 1.0.2 was added 2026-09-04
+(the `muse` template shipped 0.2.1 the same day; both accept the flags used here).
 
 ## The table
 
@@ -22,6 +23,7 @@ not installed; its rows come from source and docs only.
 | droid | `droid --version` | `droid computer list` | yes, 0/1 | `FACTORY_API_KEY` | same | none — `~/.factory/auth.v2.*`, encrypted |
 | prime | `prime-agent --version` (**stderr**) | `prime-agent model list` | **no, always 0** | `PRIME_API_KEY` | same | `~/.prime/config.json`, `api_key` |
 | gemini | `gemini --version` | **none exists** | n/a | `GEMINI_API_KEY` | same | none — OS keychain |
+| muse | `muse --version` | `muse exec --no-session-log --max-model-steps 1 --base-url http://127.0.0.1:9 …`, on **stderr** | no, 1 either way | `META_API_KEY` | same | none — `~/.config/muse/auth.json` is a pointer; the token is in the Keychain on macOS |
 
 Host var and box var differ for three harnesses. Codex authenticates from the environment
 with `CODEX_API_KEY`; `OPENAI_API_KEY` is only the field name *inside* `auth.json`, which
@@ -88,13 +90,62 @@ unauthenticated OpenCode Zen autoloads with `apiKey: "public"` and serves seven 
 models (`provider.ts:179-201`). `opencode run "hi"` exits 0 on a bare box, so a round-trip
 proves nothing — which is why `scripts/verify-keys.mjs:47-49` checks for a word.
 
+## Muse Code
+
+Meta's coding agent (`dev.meta.ai/docs/muse-code`). The `muse` on PATH is a bash
+launcher that self-updates in the background and `exec`s `muse-bin-<version>` beside
+it; it is not a shell function, so `shell: false` finds the same thing the user runs.
+
+No status subcommand exists. `muse auth` accepts only `auth set --api-key-stdin`, and
+`muse login` starts a device-code flow, so neither is a probe. `muse exec` resolves its
+credential before it opens a model stream, which makes a headless run against a
+loopback port with no listener an offline probe with two readable branches, both on
+stderr and both exit 1:
+
+- no credential: `missing meta credentials: run \`muse login\` or set META_API_KEY, or
+  save credentials at <config>/muse/auth.json`, in about 0.1s, before any request
+- a credential: four `retrying meta model stream` lines and then `agent loop failed:
+  model failed: transport error: error sending request for url
+  (http://127.0.0.1:9/responses) (after 4 provider attempts)`, in about two seconds
+
+`--no-session-log` keeps the run off disk (verified: the sessions directory did not
+grow), `--max-model-steps 1` bounds it, and no `--yolo` is passed, so the probe never
+trusts the directory it runs in. The logged-out branch was produced with an empty
+`XDG_CONFIG_HOME`, which the launcher and the binary both honour for the config path.
+
+Credential storage is the finding that decides the row. `~/.config/muse/auth.json`
+after a browser login reads
+
+```json
+{"schema_version": 2, "providers": {"meta": {"mechanism": "oauth", "obtained_via": "device_code",
+  "api_base_url": "https://api.meta.ai/v1", "user_full_name": "…", "user_email": "…", "storage": "keychain"}}}
+```
+
+so on macOS the file is a pointer and the token itself is a Keychain item, which ADR
+0009 does not open. That puts Muse in Claude Code's category, not codex's or grok's:
+the browser login is reported as `signed in, but not a key this plugin can use` and is
+never borrowed as a session. A key saved with `muse auth set` goes to the same store.
+The launcher's own `read_credential` expects `access_token` and `expires_at` inline in
+the same `providers.meta` object, which is what the file holds where there is no
+Keychain (Linux); that schema was not seen on a real login here and is not read.
+
+Precedence is documented (`docs/muse-code/auth`): `META_API_KEY`, then a stored key,
+then the stored browser login. So the variable a box is handed is not a workaround for
+the Keychain, it is the first thing Muse consults, and `muse logout` leaves it alone.
+
+Unattended posture is documented too (`docs/muse-code/permissions`): `--yolo` disables
+approval and Muse's OS sandbox and trusts the workspace for the run, recommended only
+for "a disposable, isolated container", which an E2B box is. The interactive surface
+takes the task positionally (`muse [OPTIONS] [PROMPT]`); `exec` takes the same flag.
+
 ## Platform differences
 
-Only two exist across all eight. Claude Code stores credentials in the macOS Keychain and
+Three exist across all nine. Muse Code stores its login in the macOS Keychain and inline
+in `~/.config/muse/auth.json` on Linux, and the file itself records which (`storage`). Claude Code stores credentials in the macOS Keychain and
 in `~/.claude/.credentials.json` on Linux and Windows. Gemini's *system* settings live at
 `/Library/Application Support/GeminiCli/settings.json` versus `/etc/gemini-cli/settings.json`.
-Everything else is `$HOME`-relative and identical — note that amp and opencode both use XDG
-paths on macOS, not `~/Library/Application Support`.
+Everything else is `$HOME`-relative and identical — note that amp, opencode and muse all use
+XDG paths on macOS, not `~/Library/Application Support`.
 
 ## Gemini
 
@@ -119,3 +170,9 @@ only with auth status permanently unknown.
 - Whether Droid's `FACTORY_API_BASE_URL` / `FACTORY_API_ENDPOINT` / `FACTORY_RELAY_BASE_URL`
   binary strings are supported overrides. None is documented.
 - opencode exit codes beyond the observed 0. `OPENCODE_MODEL` is not a real variable.
+- The Linux shape of Muse's `auth.json` (`access_token` inline, per the launcher's reader)
+  on a real login, and whether an API key saved with `muse auth set` is ever written to the
+  file rather than the Keychain. Neither is read until seen.
+- Whether the box's Muse launcher, whose background self-update downloads with a bearer
+  from `auth.json`, ever needs one: with no file the update is skipped or 401s in the
+  background and the installed binary runs regardless (`main()` in the launcher).

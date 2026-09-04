@@ -166,6 +166,7 @@ test("the table covers every harness behind a shipped template, and nothing else
     "codex",
     "droid",
     "grok",
+    "muse",
     "opencode",
     "prime",
   ])
@@ -181,7 +182,7 @@ test("host variable and box variable differ exactly where the research says they
   assert.equal(HARNESSES.codex.boxVar, "OPENAI_API_KEY")
   assert.equal(HARNESSES.opencode.hostVar, null)
   assert.equal(HARNESSES.opencode.boxVar, "OPENCODE_AUTH_CONTENT")
-  for (const id of ["claude", "grok", "amp", "droid", "prime"]) {
+  for (const id of ["claude", "grok", "amp", "droid", "prime", "muse"]) {
     assert.equal(HARNESSES[id].hostVar, HARNESSES[id].boxVar, id)
   }
 })
@@ -342,6 +343,73 @@ test("interpretProbe: a grok login this table has no reader for stays no-key", (
   })
   assert.equal(r.state, "no-key")
   assert.equal(r.source, "login")
+})
+
+// --- muse: no status subcommand, so a headless run against a dead port ---------
+// Both fixtures are stderr captured from `muse exec --no-session-log
+// --max-model-steps 1 --base-url http://127.0.0.1:9 …` on 1.0.2 (macOS), the
+// logged-out branch via an empty XDG_CONFIG_HOME.
+
+test("the muse probe cannot run anything or talk to anyone", () => {
+  // The probe IS a `muse exec`. Three things keep that honest: the endpoint is a
+  // loopback port with no listener, the session log is off, and there is no
+  // `--yolo`, so the probe never trusts the directory it happens to run in.
+  const args = HARNESSES.muse.authArgs
+  assert.equal(args[0], "exec")
+  assert.ok(args.includes("--no-session-log"))
+  assert.equal(args[args.indexOf("--base-url") + 1], "http://127.0.0.1:9")
+  assert.ok(!args.includes("--yolo") && !args.includes("--disable-sandbox"))
+})
+
+test("interpretProbe: muse with no credential refuses before it opens a stream", () => {
+  const r = interpretProbe("muse", {
+    status: 1,
+    stdout: "",
+    stderr:
+      "muse: local session messaging disabled: session logging is required\n" +
+      "missing meta credentials: run `muse login` or set META_API_KEY, or save credentials at /Users/x/.config/muse/auth.json\n",
+    env: {},
+  })
+  assert.equal(r.state, "no-key")
+  assert.equal(r.source, null)
+  assert.equal(r.hostVar, "META_API_KEY")
+})
+
+test("interpretProbe: a muse browser login reaches the dead transport, and is NOT borrowable", () => {
+  // Signed in, so `exec` got past its credential check, but the token is in the
+  // macOS Keychain (`storage: "keychain"` in auth.json), which ADR 0009 does not
+  // open. `login` is the honest reading: it works, we cannot hand it on.
+  const r = interpretProbe("muse", {
+    status: 1,
+    stdout: "",
+    stderr:
+      "muse: local session messaging disabled: session logging is required\n" +
+      "muse: workspace root: /Users/x/repo (cwd default)\n" +
+      "muse: retrying meta model stream in 250ms (attempt 2/4)\n" +
+      "agent loop failed: model failed: transport error: error sending request for url (http://127.0.0.1:9/responses) (after 4 provider attempts)\n",
+    env: {},
+  })
+  assert.equal(r.state, "no-key")
+  assert.equal(r.source, "login")
+})
+
+test("interpretProbe: META_API_KEY in the environment is the muse credential a box gets", () => {
+  // Meta's documented precedence puts the variable above the stored login, so this
+  // is not a fallback in the box: it is the first thing Muse looks at.
+  const r = interpretProbe("muse", {
+    status: 1,
+    stdout: "",
+    stderr: "agent loop failed: model failed: transport error: error sending request for url (http://127.0.0.1:9/responses)\n",
+    env: { META_API_KEY: "meta-x" },
+  })
+  assert.equal(r.state, "authenticated")
+  assert.equal(r.source, "env")
+  assert.equal(r.hostVar, "META_API_KEY")
+})
+
+test("interpretProbe: muse output this table cannot read is unknown, never a guess", () => {
+  const r = interpretProbe("muse", { status: 1, stdout: "", stderr: "something new\n", env: {} })
+  assert.equal(r.state, "unknown")
 })
 
 test("interpretProbe: opencode counts credentials, and exits 0 with none", () => {

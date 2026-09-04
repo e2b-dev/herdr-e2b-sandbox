@@ -73,7 +73,7 @@ template     = "base"
 # The menu `e2b-box open` offers when it has to BUILD a sandbox and nothing else
 # decided which template (no --template, no matching rule below). The plugin
 # ships with E2B's public agent templates already listed —
-# claude, codex, opencode, amp, grok, droid, prime and base — so you only need
+# claude, codex, opencode, amp, grok, droid, prime, muse and base — so you only need
 # this key to REPLACE that menu with your own. Templates named in template_rules
 # are added automatically, and `t` in the picker takes any name you type.
 #
@@ -101,7 +101,7 @@ template     = "base"
 # wins over `template`. Route a branch to the right agent by naming it, e.g.
 # `e2b/cc/*` gets Claude Code, `e2b/cx/*` gets Codex, everything else opencode.
 # Use the exact template name (`e2b template list`, or E2B's public names:
-# claude / codex / opencode / amp / grok).
+# claude / codex / opencode / amp / grok / muse).
 # [[sandbox.template_rules]]
 # pattern  = "^e2b/cc/"          # Claude Code branches
 # template = "claude"
@@ -190,6 +190,8 @@ server_port  = 3000
 # XAI_API_KEY = "xai-…"
 # [templates.amp.env]
 # AMP_API_KEY = "…"
+# [templates.muse.env]
+# META_API_KEY = "…"          # Meta API key; Muse reads it before any browser login
 #
 # Droid is Factory's CLI. Its key is verified against Factory's `whoami` with a
 # bearer token, and the keys are shaped `fk-…` (read out of the binary's own env
@@ -262,6 +264,7 @@ ignore = [".git", "node_modules", ".next", "dist", "build", ".turbo", ".cache",
 #   amp       amp --dangerously-allow-all
 #   opencode  opencode --auto --prompt
 #   prime     prime-agent            (the binary is not named after the template)
+#   muse      muse --yolo            (approvals off, its own sandbox off, workspace trusted)
 #
 # Anything else (droid, your own template) runs its own name, bare — the plugin
 # will not invent a flag it has not verified.
@@ -295,8 +298,9 @@ ignore = [".git", "node_modules", ".next", "dist", "build", ".turbo", ".cache",
 # `~/.codex/config.toml` inside the box.
 #
 # `claude`, `codex`, `droid` and `opencode` ship with a default and need nothing
-# here. Templates whose first-run format has not been verified (`grok`, `amp`,
-# `prime`) seed nothing until you say what to run — the plugin will not guess at a
+# here. `muse` needs none: `--yolo` trusts the workspace for the run and
+# META_API_KEY is read straight from the environment. Templates whose first-run
+# format has not been verified (`grok`, `amp`, `prime`) seed nothing until you say what to run — the plugin will not guess at a
 # file in your home dir.
 #
 # THE RULE, if you write your own: the command runs INSIDE the box, so it must name

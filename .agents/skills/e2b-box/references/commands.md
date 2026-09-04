@@ -112,7 +112,7 @@ Agent-per-template launch commands come from `[fleet.agents]` config over shippe
 defaults (all "don't ask permission" flags, verified per vendor):
 `claude --dangerously-skip-permissions`, `codex --dangerously-bypass-approvals-and-sandbox`,
 `grok --always-approve`, `amp --dangerously-allow-all` (task via stdin pipe),
-`opencode --auto --prompt`, `prime-agent`, bare `droid`. Mapping a template to `""`
+`opencode --auto --prompt`, `prime-agent`, `muse --yolo`, bare `droid`. Mapping a template to `""`
 = plain shell, no agent.
 
 ### kill
@@ -173,7 +173,7 @@ this is what wires fleet-member teardown to `herdr worktree remove` for free.
 `config.toml` keys that matter when composing commands:
 
 - `[sandbox] template` — default template (`base` shipped); `templates = [...]` —
-  the picker/roster menu (claude, codex, opencode, amp, grok, droid, prime, base)
+  the picker/roster menu (claude, codex, opencode, amp, grok, droid, prime, muse, base)
 - `[[sandbox.template_rules]] pattern/template` — per-branch template overrides
 - `[fleet] base` — ref members branch from ("" = invoking checkout's HEAD),
   `prefix` (default `e2b`), `default_roster` — pre-ticked picker rows

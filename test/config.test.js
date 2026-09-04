@@ -608,6 +608,7 @@ test("resolveFleet: every shipped agent starts unattended", () => {
   assert.equal(agents.codex, "codex --dangerously-bypass-approvals-and-sandbox")
   assert.equal(agents.grok, "grok --always-approve")
   assert.equal(agents.amp, "amp --dangerously-allow-all")
+  assert.equal(agents.muse, "muse --yolo")
   // Trailing `--prompt` is load-bearing: the fleet appends its task positionally,
   // and opencode's positional is a project DIRECTORY, not a prompt.
   assert.equal(agents.opencode, "opencode --auto --prompt")

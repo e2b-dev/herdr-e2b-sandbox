@@ -38,6 +38,8 @@ const CHECKS = {
   grok: { keyvar: "XAI_API_KEY", cmd: (p) => `grok --always-approve -p ${p}` },
   amp: { keyvar: "AMP_API_KEY", cmd: (p) => `amp --dangerously-allow-all -x ${p}` },
   prime: { keyvar: "PRIME_API_KEY", cmd: (p) => `prime-agent -p ${p}` },
+  // `exec` is Muse's headless surface; `--yolo` is the documented unattended posture.
+  muse: { keyvar: "META_API_KEY", cmd: (p) => `muse exec --yolo ${p}` },
   // Droid installs to ~/.local/bin, which a non-interactive shell does not have
   // on PATH (its own .bashrc export sits below the interactivity guard).
   droid: { keyvar: "FACTORY_API_KEY", cmd: (p) => `export PATH=$HOME/.local/bin:$PATH; droid exec ${p}` },

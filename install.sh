@@ -279,7 +279,7 @@ echo "herdr-e2b: tip — sandboxes default to the 'base' template (minimal). For
 echo "  work, build a bigger CUSTOM template (more disk/CPU + your toolchain) and"
 echo "  set [sandbox].template in $CFG. Build with 'e2b template build'"
 echo "  (https://e2b.dev/docs/sandbox-template) — or ask your coding agent to set"
-echo "  one up. Public agent templates (claude, codex, opencode, amp, grok) also work."
+echo "  one up. Public agent templates (claude, codex, opencode, amp, grok, muse) also work."
 
 echo "herdr-e2b: done. Bind prefix+shift+e (open sandbox), prefix+shift+f (fleet) and"
 echo "  prefix+shift+d (dashboard) in your herdr config — the block is in the README."
