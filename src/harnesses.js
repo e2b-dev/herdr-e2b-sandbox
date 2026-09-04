@@ -46,10 +46,10 @@ const firstLine = (s) =>
 
 /**
  * hostVar vs boxVar: the variable a credential is found under HERE is not always
- * the variable a box needs. They are equal for four of the seven and deliberately
+ * the variable a box needs. They are equal for five of the eight and deliberately
  * not for the other three — codex authenticates from one name and its box wants
  * another, opencode has no single name at all, and prime accepts a whole registry
- * of them. Collapsing the two fields would be wrong for three rows out of seven.
+ * of them. Collapsing the two fields would be wrong for three rows out of eight.
  *
  * `source` is where ADR 0009's boundary shows up in the data:
  *
@@ -524,13 +524,54 @@ export const HARNESSES = {
       return null
     },
   },
+
+  muse: {
+    template: "muse",
+    bin: "muse",
+    versionArgs: ["--version"],
+    // Muse Code has no status subcommand: `muse auth` is `auth set` and nothing
+    // else, and `muse login` starts a device-code flow. So the probe is a headless
+    // run aimed at a loopback port nothing listens on. `exec` resolves its
+    // credential BEFORE it opens a model stream, and with none it refuses in about
+    // 0.1s with "missing meta credentials"; with one it reaches the dead URL, fails
+    // four transport retries in about two seconds and exits 1. Either way nothing
+    // leaves the machine and nothing is spent, and `--no-session-log` keeps the run
+    // off disk. Both branches measured on 1.0.2 (docs/research/0002). No `--yolo`
+    // here on purpose: a probe that trusts the cwd is a probe that loads its rules.
+    authArgs: ["exec", "--no-session-log", "--max-model-steps", "1", "--base-url", "http://127.0.0.1:9", "herdr-e2b auth probe"],
+    hostVar: "META_API_KEY",
+    boxVar: "META_API_KEY",
+    // ~/.config/muse/auth.json is a POINTER, not a store. On macOS its `providers.meta`
+    // entry reads `{mechanism: "oauth", storage: "keychain"}` and the token itself is
+    // in the Keychain, which ADR 0009 puts out of reach: the same shape as Claude
+    // Code, and the reason a Muse browser login is `no-key` here rather than a
+    // borrowable session (ADR 0010). A key saved with `muse auth set` lands in the
+    // same Keychain. On Linux the same file carries `access_token` inline (the vendor
+    // launcher reads it from there for its own downloads), but that schema has not
+    // been seen on a real login and is not read.
+    keyFile: null,
+    // Meta documents the precedence: META_API_KEY, then a stored key, then the browser
+    // login. So the variable is not a workaround for the Keychain, it is the first
+    // thing Muse looks at.
+    advice: "set META_API_KEY (a Meta API key outranks the browser login, which lives in the Keychain)",
+    // Every branch on stderr, exit 1 either way; only the text tells them apart.
+    parse: ({ stderr }) => {
+      const out = stripAnsi(stderr)
+      if (/^missing meta credentials\b/m.test(out)) return { state: "no-key", source: null }
+      // Past the credential check and into the dead transport: SOMETHING authenticated
+      // it, and the environment check upstream already ruled out META_API_KEY, so it
+      // is a stored login or a stored key, both of which sit in the Keychain.
+      if (/transport error\b.*127\.0\.0\.1:9\b/.test(out)) return { state: "no-key", source: "login" }
+      return null
+    },
+  },
 }
 
 /**
  * Every environment variable this harness can be authenticated by, primary first,
  * as `{hostVar, boxVar}` pairs.
  *
- * Six rows out of seven have exactly one, which is why the table states it as the
+ * Seven rows out of eight have exactly one, which is why the table states it as the
  * two plain fields and this synthesises the pair for them. Claude Code has two, and
  * they are not interchangeable spellings of one credential: a Console key and a
  * subscription token authenticate different accounts and each is only accepted under

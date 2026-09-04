@@ -131,8 +131,8 @@ export async function probeHarness(id, { timeoutMs = PROBE_TIMEOUT_MS, env = pro
 }
 
 /**
- * Every known harness at once. Concurrent because the table holds seven of these,
- * and seven sequential worst-cases is not a command anyone waits for.
+ * Every known harness at once. Concurrent because the table holds eight of these,
+ * and eight sequential worst-cases is not a command anyone waits for.
  */
 export async function probeAll({ timeoutMs = PROBE_TIMEOUT_MS, env = process.env } = {}) {
   return Promise.all(Object.keys(HARNESSES).map((id) => probeHarness(id, { timeoutMs, env })))
