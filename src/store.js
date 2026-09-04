@@ -38,9 +38,15 @@ export async function writeRecord(key, patch) {
   await mkdir(BOXES_DIR, { recursive: true })
   const prev = (await readRecord(key)) || {}
   const next = { ...prev, ...patch, key, updatedAt: new Date().toISOString() }
-  const tmp = `${recordPath(key)}.tmp.${process.pid}`
-  await writeFile(tmp, JSON.stringify(next, null, 2))
-  await rename(tmp, recordPath(key))
+  const nonce = `${Date.now()}.${Math.random().toString(36).slice(2)}`
+  const tmp = `${recordPath(key)}.tmp.${process.pid}.${nonce}`
+  try {
+    await writeFile(tmp, JSON.stringify(next, null, 2))
+    await rename(tmp, recordPath(key))
+  } catch (err) {
+    try { await unlink(tmp) } catch {}
+    throw err
+  }
   return next
 }
 
