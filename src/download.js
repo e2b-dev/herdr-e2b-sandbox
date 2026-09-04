@@ -97,7 +97,12 @@ async function main({ key, destRoot, check = false }) {
     const atRisk = []
     for (const rel of files) {
       if (!dirty.has(rel) || relIsUnsafe(rel)) continue
-      const data = Buffer.from(await sandbox.files.read(posix.join(projectPath, rel), { format: "bytes" }))
+      let data
+      try {
+        data = Buffer.from(await sandbox.files.read(posix.join(projectPath, rel), { format: "bytes" }))
+      } catch {
+        continue
+      }
       let local = null
       try {
         local = await readFile(path.join(destRoot, rel))
@@ -145,7 +150,13 @@ async function main({ key, destRoot, check = false }) {
           skipped.push(rel)
           return // unsafe path (traversal / symlink) — never write it
         }
-        const data = Buffer.from(await sandbox.files.read(posix.join(projectPath, rel), { format: "bytes" }))
+        let data
+        try {
+          data = Buffer.from(await sandbox.files.read(posix.join(projectPath, rel), { format: "bytes" }))
+        } catch {
+          skipped.push(rel)
+          return
+        }
         let local = null
         try {
           local = await readFile(dest)
@@ -160,7 +171,11 @@ async function main({ key, destRoot, check = false }) {
           unchanged += 1
           return // identical — leave it alone
         }
-        await writeFile(dest, data)
+        try {
+          await writeFile(dest, data)
+        } catch {
+          skipped.push(rel)
+        }
       }),
     )
   }
@@ -222,8 +237,14 @@ try {
   invokedDirectly = false
 }
 if (invokedDirectly) {
-  const input = JSON.parse(process.argv[2] || "{}")
-  if (!input.key || !input.destRoot) {
+  let input
+  try {
+    input = JSON.parse(process.argv[2] || "{}")
+  } catch (err) {
+    console.error(`download: invalid JSON payload: ${(err && err.message) || String(err)}`)
+    process.exit(2)
+  }
+  if (!input || typeof input !== "object" || !input.key || !input.destRoot) {
     console.error("download: missing key/destRoot")
     process.exit(2)
   }
