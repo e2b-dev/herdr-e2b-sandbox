@@ -64,3 +64,24 @@ test("a record with a pid but no recorded geometry still attaches, with a defini
   assert.equal(plan.action, "attach")
   assert.deepEqual(plan.resize, [{ cols: 120, rows: 30 }])
 })
+
+test("zero, negative, or missing pane dimensions clamp to valid positive integers", () => {
+  const planZero = planAttach({ terminalPid: 42, terminalCols: 80, terminalRows: 24 }, [OURS], { cols: 0, rows: 0 }, KEY)
+  assert.equal(planZero.action, "attach")
+  assert.deepEqual(planZero.resize, [{ cols: 80, rows: 23 }, { cols: 80, rows: 24 }])
+
+  const planMissing = planAttach({ terminalPid: 42, terminalCols: 80, terminalRows: 24 }, [OURS], null, KEY)
+  assert.equal(planMissing.action, "attach")
+  assert.deepEqual(planMissing.resize, [{ cols: 80, rows: 23 }, { cols: 80, rows: 24 }])
+
+  const planNegative = planAttach({ terminalPid: 42, terminalCols: 50, terminalRows: 10 }, [OURS], { cols: -5, rows: -10 }, KEY)
+  assert.equal(planNegative.action, "attach")
+  assert.deepEqual(planNegative.resize, [{ cols: 80, rows: 24 }])
+})
+
+test("single-row pane steps detour to 2 rows and back to 1", () => {
+  const plan = planAttach({ terminalPid: 42, terminalCols: 80, terminalRows: 1 }, [OURS], { cols: 80, rows: 1 }, KEY)
+  assert.equal(plan.action, "attach")
+  assert.deepEqual(plan.resize, [{ cols: 80, rows: 2 }, { cols: 80, rows: 1 }])
+})
+

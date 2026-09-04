@@ -72,7 +72,10 @@ try {
   process.exit(NEVER_ATTACHED)
 }
 
-const dims = () => ({ cols: process.stdout.columns || 80, rows: process.stdout.rows || 24 })
+const dims = () => ({
+  cols: Math.max(1, Number(process.stdout.columns) > 0 ? Math.floor(Number(process.stdout.columns)) : 80),
+  rows: Math.max(1, Number(process.stdout.rows) > 0 ? Math.floor(Number(process.stdout.rows)) : 24),
+})
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 // One-line notices about which terminal you're getting. The dashboard owns its
 // own chrome, so it gets none of them — same rule as connect_shell's banner.

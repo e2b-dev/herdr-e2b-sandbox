@@ -42,9 +42,12 @@ export function planAttach(rec, processes, pane, key) {
   if (!proc) return { action: "create", reason: "died" }
   if (proc.envs?.[TERMINAL_MARKER] !== key) return { action: "create", reason: "recycled" }
 
-  const sameSize = rec.terminalCols === pane.cols && rec.terminalRows === pane.rows
+  const cols = Math.max(1, Number(pane?.cols) > 0 ? Math.floor(Number(pane.cols)) : 80)
+  const rows = Math.max(1, Number(pane?.rows) > 0 ? Math.floor(Number(pane.rows)) : 24)
+
+  const sameSize = rec.terminalCols === cols && rec.terminalRows === rows
   const resize = sameSize
-    ? [{ cols: pane.cols, rows: pane.rows > 1 ? pane.rows - 1 : pane.rows + 1 }, { cols: pane.cols, rows: pane.rows }]
-    : [{ cols: pane.cols, rows: pane.rows }]
+    ? [{ cols, rows: rows > 1 ? rows - 1 : rows + 1 }, { cols, rows }]
+    : [{ cols, rows }]
   return { action: "attach", pid, resize }
 }
