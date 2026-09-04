@@ -581,7 +581,7 @@ rm -f "$AUTHCFG/auth.toml"
 # probe here would put the cost back exactly where it was designed out of. Proved
 # mechanically rather than by reading the code, because the failure is invisible.
 PROBEDIR="$TMP/fleet-no-probe"; mkdir -p "$PROBEDIR"
-for b in claude codex grok opencode amp droid prime; do
+for b in claude codex grok opencode amp droid prime muse; do
   printf '#!/bin/sh\necho "%s" >> "%s/spawned"\n' "$b" "$PROBEDIR" > "$PROBEDIR/$b"
   chmod +x "$PROBEDIR/$b"
 done
