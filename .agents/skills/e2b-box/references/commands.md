@@ -73,6 +73,10 @@ creating verbs (`open`, `up`): what a NEW box boots from; otherwise a branch rul
 
 ### Coding-agent authentication
 
+- `e2b-box auth`: interactive table at a terminal. Arrows/j/k move, numbers jump,
+  Enter opens per-agent connect/reconnect/inspect/config actions; `f` opens config,
+  `a` opens generated auth.toml, `s` confirms saving discovery, `r` refreshes,
+  q/Esc quits without saving. Uses `[dashboard].config_opener` for files.
 - `auth discover [--yes]` / piped `auth`: ASCII table of agent, auth type,
   source, and status across saved connections,
   manual config, and local discovery. Selected connections take precedence;

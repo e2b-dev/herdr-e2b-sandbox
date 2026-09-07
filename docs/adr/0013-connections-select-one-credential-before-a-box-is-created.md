@@ -35,6 +35,13 @@ team access exists.
 
 ## Selection and compatibility
 
+At a terminal, bare `auth` is a manager over the same connection commands. Opening
+an action restores the terminal before running the CLI or configured editor, then
+refreshes the view after authentication. Connect with existing accounts requests a
+new name; reconnect keeps the selected ID. Closing the manager writes nothing.
+`auth discover` retains its explicit report/save prompt, while pipes and `--yes`
+never enter the interactive manager. Saving discovery still updates only auth.toml.
+
 Selection order is `--connection`, then `[templates.<name>] connection`, then the
 only personal connection for the harness. More than one unselected candidate is
 an error. With no managed connection, the existing config/discovery ladder stays

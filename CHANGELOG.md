@@ -15,6 +15,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Interactive `e2b-box auth`: select an agent to connect, reconnect, inspect auth,
+  or open config files using the dashboard's opener. Explicit discovery and
+  non-interactive calls retain their report/save behavior.
+
 - Claude connection names use the detected organization (such as `claude-e2b`)
   for Team/Enterprise accounts. Setup and list distinguish the local account
   from connection access; existing connection IDs remain unchanged.

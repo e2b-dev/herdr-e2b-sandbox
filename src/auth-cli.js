@@ -16,9 +16,9 @@ import {
 
 const HELP = `e2b-box auth — coding-agent connections
 
-  auth                            report and save discovered sources
+  auth                            interactive auth manager (table when piped)
   auth discover [--yes]            report and save discovered sources
-  auth --yes                      save discovery without confirmation
+  auth --yes                      save discovery without opening the manager
   auth connect claude [--user]     run Claude setup-token and save privately
   auth connect claude --token-stdin --yes
                                   accept an existing token over stdin
@@ -37,6 +37,8 @@ const HELP = `e2b-box auth — coding-agent connections
   --token-stdin                   Claude token input; never put tokens in argv
 
 Connect makes the only connection for that agent its default for NEW boxes.
+Manager: arrows/j/k, numbers, Enter for actions; f config, a auth.toml,
+s save discovery, r refresh, q/Esc quit. File opening uses dashboard.config_opener.
 With several connections, select --connection ID or templates.<name>.connection.
 Local subscription detection does not verify a newly authorized account.
 Claude names use the detected organization (e.g. claude-e2b), personal for Pro/Max,
