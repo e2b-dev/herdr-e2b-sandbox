@@ -74,6 +74,22 @@ environment at box-create time and never written down. What the box receives is 
 variable **it** needs, which for three harnesses is not the one it was found under —
 hence *host variable* (where it was found) versus *box variable* (what is injected).
 _Avoid_: Passthrough, env copy, exported key
+### Connections
+
+**Connection**:
+A named, explicitly configured authentication choice for a harness. It has personal
+access, an authentication method, credential reference, and revision. A new box
+selects one connection before its credential becomes environment variables or files.
+This differs from discovery: a selected connection wins over discovered credentials
+and fails visibly if unavailable. Its observed subscription metadata describes the
+local login, not necessarily the account chosen in a new browser authorization.
+Team/Enterprise subscription classification does not imply organization sharing.
+
+**Connection revision**:
+The immutable credential version selected when a box is created. Box records keep
+its ID and revision, never a credential value. Reconnecting the local connection
+creates a new revision; it does not update an already running box.
+
 ### Regions and projects
 
 **Region**:

@@ -103,7 +103,8 @@ miss() {
 # Marks the record "provisioning" but PRESERVES a known sandboxId so the worker
 # can reconnect to (and resume) an existing sandbox instead of always creating fresh.
 provision_from_cwd() {
-  local k="$1" op="${2:-ensure}" want="${3:-}" b h p l sid tpl tpid tcols trows payload node_bin
+  local k="$1" op="${2:-ensure}" want="${3:-}" b h p l sid tpl tpid tcols trows payload node_bin auth_record
+  local -a auth_args
   b=""; h=""; at_repo_root && { b=$(git_branch); h=$(git_head); }; [ "$b" = "HEAD" ] && b=""
   p=$(box_root)
   l=$(label_from_cwd)
@@ -112,6 +113,7 @@ provision_from_cwd() {
   # or drops the resolved template (empties the dashboard/list column).
   sid=$(field "$k" sandboxId)
   tpl=$(field "$k" template)
+  auth_record=$(jq -c '{connectionId,connectionRevision,connectionHarness} | with_entries(select(.value != null))' "$BOXES_DIR/$k.json" 2>/dev/null) || auth_record='{}'
   # The terminal is identity too: reopening a PAUSED box always comes through
   # here, and dropping terminalPid meant every pause → reopen silently created
   # a fresh terminal instead of reattaching — found live, fleet accept05. The
@@ -126,9 +128,9 @@ provision_from_cwd() {
   [ -n "$want" ] && [ -z "$sid" ] && tpl="$want"
   node_bin=$(e2b_node) || node_bin=""
   if [ -z "$node_bin" ]; then
-    jq -cn --arg k "$k" --arg b "$b" --arg p "$p" --arg l "$l" --arg sid "$sid" --arg tpl "$tpl" \
+    jq -cn --arg k "$k" --arg b "$b" --arg p "$p" --arg l "$l" --arg sid "$sid" --arg tpl "$tpl" --argjson auth "$auth_record" \
        --arg tpid "$tpid" --arg tcols "$tcols" --arg trows "$trows" \
-      '{key:$k, label:$l, status:"failed", step:"needs Node >= 22 (set HERDR_E2B_NODE)", branch:$b, worktreePath:$p, workspaceId:""}
+      '{key:$k, label:$l, status:"failed", step:"needs Node >= 22 (set HERDR_E2B_NODE)", branch:$b, worktreePath:$p, workspaceId:""} + $auth
          + (if $sid != "" then {sandboxId:$sid} else {} end)
          + (if $tpl != "" then {template:$tpl} else {} end)
          + (if ($tpid | test("^[0-9]+$")) then {terminalPid: ($tpid | tonumber)} else {} end)
@@ -137,18 +139,24 @@ provision_from_cwd() {
       > "$BOXES_DIR/$k.json"
     return 1
   fi
-  jq -cn --arg k "$k" --arg b "$b" --arg p "$p" --arg l "$l" --arg sid "$sid" --arg tpl "$tpl" \
+  if [ -z "$sid" ]; then
+    auth_args=(preflight --template "${want:-$tpl}")
+    [ -n "${connection:-}" ] && auth_args+=(--connection "$connection")
+    "$node_bin" "$PLUGIN_DIR/src/auth-cli.js" "${auth_args[@]}" || return 1
+  fi
+  jq -cn --arg k "$k" --arg b "$b" --arg p "$p" --arg l "$l" --arg sid "$sid" --arg tpl "$tpl" --argjson auth "$auth_record" \
      --arg tpid "$tpid" --arg tcols "$tcols" --arg trows "$trows" \
-    '{key:$k, label:$l, status:"provisioning", step:"queued", branch:$b, worktreePath:$p, workspaceId:""}
+    '{key:$k, label:$l, status:"provisioning", step:"queued", branch:$b, worktreePath:$p, workspaceId:""} + $auth
        + (if $sid != "" then {sandboxId:$sid} else {} end)
        + (if $tpl != "" then {template:$tpl} else {} end)
        + (if ($tpid | test("^[0-9]+$")) then {terminalPid: ($tpid | tonumber)} else {} end)
        + (if ($tcols | test("^[0-9]+$")) then {terminalCols: ($tcols | tonumber)} else {} end)
        + (if ($trows | test("^[0-9]+$")) then {terminalRows: ($trows | tonumber)} else {} end)' \
     > "$BOXES_DIR/$k.json"
-  payload=$(jq -cn --arg k "$k" --arg b "$b" --arg h "$h" --arg p "$p" --arg l "$l" --arg op "$op" --arg t "$want" \
+  payload=$(jq -cn --arg k "$k" --arg b "$b" --arg h "$h" --arg p "$p" --arg l "$l" --arg op "$op" --arg t "$want" --arg connection "${connection:-}" \
     '{key:$k, label:$l, branch:$b, head:$h, worktreePath:$p, workspaceId:"", op:$op}
-       + (if $t != "" then {template:$t} else {} end)')
+       + (if $t != "" then {template:$t} else {} end)
+       + (if $connection != "" then {connection:$connection} else {} end)')
   nohup "$node_bin" "$PLUGIN_DIR/src/provision.js" "$payload" >>"$BOXES_DIR/$k.log" 2>&1 &
   # Remembered so an interrupt can stop the worker, not just the spinner in front
   # of it. `disown` only detaches it from job control; the pid is still killable.
@@ -646,7 +654,7 @@ boot_and_connect() {
     # From here a sandbox is about to exist, so this run owns it: an interrupt
     # before it is handed over has to take it with it (see arm_boot_abort).
     arm_boot_abort "$key"
-    provision_from_cwd "$key" ensure "$want"
+    provision_from_cwd "$key" ensure "$want" || return 1
   fi
   # Spin until ready (bounded so a hung provision can't loop forever), then attach.
   spin_until_ready "$key" "booting" || exit 1
@@ -697,6 +705,10 @@ inspect
   auth [-y|--yes]             which coding harnesses are installed here, and
                               whether a box can borrow their credentials; asks
                               once, then writes what it found (--yes: don't ask)
+  auth connect claude         connect a Claude subscription for new boxes
+  auth connect codex          borrow the current local Codex session
+  auth list                  list named personal connections
+  auth --help                connection, check, explain and reconnect commands
 
 fleet                         several boxes off one checkout, one per template
   fleet                       pickers: name it, pick the roster, watch the board
@@ -712,6 +724,7 @@ fleet                         several boxes off one checkout, one per template
 options                       (before the verb or after it — same thing)
   -t, --template NAME         template a NEW box boots from (open, up)
   --template-any              accept a template name the config doesn't know
+  --connection ID             choose a connection for a NEW box (open, up)
   -b, --box KEY               act on that box instead of this worktree's
   --json                      machine-readable output (list, status, wait)
   --force                     let `pull` overwrite a dirty or non-git tree
@@ -744,10 +757,10 @@ USAGE
 pre_args=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --box|-b|--template|-t)
+    --box|-b|--template|-t|--connection)
       [ $# -ge 2 ] || { echo "e2b-box: $1 needs a value" >&2; exit 2; }
       pre_args+=("$1" "$2"); shift 2 ;;
-    --box=*|--template=*|--template-any|--json) pre_args+=("$1"); shift ;;
+    --box=*|--template=*|--connection=*|--template-any|--json) pre_args+=("$1"); shift ;;
     *) break ;;
   esac
 done
@@ -795,6 +808,21 @@ if [ "$cmd" = fleet ]; then
   HERDR_E2B_FLEET_CLI="e2b-box fleet" exec "$DIR/e2b-fleet" ${1+"$@"}
 fi
 
+# Auth owns its subcommand flags (including explain --template and list --json).
+if [ "$cmd" = auth ]; then
+  node_bin=$(e2b_node) || { echo "e2b-box auth: needs Node >= 22" >&2; exit 1; }
+  for a in "$@"; do
+    case "$a" in --help|-h) exec "$node_bin" "$PLUGIN_DIR/src/auth-cli.js" --help ;; esac
+  done
+  case "${1:-}" in
+    discover) shift; exec "$node_bin" "$PLUGIN_DIR/src/harness-auth.js" --discover ${1+"$@"} ;;
+    ""|--yes|-y) exec "$node_bin" "$PLUGIN_DIR/src/harness-auth.js" ${1+"$@"} ;;
+    --help|-h|help|connect|list|explain|check|reconnect|disconnect|--json|--template|-t|--connection|--template=*|--connection=*)
+      exec "$node_bin" "$PLUGIN_DIR/src/auth-cli.js" ${1+"$@"} ;;
+    *) echo "e2b-box auth: unknown option or command — run e2b-box auth --help" >&2; exit 2 ;;
+  esac
+fi
+
 # The board, under the same one-CLI rule as `fleet`. Dispatched up here for the
 # same reason too: the dashboard takes its own flags and must not have them eaten
 # by the `--template` pre-parser below.
@@ -827,6 +855,7 @@ done
 # Everything else is left in "$@" for the verb to read (e.g. pull --force).
 template=""
 template_any=0
+connection=""
 box_flag=""
 json=0
 args=()
@@ -837,6 +866,11 @@ while [ $# -gt 0 ]; do
       template="$2"; shift 2 ;;
     --template=*) template="${1#*=}"; shift ;;
     --template-any) template_any=1; shift ;;
+    --connection)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "e2b-box: --connection needs a connection name" >&2; exit 2; }
+      connection="$2"; shift 2 ;;
+    --connection=*)
+      connection="${1#*=}"; [ -n "$connection" ] || { echo "e2b-box: --connection needs a connection name" >&2; exit 2; }; shift ;;
     --box|-b)
       [ $# -ge 2 ] || { echo "e2b-box: $1 needs a box key — see: e2b-box list" >&2; exit 2; }
       box_flag="$2"; shift 2 ;;
@@ -852,6 +886,13 @@ set -- ${args[@]+"${args[@]}"}
 # in (the everyday case, and why most commands take no argument at all).
 key="${box_flag:-${KEY:-$(key_from_cwd)}}"
 [ -z "$key" ] && key="workspace"
+if [ -n "$connection" ]; then
+  case "$cmd" in open|up) ;; *) echo "e2b-box: --connection is only supported for a new box (open, up)" >&2; exit 2 ;; esac
+  if [ -n "$(field "$key" sandboxId)" ] || [ "$(field "$key" status)" = provisioning ]; then
+    echo "e2b-box: --connection applies to a new box. This box retains its existing credentials; kill it explicitly before recreating." >&2
+    exit 1
+  fi
+fi
 
 # Addressing another box by key is only safe for verbs that talk to the E2B API
 # and nothing else. The rest read or write the LOCAL tree, so pointing them at
@@ -990,24 +1031,6 @@ case "$cmd" in
     row "[ok]" "tracked boxes" "${#dfiles[@]}  (e2b-box list)"
     [ "$warn" -eq 1 ] && echo "" && echo "warnings above are the fixes — nothing here changed anything." >&2
     exit 0
-    ;;
-  auth)
-    # Which coding harnesses are installed HERE, whether this plugin can borrow
-    # their credentials for a box, and — after ONE confirmation for the whole
-    # batch — a generated auth.toml beside your config.toml recording what it
-    # found. Your own config.toml is never written by this or any other verb.
-    #
-    # An explicit verb rather than something `open` does for you — probing spawns
-    # binaries, and a fleet creates several boxes at once. Keeping it out of that path
-    # is the whole reason it is a command you type.
-    #
-    # `--yes` skips the question, which is how install.sh calls it. Without a
-    # terminal and without that flag it reports and writes nothing: consent
-    # inferred from a pipe is not consent.
-    node_bin=$(e2b_node) || { echo "e2b-box auth: needs Node >= 22 (set HERDR_E2B_NODE=/path/to/node)" >&2; exit 1; }
-    # Only `--yes` is forwarded, and the node side rejects anything else — passing
-    # the rest on would let `auth --typo` look like it did something.
-    exec "$node_bin" "$PLUGIN_DIR/src/harness-auth.js" ${1+"$@"}
     ;;
   list)
     shopt -s nullglob
@@ -1148,7 +1171,7 @@ case "$cmd" in
       *)
         [ -z "$template" ] && template=$(pick_template "$key")
         echo "provisioning E2B sandbox for '$key'${template:+ ($template)} in the background…"
-        provision_from_cwd "$key" ensure "$template"
+        provision_from_cwd "$key" ensure "$template" || exit 1
         echo "watch: e2b-box logs   ·   attach when ready: e2b-box open"
         ;;
     esac

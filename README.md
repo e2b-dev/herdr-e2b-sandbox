@@ -50,6 +50,67 @@ sign-in screen. It asks for no harness credential and cannot fail the install: a
 machine with no harnesses installed just gets a report. Install a new harness
 later and re-run `e2b-box auth` yourself; nothing probes on its own.
 
+`auth` and `auth discover` report a compact ASCII table with agent, auth method (OAuth token,
+OAuth session, or API key), source, and status. The overview combines saved connections,
+manual configuration, and discovered credentials, and shows setup steps only
+where needed. Missing, expired, or ambiguous selected connections require attention;
+the report never substitutes a lower-priority key. “Configured” describes local
+credential availability, not verified authentication inside a box. Saving discovery
+updates only `auth.toml`; your config and connections stay unchanged. Use
+`auth explain --template NAME` for paths and account details. Narrow terminals
+omit secondary columns; TTY colors respect `NO_COLOR`.
+
+For a named connection you explicitly choose for new boxes:
+
+```sh
+e2b-box auth connect claude --name work     # browser approval, token captured privately
+e2b-box auth connect codex                  # borrow your local subscription session
+e2b-box auth list
+e2b-box auth explain --template claude
+e2b-box up -t claude --connection work
+```
+
+Claude's local subscription type and organization are detected automatically;
+Team/Enterprise membership does not enable sharing. Connections currently have
+personal access. `--org` requires a future shared service. Local account metadata
+is labeled separately because a browser authorization can select another account.
+Without `--name`, a detected Team/Enterprise organization suggests a name such as
+`claude-e2b`; Pro/Max suggests `claude-personal`, and an unknown plan suggests
+`claude-local`. A Team/Enterprise plan without a usable organization name uses
+`claude-team` or `claude-enterprise`. The preview and list show `Local account`
+(for example, `Claude Team · E2B`) separately from `Access: Only you`. Existing IDs
+stay unchanged, including when reconnected; use the ID shown by `auth list`.
+
+Interactive Claude capture requires Python 3 and the Claude CLI. An existing
+setup-token can also be supplied through `auth connect claude --token-stdin --yes`
+using a secret manager or another private pipe. Never put a token in command
+arguments. Metadata and token files live under `$CONFIG_DIR/connections/`, protected
+by directory/file permissions (0700/0600); the token files are not encrypted.
+
+`auth check ID` checks local availability and known expiry without making a model
+request. `auth reconnect ID` replaces the local credential; `auth disconnect ID`
+removes it. Existing boxes keep their credentials until explicitly recreated.
+Codex borrowing excludes the real refresh token and lasts until bearer expiry.
+
+The only connection for a harness becomes its default. With several connections
+(`auth connect claude --name work`), choose `--connection work`, or set
+`connection = "work"` under `[templates.claude]` in `config.toml`. A selected
+connection removes competing auth environment variables. If it is unavailable,
+the command fails instead of selecting another billing account. Without any named
+connection, the existing discovery/config precedence continues to apply.
+`auth discover` is an explicit alias for the original `auth` command.
+
+For a custom template such as `drew-claude`, explicitly choose its connection:
+`e2b-box up -t drew-claude --connection claude-personal`, or add this to `config.toml`:
+
+```toml
+[templates.drew-claude]
+connection = "claude-personal"
+```
+
+That binding also selects the harness's onboarding seed, unless the template has
+its own `[fleet.seed]` override. Template names are never guessed from substrings.
+
 Bind the three verbs you press (`prefix+e` is herdr's own `edit_scrollback` —
 stay off it):
 

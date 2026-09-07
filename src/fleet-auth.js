@@ -23,7 +23,8 @@ import { readFileSync } from "node:fs"
 import { pathToFileURL } from "node:url"
 
 import { CONFIG_PATH, loadConfig, resolveEnv } from "./config.js"
-import { credentialVars, harnessForTemplate, remedyFor, remedyVarFor } from "./harnesses.js"
+import { HARNESSES, credentialVars, harnessForTemplate, remedyFor, remedyVarFor } from "./harnesses.js"
+import { selectConnection } from "./connections.js"
 
 /**
  * The members of `members` whose box will boot with no credential in it.
@@ -51,7 +52,8 @@ export function unauthenticatedMembers(members = [], cfg = {}, env = {}) {
   const gaps = []
   const agents = cfg?.fleetAgents || {}
   for (const m of members) {
-    const h = harnessForTemplate(m?.template)
+    const selected = selectConnection(cfg, m?.template)
+    const h = selected ? { id: selected.harness, ...HARNESSES[selected.harness] } : harnessForTemplate(m?.template)
     if (!h?.boxVar) continue
     // A control arm has nothing to authenticate. `[fleet.agents] <t> = ""` is the
     // deliberate "this member is a plain shell", and a shell never sees a sign-in
@@ -158,17 +160,15 @@ export function formatBoxAuthNote(template, cfg = {}, env = {}, file = CONFIG_PA
 //
 // Reads the member plan src/fleet-name.js already produced — one `<template>\t
 // <branch>\t<label>` line per member — off stdin, and prints the warning (empty
-// output = nothing to warn about). A config it cannot read is no warning rather than
-// a refusal, the same rule src/fleet-seed.js follows: a warning that could take a
-// fleet down would be worse than the thing it warns about. bin/e2b-fleet reads only
-// this process's stdout, so nothing it can do here stops the fleet either way.
+// output = nothing to warn about). Missing discovery credentials warn and launch;
+// a broken config or selected connection fails before worktrees are created.
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   let cfg = null
   try {
     cfg = loadConfig()
-  } catch {
-    // An unreadable config is not a warning, and least of all a refusal — the same
-    // rule src/fleet-seed.js follows when it cannot read `[fleet.seed]`.
+  } catch (error) {
+    console.error(`e2b-box fleet: ${error.message}`)
+    process.exit(1)
   }
   // `--box <template>` is the single-box note bin/e2b-box prints on attach; without
   // it this reads a member plan off stdin, which is what bin/e2b-fleet wants.
@@ -182,5 +182,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     .map((line) => line.split("\t"))
     .filter(([template, , label]) => template && label)
     .map(([template, , label]) => ({ template, label }))
-  if (cfg) process.stdout.write(formatFleetAuthWarning(unauthenticatedMembers(members, cfg, process.env)))
+  try {
+    if (cfg) process.stdout.write(formatFleetAuthWarning(unauthenticatedMembers(members, cfg, process.env)))
+  } catch (error) {
+    console.error(`e2b-box fleet: ${error.message}`)
+    process.exitCode = 1
+  }
 }

@@ -82,7 +82,7 @@ done
 before=$(ls -1 "$HERDR_PLUGIN_STATE_DIR/boxes" | wc -l | tr -d ' ')
 for v in open up pull sync exec status list wait doctor auth; do
   out=$("$E2B" "$v" --help 2>/dev/null); rc=$?
-  { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "^e2b-box —"; } \
+  { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qE "^e2b-box( auth)? —"; } \
     && ok "$v --help → usage, exit 0" || bad "$v --help (rc=$rc)"
 done
 after=$(ls -1 "$HERDR_PLUGIN_STATE_DIR/boxes" | wc -l | tr -d ' ')
@@ -213,12 +213,12 @@ known=$(node -e 'import(process.argv[1]).then(m=>console.log(Object.keys(m.HARNE
 missing=""; n=0
 for h in $known; do
   n=$((n + 1))
-  printf '%s' "$out" | grep -q "^\[.*\] *$h " || missing="$missing $h"
+  printf '%s' "$out" | grep -qi "^  | $h *|" || missing="$missing $h"
 done
 { [ "$rc" -eq 0 ] && [ -z "$missing" ] && [ "$n" -gt 0 ]; } \
   && ok "auth prints a row per known harness, exit 0" || bad "auth (rc=$rc, missing:$missing, out=$out)"
 # Whatever this machine has, no row may be silently dropped and none invented.
-printf '%s' "$out" | grep -q "of $n harnesses" \
+[ "$(printf '%s\n' "$out" | awk '/^  \| / && $2 != "AGENT" { n++ } END { print n+0 }')" -eq "$n" ] \
   && ok "auth counts every harness in the table" || bad "auth harness count (want $n, out=$out)"
 printf '%s' "$out" | grep -q "nothing was written" \
   && ok "auth says it wrote nothing" || bad "auth omitted the nothing-was-written promise"
@@ -235,13 +235,9 @@ cfg_after=$(ls -1A "$cfgdir" | wc -l | tr -d ' ')
 
 # A key in the environment is borrowable and must be reported as such — and the
 # report must never contain the value, only the variable's name.
-out=$(ANTHROPIC_API_KEY=sk-ant-test-not-real "$E2B" auth </dev/null 2>&1)
-# Two truthful phrasings, because the row depends on whether the HARNESS is here:
-# "key found (env)" when it is, and "not installed here, but ... is set" when it is
-# not. CI has no claude, so asserting only the first tested the developer's laptop
-# rather than the behaviour. What must hold either way is that the credential is
-# seen and reported as usable.
-printf '%s' "$out" | grep -qE "key found|a box can still use it" \
+out=$(ANTHROPIC_API_KEY=sk-ant-test-not-real HERDR_PLUGIN_CONFIG_DIR="$cfgdir" "$E2B" auth </dev/null 2>&1)
+# Discovery works even when the local Claude binary is absent.
+printf '%s' "$out" | grep -q "Environment" \
   && ok "auth sees a credential in the environment" || bad "auth missed an env credential (out=$out)"
 printf '%s' "$out" | grep -q "sk-ant-test-not-real" \
   && bad "auth PRINTED A SECRET VALUE" || ok "auth never prints a credential's value"
@@ -277,7 +273,7 @@ grep -q '^ANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"$' "$ydir/auth.toml" \
 if command -v codex >/dev/null 2>&1; then
   fh="$TMP/file-home"; mkdir -p "$fh/.codex" "$fh/cfg"
   printf '{"OPENAI_API_KEY":"sk-fake-file-value","auth_mode":"apikey"}' > "$fh/.codex/auth.json"
-  env -u OPENAI_API_KEY -u CODEX_API_KEY HOME="$fh" HERDR_PLUGIN_CONFIG_DIR="$fh/cfg" \
+  env -u OPENAI_API_KEY -u CODEX_API_KEY -u CODEX_HOME HOME="$fh" HERDR_PLUGIN_CONFIG_DIR="$fh/cfg" \
     "$E2B" auth --yes </dev/null >/dev/null 2>&1
   { grep -q '^path = ' "$fh/cfg/auth.toml" \
     && ! grep -q 'sk-fake-file-value' "$fh/cfg/auth.toml"; } \
@@ -285,7 +281,7 @@ if command -v codex >/dev/null 2>&1; then
     || bad "file-sourced pointer (got: $(cat "$fh/cfg/auth.toml" 2>/dev/null))"
   # ...and the pointer still delivers. Resolved through the loader with the same
   # fabricated HOME, which is exactly what provision.js does at create time.
-  got=$(env -u OPENAI_API_KEY -u CODEX_API_KEY HOME="$fh" HERDR_PLUGIN_CONFIG_DIR="$fh/cfg" \
+  got=$(env -u OPENAI_API_KEY -u CODEX_API_KEY -u CODEX_HOME HOME="$fh" HERDR_PLUGIN_CONFIG_DIR="$fh/cfg" \
     node -e 'import("'"$ROOT"'/src/config.js").then(m=>{const e=m.resolveEnv(m.loadConfig(),"codex",process.env)||{};process.stdout.write(String(e.OPENAI_API_KEY||""))})' 2>/dev/null)
   [ "$got" = "sk-fake-file-value" ] \
     && ok "the pointer resolves to the real key when a box is created" \
@@ -2422,7 +2418,7 @@ import os, pty, select, sys, time
 E2B, CFG, ANSWER = sys.argv[1], sys.argv[2], sys.argv[3].encode()
 pid, fd = pty.fork()
 if pid == 0:
-    os.execve(E2B, [E2B, "auth"], dict(os.environ, HERDR_PLUGIN_CONFIG_DIR=CFG))
+    os.execve(E2B, [E2B, "auth", "discover"], dict(os.environ, HERDR_PLUGIN_CONFIG_DIR=CFG))
 buf, sent, end = b"", False, time.time() + 60
 while time.time() < end:
     if not select.select([fd], [], [], 0.2)[0]:

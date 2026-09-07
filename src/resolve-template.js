@@ -67,6 +67,7 @@ const sources = discoveredSources(cfg)
 // A session is not a key and an expired one is not a credential at all, so the
 // three tags read as three different sentences rather than one with a suffix.
 const mark = (src) =>
+  src === "connection" ? "saved connection" : src === "connection-choice" ? "choose connection" :
   src === "session" ? "signed-in session" : src === "session-expired" ? "session EXPIRED" : `key (${src})`
 const rows = choices.map((t) => `${t}\t${sources[t] ? mark(sources[t]) : ""}`)
 process.stdout.write(`${decided}\t${resolved}\n${rows.join("\n")}\n`)
