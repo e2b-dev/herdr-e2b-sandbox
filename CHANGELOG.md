@@ -6,6 +6,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Dashboard/popups paint before configuration and region resolution finishes.
+  Startup reads display settings once in the background; periodic region checks
+  also run off the UI thread so they cannot interrupt painting or keyboard input.
+
 ### Changed
 
 - `e2b-box auth` now combines saved connections, config, and discovery in a compact
@@ -18,6 +24,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Claude connection names use the detected organization (such as `claude-e2b`)
   for Team/Enterprise accounts. Setup and list distinguish the local account
   from connection access; existing connection IDs remain unchanged.
+
+- Dashboard `C` config-path picker: Enter opens the active `config.toml`,
+  `auth.toml`, or saved connections directory; `c` copies its path, including
+  when there are no boxes. `[dashboard].config_opener` selects a custom shell
+  command, with the plugin directory and selected path passed as arguments.
 
 - Named personal coding-agent connections: `auth connect`, `list`, `explain`,
   `check`, `reconnect`, and `disconnect`. Claude uses first-party setup-token
