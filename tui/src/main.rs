@@ -46,6 +46,7 @@ use theme::{
 };
 
 struct App {
+    popup: bool,
     dir: PathBuf,
     config_dir: PathBuf,
     config_path_selection: Option<usize>,
@@ -70,18 +71,21 @@ const CONFIG_PATHS: [(&str, &str); 3] = [
     ("Saved connections", "connections"),
 ];
 
-fn config_dir() -> PathBuf {
-    let nonempty_env = |name| std::env::var_os(name).filter(|v| !v.is_empty());
-    nonempty_env("HERDR_PLUGIN_CONFIG_DIR")
+fn herdr_config_dir() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            nonempty_env("XDG_CONFIG_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| {
-                    PathBuf::from(nonempty_env("HOME").unwrap_or_default()).join(".config")
-                })
-                .join("herdr/plugins/config/e2b-dev.herdr-e2b")
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
         })
+        .join("herdr")
+}
+
+fn config_dir() -> PathBuf {
+    std::env::var_os("HERDR_PLUGIN_CONFIG_DIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| herdr_config_dir().join("plugins/config/e2b-dev.herdr-e2b"))
 }
 
 impl App {
@@ -182,9 +186,7 @@ fn open_config_path(path: &Path, configured_opener: Option<&str>) -> String {
     let opener = configured_opener
         .filter(|opener| !opener.trim().is_empty())
         .unwrap_or(default_opener);
-    let plugin_dir = std::env::var_os("E2B_DASH_PLUGIN_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let config_root = herdr_config_dir();
     let shell = std::env::var_os("SHELL")
         .filter(|shell| !shell.is_empty())
         .unwrap_or_else(|| {
@@ -199,9 +201,9 @@ fn open_config_path(path: &Path, configured_opener: Option<&str>) -> String {
     // Positional arguments keep paths out of shell code; interactive mode loads aliases/functions.
     command
         .args(["-ic", opener, "e2b-dash"])
-        .arg(&plugin_dir)
+        .arg(&config_root)
         .arg(path)
-        .current_dir(&plugin_dir);
+        .current_dir(&config_root);
     match command.stdin(std::process::Stdio::null()).output() {
         Ok(output) if output.status.success() => format!("opened {}", path.display()),
         Ok(output) => format!(
@@ -323,6 +325,7 @@ fn draw(f: &mut Frame, app: &mut App) {
     let region = region_label(&domain);
 
     let n = app.boxes.len();
+    let sandbox_label = if n == 1 { "sandbox" } else { "sandboxes" };
     let theme_name = THEMES[app.theme_idx];
     let width = chunks[0].width as usize;
     let theme_txt = format!("theme: {theme_name}");
@@ -348,12 +351,16 @@ fn draw(f: &mut Frame, app: &mut App) {
     let region_len = "region ".chars().count() + region.chars().count() + if mixed { 2 } else { 0 };
     // Widest title that still leaves room for the region, in order of preference;
     // the last one is region-only, for a pane that can afford nothing else.
-    let titles = [
-        format!("  herdr-e2b-sandbox · {n} sandboxes · "),
-        "  herdr-e2b-sandbox · ".to_string(),
-        "  e2b · ".to_string(),
-        "  ".to_string(),
-    ];
+    let titles = if app.popup {
+        vec![format!("  {n} {sandbox_label} · "), "  ".to_string()]
+    } else {
+        vec![
+            format!("  herdr-e2b-sandbox · {n} {sandbox_label} · "),
+            "  herdr-e2b-sandbox · ".to_string(),
+            "  e2b · ".to_string(),
+            "  ".to_string(),
+        ]
+    };
     let fits = |title: &String, tail: usize| title.chars().count() + region_len + tail < width;
     // Prefer keeping the right-hand pair; give it up before shortening the title
     // further, because a pane wide enough for the full title reads better with it
@@ -596,6 +603,7 @@ fn main() -> std::io::Result<()> {
             initial_theme_idx_with_default(&display.theme)
         });
     let mut app = App {
+        popup,
         dir,
         config_dir,
         config_path_selection: None,
@@ -613,7 +621,11 @@ fn main() -> std::io::Result<()> {
         domain: String::new(),
         // Read once: the manifest cannot change under a running dashboard without
         // the plugin being reloaded, which restarts this process anyway.
-        version: plugin_version(),
+        version: if popup && std::env::var_os("HERDR_POPUP_VERSION").is_some() {
+            None
+        } else {
+            plugin_version()
+        },
         table_area: Rect::default(),
         branch_w: 0,
     };

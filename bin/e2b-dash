@@ -46,7 +46,7 @@ environment
   E2B_DASH_THEME              starting theme; 'T' inside the board still wins
   HERDR_PLUGIN_STATE_DIR      where box records live
   HERDR_PLUGIN_CONFIG_DIR     config.toml, auth.toml, and saved connections
-  E2B_DASH_CONFIG_OPENER      shell command; $1 = plugin directory, $2 = selected path
+  E2B_DASH_CONFIG_OPENER      shell command; $1 = Herdr config directory, $2 = selected path
 USAGE
     exit 0 ;;
   -V|--version) printf 'herdr-e2b %s\n' "$(plugin_version)"; exit 0 ;;

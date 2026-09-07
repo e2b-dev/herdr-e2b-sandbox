@@ -8,6 +8,7 @@
 //   panes <title>  one line, three space-separated fields:
 //                  "<focused_pane> <dashboard_pane> <tab_pane_ids>",
 //                  "-" for any absent value, tab ids comma-separated.
+//   origin         invoking pane from plugin context or HERDR_PANE_ID.
 //   procs          foreground process names, one per line (nothing if none).
 //
 // Empty or malformed input is an ordinary outcome here — herdr isn't running,
@@ -42,11 +43,13 @@ function panesLine(title) {
 // process.exit() can truncate a pipe mid-write, so set exitCode and fall out.
 if (mode === "panes") {
   console.log(panesLine(title));
+} else if (mode === "origin") {
+  console.log(doc?.focused_pane_id || doc?.focusedPaneId || process.env.HERDR_PANE_ID || "-");
 } else if (mode === "procs") {
   for (const p of doc?.result?.process_info?.foreground_processes ?? []) {
     console.log(p?.name ?? "");
   }
 } else {
-  console.error(`pane-parse: unknown mode '${mode ?? ""}' (expected 'panes' or 'procs')`);
+  console.error(`pane-parse: unknown mode '${mode ?? ""}' (expected 'panes', 'origin' or 'procs')`);
   process.exitCode = 2;
 }

@@ -1,7 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs"
+import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -44,12 +44,13 @@ function fixture(t) {
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const bins = path.join(root, "bin")
   mkdirSync(bins)
+  mkdirSync(path.join(root, "herdr"))
   for (const h of Object.values(HARNESSES)) writeFileSync(path.join(bins, h.bin), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
   writeFileSync(path.join(bins, "claude"), `#!/usr/bin/env python3\nimport sys,json\nif sys.argv[1:]==['auth','status']:\n print(json.dumps({'loggedIn':True,'subscriptionType':'team','orgName':'E2B'}))\nelse:\n print(${JSON.stringify(REPLACEMENT)})\n`, { mode: 0o755 })
   const directory = path.join(root, "connections")
   const record = saveConnection({ id: "claude-work", harness: "claude", method: "setup-token",
     detected: classifySubscription({ subscriptionType: "team", orgName: "E2B" }) }, TOKEN, { directory })
-  writeFileSync(path.join(root, "config.toml"), `[dashboard]\nconfig_opener = 'printf "%s" "$2" > "$OPEN_CAPTURE"'\n`)
+  writeFileSync(path.join(root, "config.toml"), `[dashboard]\nconfig_opener = 'printf "%s\\n" "$1" "$2" "$PWD" > "$OPEN_CAPTURE"'\n`)
   const env = { PATH: `${bins}:${process.env.PATH}`, HOME: root, XDG_CONFIG_HOME: root, XDG_DATA_HOME: root,
     HERDR_PLUGIN_CONFIG_DIR: root, HERDR_PLUGIN_STATE_DIR: path.join(root, "state"),
     TERM: "xterm-256color", NO_COLOR: "1", SHELL: "/bin/sh", OPEN_CAPTURE: path.join(root, "opened") }
@@ -102,7 +103,9 @@ test("auth manager opens the configured editor and saves discovery only after an
     { wait: "[y/N]", send: "y\r" },
     { wait: "Saved discovery to auth.toml", send: "q" },
   ])
-  assert.equal(readFileSync(path.join(f.root, "opened"), "utf8"), path.join(f.root, "config.toml"))
+  assert.deepEqual(readFileSync(path.join(f.root, "opened"), "utf8").trim().split("\n"), [
+    path.join(f.root, "herdr"), path.join(f.root, "config.toml"), realpathSync(path.join(f.root, "herdr")),
+  ])
   assert.ok(!readFileSync(path.join(f.root, "auth.toml"), "utf8").includes(TOKEN))
   assert.equal(readConnections(f.directory)[0].revision, f.record.revision)
 })
