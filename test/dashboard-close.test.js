@@ -15,12 +15,15 @@ test("popup exit preserves its last frame and hidden cursor until Herdr removes 
     encoding: "utf8",
     timeout: 15000,
     input: String.raw`
-import fcntl, os, pathlib, pty, select, signal, struct, subprocess, sys, tempfile, termios, time
+import fcntl, os, pathlib, pty, re, select, signal, struct, subprocess, sys, tempfile, termios, time
 root = pathlib.Path(sys.argv[1])
 with tempfile.TemporaryDirectory(prefix='dash-close-') as temp:
     env = dict(os.environ, TERM='xterm-256color', HERDR_PLUGIN_STATE_DIR=temp, HERDR_PLUGIN_CONFIG_DIR=temp)
     env.pop('E2B_DASH_POPUP', None)
-    for popup in [False, True]:
+    version = ('v' + re.search(r'^version = "([^"]+)"', (root / 'herdr-plugin.toml').read_text(), re.M)[1]).encode()
+    for popup, version_in_border in [(False, False), (True, False), (True, True)]:
+        if version_in_border: env['HERDR_POPUP_VERSION'] = version.decode()[1:]
+        else: env.pop('HERDR_POPUP_VERSION', None)
         for key in [b'q', b'\x1b']:
             master, slave = pty.openpty()
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 35, 140, 0, 0))
@@ -34,6 +37,8 @@ with tempfile.TemporaryDirectory(prefix='dash-close-') as temp:
                     if select.select([master], [], [], 0.02)[0]: output += os.read(master, 65536)
                 assert b'config paths' in output, 'Dashboard did not draw its first frame'
                 assert b'\x1b[?1049h' in output, 'Dashboard never entered its alternate screen'
+                assert (b'herdr-e2b-sandbox' in output) != popup, 'Popup repeats its border title in the dashboard header'
+                assert (version in output) != version_in_border, 'Version must move out of the dashboard only when Herdr supplies it in the border'
                 os.write(master, key)
                 closing = b''
                 deadline = time.monotonic() + 3

@@ -27,7 +27,7 @@ exit "\${POPUP_EXIT:-0}"
     dir,
     run: (binary, args = [], env = {}) => spawnSync(path.join(root, "bin", binary), args, {
       encoding: "utf8",
-      env: { ...process.env, HERDR_BIN_PATH: herdr, HERDR_PLUGIN_STATE_DIR: dir, POPUP_CALLS: calls, ...env },
+      env: { ...process.env, HERDR_PLUGIN_CONTEXT_JSON: "", HERDR_PANE_ID: "", HERDR_BIN_PATH: herdr, HERDR_PLUGIN_STATE_DIR: dir, POPUP_CALLS: calls, ...env },
     }),
   }
 }
@@ -35,18 +35,21 @@ exit "\${POPUP_EXIT:-0}"
 test("settings actions launch pane and popup views without needing their own terminal", (t) => {
   const f = fixture(t)
   const manifest = TOML.parse(readFileSync(path.join(root, "herdr-plugin.toml"), "utf8"))
-  for (const id of ["dashboard", "popup"]) {
+  assert.equal(manifest.panes.find((pane) => pane.id === "popup").title, " herdr-e2b-sandbox")
+  for (const id of ["dashboard", "popup", "open", "fleet"]) {
     const action = manifest.actions.find((action) => action.id === id)
     const result = spawnSync(action.command[0], action.command.slice(1), {
       encoding: "utf8",
-      env: { ...process.env, HERDR_PLUGIN_ROOT: root, HERDR_BIN_PATH: f.herdr, HERDR_PLUGIN_STATE_DIR: f.dir, POPUP_CALLS: f.calls },
+      env: { ...process.env, HERDR_PLUGIN_ROOT: root, HERDR_PLUGIN_CONTEXT_JSON: "", HERDR_PANE_ID: "", HERDR_BIN_PATH: f.herdr, HERDR_PLUGIN_STATE_DIR: f.dir, POPUP_CALLS: f.calls },
     })
     assert.equal(result.status, 0, result.stderr)
     const called = readFileSync(f.calls, "utf8").trim().split("\n")
     if (id === "dashboard") {
       assert.deepEqual(called, ["pane", "run", "w1:p1", "e2b-dash"])
+    } else if (id === "open" || id === "fleet") {
+      assert.deepEqual(called, ["plugin", "pane", "open", "--plugin", manifest.id, "--entrypoint", id === "open" ? "box" : "fleet", "--placement", "split", "--target-pane", "w1:p1", "--direction", "down", "--focus"])
     } else {
-      assert.deepEqual(called, ["plugin", "pane", "open", "--plugin", manifest.id, "--entrypoint", "dashboard", "--placement", "popup", "--width", "90%", "--height", "85%", "--env", "E2B_DASH_POPUP=1"])
+      assert.deepEqual(called, ["plugin", "pane", "open", "--plugin", manifest.id, "--entrypoint", "popup", "--placement", "popup", "--width", "90%", "--height", "85%", "--env", "E2B_DASH_POPUP=1"])
     }
   }
 })
@@ -57,7 +60,7 @@ test("popup opens the existing dashboard in a floating terminal, including throu
     const result = f.run(binary, args)
     assert.equal(result.status, 0, result.stderr)
     assert.deepEqual(readFileSync(f.calls, "utf8").trim().split("\n"), [
-      "plugin", "pane", "open", "--plugin", "e2b-dev.herdr-e2b", "--entrypoint", "dashboard",
+      "plugin", "pane", "open", "--plugin", "e2b-dev.herdr-e2b", "--entrypoint", "popup",
       "--placement", "popup", "--width", "90%", "--height", "85%",
       "--env", "E2B_DASH_POPUP=1",
     ])
@@ -89,10 +92,25 @@ printf '%s\\n' "$HERDR_PLUGIN_ID" "$HERDR_PLUGIN_ROOT" "$HERDR_PLUGIN_CONFIG_DIR
   const config = path.join(f.dir, "custom config")
   const result = spawnSync("bash", [path.join(plugin, "bin/e2b-popup"), "--render"], {
     encoding: "utf8",
-    env: { ...process.env, HERDR_BIN_PATH: f.herdr, POPUP_CALLS: f.calls, HERDR_PLUGIN_STATE_DIR: f.dir, HERDR_PLUGIN_CONFIG_DIR: config },
+    env: { ...process.env, HERDR_PLUGIN_CONTEXT_JSON: "", HERDR_PANE_ID: "", HERDR_BIN_PATH: f.herdr, POPUP_CALLS: f.calls, HERDR_PLUGIN_STATE_DIR: f.dir, HERDR_PLUGIN_CONFIG_DIR: config },
   })
   assert.equal(result.status, 0, result.stderr)
   assert.deepEqual(result.stdout.trim().split("\n"), ["e2b-dev.herdr-e2b", realpathSync(plugin), config, f.dir, "1"])
   assert.throws(() => readFileSync(f.calls), { code: "ENOENT" })
   assert.equal(f.run("e2b-popup", ["--render", "unexpected"]).status, 2)
+})
+
+test("box and fleet splits follow the invoking pane and focus below it", (t) => {
+  const f = fixture(t)
+  for (const [binary, entrypoint] of [["e2b-box-open", "box"], ["e2b-fleet-open", "fleet"]]) {
+    for (const context of [JSON.stringify({ focused_pane_id: "w2:p3" }), ""]) {
+      const result = f.run(binary, [], { HERDR_PLUGIN_CONTEXT_JSON: context, HERDR_PANE_ID: "w3:p4" })
+      assert.equal(result.status, 0, result.stderr)
+      assert.deepEqual(readFileSync(f.calls, "utf8").trim().split("\n"), [
+        "plugin", "pane", "open", "--plugin", "e2b-dev.herdr-e2b", "--entrypoint", entrypoint,
+        "--placement", "split", "--target-pane", context ? "w2:p3" : "w3:p4", "--direction", "down", "--focus",
+      ])
+    }
+    assert.equal(f.run(binary, [], { POPUP_EXIT: "1", HERDR_PANE_ID: "w3:p4" }).status, 1)
+  }
 })

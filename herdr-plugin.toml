@@ -26,11 +26,7 @@ command = ["bash", "bin/teardown-worktree"]
 # print to the plugin command log (herdr plugin log list --plugin e2b-dev.herdr-e2b).
 
 # Send the current worktree to E2B and open its shell (provisions if needed).
-# This hands off to a PANE rather than running e2b-box here: a herdr action has
-# its output wired to the plugin command log and no terminal at all, so it can
-# neither host a shell (it printed "this pane has no interactive terminal") nor
-# ask which template to boot. e2b-box-open fills the pane you pressed the key in
-# — like the dashboard toggle — and only splits when that pane is busy.
+# The chooser and shell run in a new, focused pane below the invoking pane.
 [[actions]]
 id = "open"
 title = "Open E2B sandbox"
@@ -39,11 +35,9 @@ command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box-open\""]
 
 # Fan this checkout out into a fleet: one worktree, workspace and box per
 # template on the roster, all off the same base ref. Two picker screens (task
-# slug, then roster), then the pane becomes the dashboard.
-# Hands off to a PANE for exactly the reason `open` does: an action has no
-# terminal, so it can neither draw the pickers nor read a keypress.
-# e2b-fleet-open fills the pane you pressed the key in and only splits when that
-# pane is busy. Suggested binding:
+# slug, then roster), then the new pane becomes the dashboard.
+# An action has no terminal; e2b-fleet-open opens and focuses a pane below the invoking pane.
+# Suggested binding:
 #   [[keys.command]]
 #   key = "prefix+shift+f"
 #   command = "herdr plugin action invoke fleet --plugin e2b-dev.herdr-e2b"
@@ -179,3 +173,12 @@ id = "dashboard"
 title = "e2b dashboard"
 placement = "zoomed"
 command = ["bash", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/e2b-dash\""]
+
+# The popup carries the project name in its border; its dashboard header is compact.
+[[panes]]
+id = "popup"
+title = " herdr-e2b-sandbox"
+placement = "popup"
+width = "90%"
+height = "85%"
+command = ["bash", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/e2b-popup\" --render"]

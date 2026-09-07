@@ -5,9 +5,8 @@ import { createInterface } from "node:readline/promises"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
 import { stripVTControlCharacters } from "node:util"
-import { AUTH_PATH, CONFIG_PATH, CONNECTIONS_DIR } from "./config-paths.js"
+import { AUTH_PATH, CONFIG_PATH, CONNECTIONS_DIR, HERDR_CONFIG_ROOT } from "./config-paths.js"
 
-const ROOT = fileURLToPath(new URL("..", import.meta.url))
 const AUTH_CLI = fileURLToPath(new URL("auth-cli.js", import.meta.url))
 const clean = (value) => stripVTControlCharacters(String(value)).replace(/[\x00-\x1f\x7f]/g, " ")
 
@@ -95,7 +94,7 @@ export async function openAuthConfig(file, configuredOpener) {
   if (!existsSync(file)) throw new Error(`${path.basename(file)} does not exist yet.${file === AUTH_PATH ? " Press s to save discovery first." : ""}`)
   const opener = configuredOpener?.trim() || (process.platform === "darwin" ? 'open "$2"' : 'xdg-open "$2"')
   return run(process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh"),
-    ["-ic", opener, "e2b-box-auth", ROOT, file], { cwd: ROOT })
+    ["-ic", opener, "e2b-box-auth", HERDR_CONFIG_ROOT, file], { cwd: HERDR_CONFIG_ROOT })
 }
 
 export async function runAuthMenu({ initial, refresh, render, save }) {

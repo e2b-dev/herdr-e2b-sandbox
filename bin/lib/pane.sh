@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
-# Shared pane plumbing for the keybinding entrypoints (e2b-dash-toggle,
-# e2b-box-open). Source this AFTER lib/paths.sh.
-#
-# The reason this exists: herdr has no pane placement meaning "cover exactly this
-# pane" — `zoomed`/`overlay` take the whole tab, `split` halves it, `popup` is a
-# centered box. The only thing that fills one pane exactly is running the program
-# *in* that pane. So both entrypoints ask herdr what the focused pane is doing,
-# and either run there or fall back to a split beside it.
+# Shared pane plumbing for the keybinding entrypoints. Source after lib/paths.sh.
+# The dashboard can reuse an idle pane; box and fleet actions always split below.
 
 # Resolve tools by path, not by PATH: a keybinding runs in herdr's environment,
 # which under a GUI/launchd start can be a bare /usr/bin:/bin. herdr hands
@@ -62,4 +56,20 @@ pane_is_idle() {
     esac
   done < <(pane_procs "$herdr" "$node" "$pane")
   [ "$seen" -gt 0 ]
+}
+
+# Anchor the split to the invocation, even if focus has since moved elsewhere.
+pane_open_below() {
+  local entrypoint="$1" herdr node target
+  herdr=$(pane_herdr) || { echo "e2b: can't find the herdr binary" >&2; return 1; }
+  node=$(pane_node) || { echo "e2b: can't find node — set HERDR_E2B_NODE=/path/to/node" >&2; return 1; }
+  target=$(printf '%s' "${HERDR_PLUGIN_CONTEXT_JSON:-}" | "$node" "$PLUGIN_DIR/src/pane-parse.js" origin)
+  if [ "${target:--}" = "-" ]; then
+    read -r target _ _ <<EOF
+$(pane_query "$herdr" "$node" "")
+EOF
+  fi
+  [ "${target:--}" != "-" ] || { echo "e2b: no invoking pane" >&2; return 1; }
+  "$herdr" plugin pane open --plugin e2b-dev.herdr-e2b --entrypoint "$entrypoint" \
+    --placement split --target-pane "$target" --direction down --focus >/dev/null
 }

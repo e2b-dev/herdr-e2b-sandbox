@@ -20,12 +20,16 @@ with tempfile.TemporaryDirectory(prefix='dash-startup-') as temp:
     (root / 'boxes').mkdir()
     config = root / 'config with spaces'
     config.mkdir()
+    herdr_config = root / '.config' / 'herdr'
+    herdr_config.mkdir(parents=True)
     helper = root / 'settings'
     helper.write_text('#!/bin/sh\nwhile [ ! -e "$RELEASE" ]; do sleep 0.02; done\ncat "$SETTINGS"\n')
     helper.chmod(0o755)
-    (root / 'settings.json').write_text(json.dumps({'theme':'terminal', 'domain':'e2b.dev', 'opener':'printf "%s" "$2" > "$OPEN_LOG"'}))
+    (root / 'settings.json').write_text(json.dumps({'theme':'terminal', 'domain':'e2b.dev', 'opener':'printf "%s\\n" "$1" "$2" "$PWD" > "$OPEN_LOG"'}))
     env = dict(os.environ, TERM='xterm-256color', SHELL='/bin/sh', HERDR_PLUGIN_STATE_DIR=str(root / 'state'), HERDR_PLUGIN_CONFIG_DIR=str(config), E2B_DASH_SETTINGS_CMD=str(helper), E2B_DASH_DOMAIN_CMD=str(helper), E2B_DASH_PLUGIN_DIR=str(root), RELEASE=str(root / 'release'), SETTINGS=str(root / 'settings.json'), OPEN_LOG=str(root / 'opened'))
     env.pop('E2B_DASH_CONFIG_OPENER', None)
+    env.pop('XDG_CONFIG_HOME', None)
+    env['HOME'] = str(root)
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 35, 140, 0, 0))
     process = subprocess.Popen([sys.argv[1], str(root / 'boxes')], stdin=slave, stdout=slave, stderr=slave, env=env, start_new_session=True)
@@ -41,7 +45,7 @@ with tempfile.TemporaryDirectory(prefix='dash-startup-') as temp:
         deadline = time.monotonic() + 2
         while not (root / 'opened').exists() and time.monotonic() < deadline:
             if select.select([master], [], [], 0.05)[0]: os.read(master, 65536)
-        assert (root / 'opened').read_text() == str(config / 'config.toml')
+        assert (root / 'opened').read_text().splitlines() == [str(herdr_config), str(config / 'config.toml'), str(herdr_config.resolve())]
         os.write(master, b'q')
         process.wait(timeout=2)
         assert process.returncode == 0

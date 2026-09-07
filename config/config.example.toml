@@ -221,8 +221,8 @@ server_port  = 3000
 # overrides this). Presets: terminal · solarized-light · tokyo-night · dracula ·
 # nord · gruvbox.
 # theme = "terminal"
-# Optional shell opener: $1 is the plugin directory, $2 the selected config path.
-# Runs in the plugin directory; defaults to shell `open` (macOS) / `xdg-open` (Linux).
+# Optional shell opener: $1 is the Herdr config directory, $2 the selected config path.
+# Runs in $XDG_CONFIG_HOME/herdr (or $HOME/.config/herdr); defaults to shell `open` (macOS) / `xdg-open` (Linux).
 # config_opener = 'code --new-window "$1" "$2"'
 
 [upload]
