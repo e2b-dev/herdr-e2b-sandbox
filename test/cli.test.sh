@@ -17,7 +17,7 @@ for t in jq git node; do command -v "$t" >/dev/null || { echo "cli.test: '$t' no
 
 echo "── lint: bash -n ──"
 for f in "$ROOT"/bin/e2b-box "$ROOT"/bin/e2b-box-open "$ROOT"/bin/e2b-box-pull "$ROOT"/bin/e2b-fleet "$ROOT"/bin/e2b-fleet-open \
-         "$ROOT"/bin/e2b-dash "$ROOT"/bin/e2b-dash-toggle "$ROOT"/bin/e2b-bench \
+         "$ROOT"/bin/e2b-dash "$ROOT"/bin/e2b-dash-toggle "$ROOT"/bin/e2b-popup "$ROOT"/bin/e2b-bench \
          "$ROOT"/bin/e2b-domain "$ROOT"/bin/teardown-worktree "$ROOT"/bin/lib/*.sh "$ROOT"/install.sh; do
   if bash -n "$f" 2>/dev/null; then ok "bash -n $(basename "$f")"; else bad "bash -n $(basename "$f")"; fi
 done

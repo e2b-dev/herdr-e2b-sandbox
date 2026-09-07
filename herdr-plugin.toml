@@ -105,12 +105,13 @@ title = "Kill E2B sandbox"
 contexts = ["workspace"]
 command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box\" kill"]
 
-# Open the dashboard TUI — a live board of every tracked box with per-box
-# open/sync/pull/kill (optional; requires the Rust build, see install.sh).
+# Independently bindable views. Actions have no TTY, so the pane action must
+# hand off to the pane launcher rather than run the dashboard in the action log.
 [[actions]]
 id = "dashboard"
-title = "E2B dashboard"
-command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-dash\""]
+title = "e2b-dash (pane view)"
+contexts = ["workspace"]
+command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box\" dash toggle"]
 
 # The one to bind a key to. Same dashboard, but it closes an open one instead of
 # stacking a second, and picks its placement from the layout at keypress time:
@@ -124,9 +125,15 @@ command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-dash\""]
 # the verb over — move `close_workspace` first if you still want it.
 [[actions]]
 id = "dashboard-toggle"
-title = "E2B dashboard (toggle)"
+title = "e2b-dash (pane toggle)"
 contexts = ["workspace"]
 command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box\" dash toggle"]
+
+[[actions]]
+id = "popup"
+title = "e2b-popup (overlay view)"
+contexts = ["workspace"]
+command = ["bash", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/e2b-popup\""]
 
 # Persistent pane entrypoint (herdr's pane menu): shows a spinner while the box
 # boots, then execs a shell inside the sandbox. Zoomed (full-screen) — you're
@@ -171,4 +178,4 @@ command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-bench\"; exec \"${SHELL:
 id = "dashboard"
 title = "e2b dashboard"
 placement = "zoomed"
-command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-dash\""]
+command = ["bash", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/e2b-dash\""]

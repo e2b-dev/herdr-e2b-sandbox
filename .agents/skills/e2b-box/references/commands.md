@@ -188,7 +188,9 @@ stacking, picks placement from the layout.
 ## herdr actions & keybindings
 
 Actions (`herdr plugin action invoke <id> --plugin e2b-dev.herdr-e2b`): `open`, `fleet`,
-`sync`, `pull`, `status`, `pause`, `resume`, `kill`, `dashboard`, `dashboard-toggle`.
+`sync`, `pull`, `status`, `pause`, `resume`, `kill`, `dashboard`, `dashboard-toggle`,
+`popup`. `dashboard` / `dashboard-toggle` open the pane view; `popup` opens the
+overlay. Both views can have independent Herdr keybindings.
 Suggested bindings (herdr config `[[keys.command]]`):
 
 | key | action | CLI equivalent |

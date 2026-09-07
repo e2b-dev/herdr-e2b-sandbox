@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Run the existing dashboard in Herdr's floating terminal, preserving the layout.
+set -uo pipefail
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  ldir="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [ "${SOURCE#/}" = "$SOURCE" ] && SOURCE="$ldir/$SOURCE"
+done
+DIR="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
+source "$DIR/lib/paths.sh"
+source "$DIR/lib/pane.sh"
+
+case "${1:-}" in
+  --render)
+    # Native Herdr popup bindings already own a terminal. Skip the action/CLI
+    # round trip, but keep plugin credential precedence over the daemon's env.
+    [ "$#" -eq 1 ] || { echo "e2b-popup: --render takes no arguments" >&2; exit 2; }
+    export HERDR_PLUGIN_ID="e2b-dev.herdr-e2b"
+    export HERDR_PLUGIN_ROOT="$PLUGIN_DIR"
+    export HERDR_PLUGIN_CONFIG_DIR="$CONFIG_DIR"
+    export HERDR_PLUGIN_STATE_DIR="$STATE_DIR"
+    export E2B_DASH_POPUP=1
+    exec "$DIR/e2b-dash" ;;
+  -h|--help|help)
+    cat <<'USAGE'
+e2b-popup — the E2B dashboard floating over your Herdr panes
+
+usage
+  e2b-popup                  open the dashboard popup
+  e2b-box popup              the same popup through the main CLI
+  e2b-popup --render         draw in a native Herdr popup binding
+
+The same UI and controls as e2b-dash, at 90% width and 85% height.
+Press q or Esc from the main board to close it and return to your panes.
+Requires a running Herdr session with this plugin enabled.
+
+Fast keybinding in Herdr config.toml:
+  [[keys.command]]
+  key = "prefix+shift+d"
+  type = "popup"
+  command = 'exec "$HOME/.local/bin/e2b-popup" --render'
+  width = "90%"
+  height = "85%"
+USAGE
+    exit 0 ;;
+  "") ;;
+  *) echo "e2b-popup: unknown argument '$1' — run e2b-popup --help" >&2; exit 2 ;;
+esac
+
+HERDR=$(pane_herdr) || { echo "e2b-popup: can't find the herdr binary" >&2; exit 1; }
+"$HERDR" plugin pane open --plugin e2b-dev.herdr-e2b --entrypoint dashboard \
+  --placement popup --width 90% --height 85% --env E2B_DASH_POPUP=1 >/dev/null

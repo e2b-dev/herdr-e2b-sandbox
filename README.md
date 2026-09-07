@@ -386,6 +386,37 @@ whenever `cargo` is on PATH.
 A live TUI of every tracked box. Run `e2b-dash`, open the **dashboard** pane, or
 press `prefix+shift+d` (bound in [Install](#install)).
 
+Run `e2b-popup` (or `e2b-box popup`) to show the same dashboard in a centered
+overlay, at 90% width and 85% height, with the current panes visible behind it.
+It uses the same dashboard binary and controls. `q` or `Esc` from the main board
+closes the popup and returns to your panes.
+
+Both views are independently keybindable in Herdr settings: **e2b-dash (pane
+view)** uses the `dashboard` action, and **e2b-popup (overlay view)** uses `popup`.
+You can keep both shortcuts in your Herdr `config.toml`, for example:
+
+```toml
+[[keys.command]]
+key = "prefix+shift+d"
+command = "herdr plugin action invoke dashboard --plugin e2b-dev.herdr-e2b"
+
+[[keys.command]]
+key = "prefix+ctrl+d"
+type = "popup"
+command = 'exec "$HOME/.local/bin/e2b-popup" --render'
+width = "90%"
+height = "85%"
+```
+
+The native popup binding opens the dashboard directly, skipping the plugin
+action and CLI round trip. Use it for the fastest shortcut. The first frame
+reuses the last resolved theme and region while fresh settings load in the
+background. Box records are read fresh, and config commands are never cached.
+
+Choose unused keys or replace existing bindings; these are separate actions,
+so assigning one does not change the other. Existing `dashboard-toggle`
+bindings continue to use the pane view.
+
 ```
 ↑/↓ move · ↵/o open · w worktree · s sync · p pull · z pause/resume
 x kill · c copy id · C config paths · r refresh · T theme · q quit
