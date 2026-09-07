@@ -212,6 +212,10 @@ server_port  = 3000
 # # OPENAI_API_KEY = "sk-…"
 
 [dashboard]
+# View shortcuts are configured separately in Herdr's config.toml:
+#   e2b-dev.herdr-e2b.dashboard — e2b-dash (pane view)
+#   e2b-dev.herdr-e2b.popup     — e2b-popup (overlay view)
+# Both can be bound at the same time using keys.command type = "plugin_action".
 # Default theme for the `e2b-dash` TUI. Omit (or "terminal"/"auto") to inherit
 # your terminal's own palette. Cycle live with `T` (that choice is remembered and
 # overrides this). Presets: terminal · solarized-light · tokyo-night · dracula ·

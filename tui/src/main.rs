@@ -578,6 +578,10 @@ fn draw_config_paths(f: &mut Frame, app: &App, selected: usize) {
 }
 
 fn main() -> std::io::Result<()> {
+    // This PTY is discarded on exit. Do not pass that ownership to an inline
+    // sandbox shell or another dashboard launched from it.
+    let popup = std::env::var("E2B_DASH_POPUP").is_ok_and(|value| value == "1");
+    std::env::remove_var("E2B_DASH_POPUP");
     let dir = std::env::args()
         .nth(1)
         .map(PathBuf::from)
@@ -886,7 +890,15 @@ fn main() -> std::io::Result<()> {
             last = Instant::now();
         }
     };
-    let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
-    ratatui::restore();
+    if popup && res.is_ok() {
+        // Herdr removes the entire PTY when we exit. Restoring its empty main
+        // screen first produces a blank popup frame; Terminal::drop also shows
+        // the cursor. Keep the last frame untouched until Herdr removes it.
+        let _ = crossterm::terminal::disable_raw_mode();
+        std::mem::forget(terminal);
+    } else {
+        let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
+        ratatui::restore();
+    }
     res
 }

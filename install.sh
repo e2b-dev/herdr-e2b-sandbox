@@ -17,13 +17,15 @@ else
   echo "  ! npm not found — install Node.js (>=22), then re-run ./install.sh" >&2
 fi
 
-chmod +x bin/e2b-box bin/e2b-box-open bin/e2b-box-pull bin/e2b-dash bin/e2b-dash-toggle \
+chmod +x bin/e2b-box bin/e2b-box-open bin/e2b-box-pull bin/e2b-dash bin/e2b-dash-toggle bin/e2b-popup \
          bin/e2b-fleet bin/e2b-fleet-open bin/e2b-bench bin/teardown-worktree 2>/dev/null || true
 
 BIN="${HOME}/.local/bin"
 mkdir -p "$BIN"
 ln -sf "$DIR/bin/e2b-box" "$BIN/e2b-box"
 echo "herdr-e2b: linked e2b-box -> $BIN/e2b-box"
+ln -sf "$DIR/bin/e2b-popup" "$BIN/e2b-popup"
+echo "herdr-e2b: linked e2b-popup -> $BIN/e2b-popup"
 
 # Fleets are `e2b-box fleet`, so bin/e2b-fleet is an implementation detail and is
 # deliberately NOT linked onto PATH — one CLI is the whole point. Everything that
