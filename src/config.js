@@ -836,6 +836,7 @@ export function loadConfig() {
     // Default theme for the dashboard TUI (empty = let the TUI decide: a saved
     // choice, else "terminal"). See [dashboard] in config.example.toml.
     dashboardTheme: dashboard.theme ?? "",
+    dashboardConfigOpener: typeof dashboard.config_opener === "string" ? dashboard.config_opener : "",
     template: sandbox.template ?? DEFAULTS.template,
     sandboxTimeoutMs: posInt(sandbox.timeout_ms, DEFAULTS.sandboxTimeoutMs),
     autoPause: sandbox.auto_pause ?? DEFAULTS.autoPause,

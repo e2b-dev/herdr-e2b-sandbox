@@ -248,10 +248,8 @@ pub(crate) fn region_label(domain: &str) -> String {
 }
 
 /// The E2B cluster this dashboard is pointed at — i.e. where a box opened from
-/// here would land. `bin/e2b-dash` exports `E2B_DOMAIN` (resolved by the same
-/// bash bridge every other verb uses), so the TUI never re-implements the
-/// precedence. Launched directly, with no env, fall back to what the tracked
-/// boxes say, so the header still shows something true.
+/// here would land. Use the inherited domain or tracked records for the first
+/// frame; the background settings task then applies the configured region.
 pub(crate) fn current_domain(boxes: &[Box]) -> String {
     if let Ok(d) = std::env::var("E2B_DOMAIN") {
         let d = d.trim();
@@ -275,8 +273,7 @@ pub(crate) fn current_domain(boxes: &[Box]) -> String {
 /// Returns None on any failure — a header that keeps its last good value beats
 /// one that blanks out because a probe hiccuped.
 ///
-/// The TUI's own env is a launch-time snapshot (`bin/e2b-dash` exports
-/// E2B_DOMAIN before exec'ing us), and the resolver gives env highest
+/// The TUI's own env is a launch-time snapshot, and the resolver gives env highest
 /// precedence — inherited, it would win every probe and freeze the header at
 /// the launch value. Scrub both credential halves so the resolver reads its
 /// fresh sources (plugin config, `e2b` CLI login); the key must go too, since

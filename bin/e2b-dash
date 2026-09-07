@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # e2b-dash — launch the herdr-e2b dashboard TUI (Ratatui). Resolves the built
-# binary, seeds the default theme from [dashboard].theme, and execs it. Any args
+# binary and execs it; display settings load in the background. Any args
 # are forwarded (e.g. a boxes dir to point at sample data).
 set -uo pipefail
 # Resolve through the ~/.local/bin symlink to the real script dir (BSD readlink
@@ -19,6 +19,11 @@ source "$DIR/lib/paths.sh"
 # on a machine that never ran `cargo build`, or in a pipe, `--help` still has to
 # work. Without this the binary read `--help` as the directory to load boxes from.
 case "${1:-}" in
+  --settings)
+    export HERDR_PLUGIN_CONFIG_DIR="$CONFIG_DIR"
+    node_bin=$(e2b_node 2>/dev/null || command -v node 2>/dev/null || true)
+    [ -n "$node_bin" ] || exit 1
+    exec "$node_bin" "$PLUGIN_DIR/src/resolve-dashboard.js" ;;
   -h|--help|help)
     cat <<'USAGE'
 e2b-dash — the live board of every box this plugin tracks
@@ -33,9 +38,15 @@ usage
 options
   -h, --help · -V, --version  print this · print the plugin version
 
+inside the board
+  C                          config paths: Enter opens, c copies (also with no boxes)
+  c                          copy the selected sandbox ID
+
 environment
   E2B_DASH_THEME              starting theme; 'T' inside the board still wins
   HERDR_PLUGIN_STATE_DIR      where box records live
+  HERDR_PLUGIN_CONFIG_DIR     config.toml, auth.toml, and saved connections
+  E2B_DASH_CONFIG_OPENER      shell command; $1 = plugin directory, $2 = selected path
 USAGE
     exit 0 ;;
   -V|--version) printf 'herdr-e2b %s\n' "$(plugin_version)"; exit 0 ;;
@@ -59,26 +70,23 @@ if [ ! -t 0 ] || [ ! -t 1 ]; then
   exit 1
 fi
 
-# Seed the default theme from config. A saved 'T' choice inside the TUI still
-# wins; the env var is only the starting default. Needs any node (toml only).
-if [ -z "${E2B_DASH_THEME:-}" ] && command -v node >/dev/null 2>&1; then
-  t="$(node "$PLUGIN_DIR/src/resolve-theme.js" 2>/dev/null || true)"
-  [ -n "$t" ] && export E2B_DASH_THEME="$t"
-fi
+# Native popup bindings inherit Herdr's PATH without loading a login shell.
+# Keep this checkout's actions available and cover common GUI/launchd tool paths
+# after inherited entries, so explicit runtime choices retain their precedence.
+export PATH="$DIR:${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
 
-# Resolve the cluster the same way every other verb does and hand it to the TUI
-# in E2B_DOMAIN, so the header can show which E2B a new box would land on. Doing
-# it here (not in Rust) keeps ONE implementation of the precedence rules.
-ensure_e2b_path
-ensure_e2b_env
+# The TUI reads display settings in the background after launch. Each e2b-box
+# action resolves its own runtime and credentials when invoked.
+export HERDR_PLUGIN_CONFIG_DIR="$CONFIG_DIR"
+export E2B_DASH_SETTINGS_CMD="$DIR/e2b-dash"
 
 # ...and let the TUI re-ask while it is running, so switching regions with the
 # dashboard open updates the header instead of showing the cluster it launched
 # with. Same resolver, so still one implementation.
 export E2B_DASH_DOMAIN_CMD="$PLUGIN_DIR/bin/e2b-domain"
 
-# The plugin version for the header, resolved HERE for the same reason the domain
-# is: `plugin_version` reads herdr-plugin.toml, which is the manifest herdr's own
+# The plugin version for the header: `plugin_version` reads herdr-plugin.toml,
+# which is the manifest herdr's own
 # marketplace reads, so the number on the board is the number herdr reports.
 #
 # Deliberately not the crate's `CARGO_PKG_VERSION`: tui/Cargo.toml carries its own
@@ -87,5 +95,6 @@ export E2B_DASH_DOMAIN_CMD="$PLUGIN_DIR/bin/e2b-domain"
 # none. Passing it in keeps one source of truth and nothing new to remember at
 # release time.
 export E2B_DASH_VERSION="$(plugin_version)"
+export E2B_DASH_PLUGIN_DIR="$PLUGIN_DIR"
 
 exec "$BIN" "$@"

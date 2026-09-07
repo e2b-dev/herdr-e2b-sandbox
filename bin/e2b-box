@@ -743,6 +743,7 @@ environment
 dash
   dash                        the live board of every tracked box
   dash toggle                 same board, but closes an open one (bind a key to this)
+  popup                       the same board floating over the current Herdr panes
 USAGE
 }
 
@@ -829,6 +830,9 @@ fi
 #
 # `toggle` is the one to bind a key to — it closes an open board instead of
 # stacking a second, and picks its own placement from the layout at keypress time.
+if [ "$cmd" = popup ]; then
+  exec "$DIR/e2b-popup" ${1+"$@"}
+fi
 if [ "$cmd" = dash ] || [ "$cmd" = dashboard ]; then
   case "${1:-}" in
     toggle) shift; HERDR_E2B_DASH_CLI="e2b-box dash toggle" exec "$DIR/e2b-dash-toggle" ${1+"$@"} ;;

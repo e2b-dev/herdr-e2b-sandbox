@@ -10,11 +10,12 @@
 //
 //   cargo run --release -- [boxes_dir]
 mod actions;
+mod dashboard_settings;
 mod state;
 mod theme;
 
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Output},
     sync::mpsc,
     thread,
@@ -28,20 +29,27 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
     Frame,
 };
 
 use actions::{action_command, goto_worktree, key_only, Verb};
+use dashboard_settings::{dashboard_settings, DashboardSettings, DisplayCache};
 use state::{
     branch_cell, branch_column_width, current_domain, load_boxes, plugin_version, probe_domain,
     region_label, sh, state_dir, status_detail, template_cell, template_downgraded, Box,
     TEMPLATE_W,
 };
-use theme::{initial_theme_idx, save_theme, status_glyph_color, theme_from, Theme, THEMES};
+use theme::{
+    initial_theme_idx, initial_theme_idx_with_default, save_theme, status_glyph_color, theme_from,
+    Theme, THEMES,
+};
 
 struct App {
     dir: PathBuf,
+    config_dir: PathBuf,
+    config_path_selection: Option<usize>,
+    config_opener: Option<String>,
     theme: Theme,
     theme_idx: usize,
     boxes: Vec<Box>,
@@ -51,13 +59,42 @@ struct App {
     run: Option<(String, String, &'static str, String)>, // (label, key, verb, worktree)
     post_open: Option<(String, String, String)>, // after a shell exits: (label, key, worktree)
     domain: String,                              // cluster shown in the header
-    domain_checked: Instant,                     // last re-ask (see probe_domain)
     version: Option<String>,                     // plugin version for the header
     table_area: Rect, // where draw() last put the table (mouse hit-testing)
     branch_w: u16,    // BRANCH column width draw() last used (0 = dropped)
 }
 
+const CONFIG_PATHS: [(&str, &str); 3] = [
+    ("Templates & API keys", "config.toml"),
+    ("Discovered credentials", "auth.toml"),
+    ("Saved connections", "connections"),
+];
+
+fn config_dir() -> PathBuf {
+    let nonempty_env = |name| std::env::var_os(name).filter(|v| !v.is_empty());
+    nonempty_env("HERDR_PLUGIN_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            nonempty_env("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    PathBuf::from(nonempty_env("HOME").unwrap_or_default()).join(".config")
+                })
+                .join("herdr/plugins/config/e2b-dev.herdr-e2b")
+        })
+}
+
 impl App {
+    fn apply_settings(&mut self, settings: Option<DashboardSettings>) {
+        if let Some(settings) = settings {
+            self.theme_idx = initial_theme_idx_with_default(&settings.theme);
+            self.theme = theme_from(THEMES[self.theme_idx]);
+            if self.config_opener.is_none() {
+                self.config_opener = Some(settings.opener);
+            }
+            self.domain = settings.domain;
+        }
+    }
     fn reload(&mut self) {
         self.boxes = load_boxes(&self.dir);
         if self.boxes.is_empty() {
@@ -133,6 +170,46 @@ impl App {
             Some(_) => self.msg = "no sandbox id yet".into(),
             None => {}
         }
+    }
+}
+
+fn open_config_path(path: &Path, configured_opener: Option<&str>) -> String {
+    let default_opener = if cfg!(target_os = "macos") {
+        "open \"$2\""
+    } else {
+        "xdg-open \"$2\""
+    };
+    let opener = configured_opener
+        .filter(|opener| !opener.trim().is_empty())
+        .unwrap_or(default_opener);
+    let plugin_dir = std::env::var_os("E2B_DASH_PLUGIN_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let shell = std::env::var_os("SHELL")
+        .filter(|shell| !shell.is_empty())
+        .unwrap_or_else(|| {
+            if cfg!(target_os = "macos") {
+                "/bin/zsh"
+            } else {
+                "/bin/sh"
+            }
+            .into()
+        });
+    let mut command = Command::new(shell);
+    // Positional arguments keep paths out of shell code; interactive mode loads aliases/functions.
+    command
+        .args(["-ic", opener, "e2b-dash"])
+        .arg(&plugin_dir)
+        .arg(path)
+        .current_dir(&plugin_dir);
+    match command.stdin(std::process::Stdio::null()).output() {
+        Ok(output) if output.status.success() => format!("opened {}", path.display()),
+        Ok(output) => format!(
+            "could not open {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+        Err(error) => format!("could not open {}: {error}", path.display()),
     }
 }
 
@@ -425,7 +502,7 @@ fn draw(f: &mut Frame, app: &mut App) {
             };
             format!("  target: {wt}")
         })
-        .unwrap_or_default();
+        .unwrap_or_else(|| "  No boxes yet · C config paths".into());
     let target_line = Line::from(target).style(Style::default().fg(t.dim));
 
     let mid = if let Some((label, _, _)) = &app.post_open {
@@ -450,22 +527,81 @@ fn draw(f: &mut Frame, app: &mut App) {
         } else {
             "z pause"
         };
-        Line::from(format!("  ↑/↓ move · ↵ open · w worktree · s sync · p pull · {z} · x kill · c copy id · r refresh · T theme · q quit"))
+        Line::from(format!("  ↑/↓ move · ↵ open · w worktree · s sync · p pull · {z} · x kill · c copy id · C config paths · r refresh · T theme · q quit"))
             .style(Style::default().fg(t.dim))
     };
     let msg = Line::from(format!("  {}", app.msg)).style(Style::default().fg(t.paused));
     f.render_widget(Paragraph::new(vec![target_line, mid, msg]), chunks[2]);
+    if let Some(selected) = app.config_path_selection {
+        draw_config_paths(f, app, selected);
+    }
+}
+
+fn draw_config_paths(f: &mut Frame, app: &App, selected: usize) {
+    let screen = f.area();
+    let width = screen.width.saturating_sub(4).min(110);
+    let height = screen.height.saturating_sub(2).min(16);
+    let area = Rect::new(
+        screen.x + (screen.width - width) / 2,
+        screen.y + (screen.height - height) / 2,
+        width,
+        height,
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.accent))
+        .title(" Config paths ")
+        .title_bottom(" ↑/↓ choose · Enter open · c copy path · Esc close ");
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+    let chunks = Layout::vertical([Constraint::Length(7), Constraint::Min(1)]).split(inner);
+    let rows = CONFIG_PATHS.iter().map(|(label, name)| {
+        Row::new(vec![Cell::from(*label), Cell::from(*name)]).bottom_margin(1)
+    });
+    f.render_stateful_widget(
+        Table::new(
+            rows,
+            [Constraint::Percentage(60), Constraint::Percentage(40)],
+        )
+        .row_highlight_style(app.theme.sel)
+        .highlight_symbol("▸ "),
+        chunks[0],
+        &mut TableState::default().with_selected(Some(selected)),
+    );
+    let path = app.config_dir.join(CONFIG_PATHS[selected].1);
+    let mut lines = vec![Line::from(path.display().to_string())];
+    if !path.exists() {
+        lines.push(Line::from("Not created yet; you can still copy this path.").fg(app.theme.dim));
+    }
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), chunks[1]);
 }
 
 fn main() -> std::io::Result<()> {
+    // This PTY is discarded on exit. Do not pass that ownership to an inline
+    // sandbox shell or another dashboard launched from it.
+    let popup = std::env::var("E2B_DASH_POPUP").is_ok_and(|value| value == "1");
+    std::env::remove_var("E2B_DASH_POPUP");
     let dir = std::env::args()
         .nth(1)
         .map(PathBuf::from)
         .unwrap_or_else(|| state_dir().join("boxes"));
 
-    let idx = initial_theme_idx();
+    let config_dir = config_dir();
+    let display_cache = DisplayCache::new(&state_dir(), &config_dir);
+    let cached_display = display_cache.load();
+    let idx = cached_display
+        .as_ref()
+        .map_or_else(initial_theme_idx, |display| {
+            initial_theme_idx_with_default(&display.theme)
+        });
     let mut app = App {
         dir,
+        config_dir,
+        config_path_selection: None,
+        config_opener: std::env::var("E2B_DASH_CONFIG_OPENER")
+            .ok()
+            .filter(|value| !value.is_empty()),
         theme: theme_from(THEMES[idx]),
         theme_idx: idx,
         boxes: vec![],
@@ -475,7 +611,6 @@ fn main() -> std::io::Result<()> {
         run: None,
         post_open: None,
         domain: String::new(),
-        domain_checked: Instant::now(),
         // Read once: the manifest cannot change under a running dashboard without
         // the plugin being reloaded, which restarts this process anyway.
         version: plugin_version(),
@@ -483,12 +618,40 @@ fn main() -> std::io::Result<()> {
         branch_w: 0,
     };
     app.reload();
-    app.domain = probe_domain().unwrap_or_else(|| current_domain(&app.boxes));
+    app.domain = current_domain(&app.boxes);
+    let from_daemon = ["HERDR_PLUGIN_ID", "HERDR_PLUGIN_ROOT"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
+    let has_shell_domain =
+        !from_daemon && std::env::var("E2B_DOMAIN").is_ok_and(|value| !value.trim().is_empty());
+    if !has_shell_domain {
+        if let Some(display) = cached_display {
+            app.domain = display.domain;
+        }
+    }
     if !app.boxes.is_empty() {
         app.state.select(Some(0));
     }
 
     let (action_tx, action_rx) = mpsc::channel::<ActionDone>();
+    let (settings_tx, settings_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let settings = dashboard_settings();
+        if let Some(settings) = &settings {
+            display_cache.store(settings);
+        }
+        let _ = settings_tx.send(settings);
+    });
+    let mut settings_pending = true;
+    let (domain_tx, domain_rx) = mpsc::channel();
+    thread::spawn(move || loop {
+        // The settings task resolves the initial region. Later probes must
+        // not block painting or keyboard input, even if the resolver is slow.
+        thread::sleep(Duration::from_secs(10));
+        if domain_tx.send(probe_domain()).is_err() {
+            break;
+        }
+    });
     let mut terminal = ratatui::init();
     // Mouse: click selects a row, a click on the SANDBOX cell copies the id,
     // wheel scrolls. (Terminal-native text selection needs shift+drag while
@@ -496,6 +659,13 @@ fn main() -> std::io::Result<()> {
     let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture);
     let mut last = Instant::now();
     let res = loop {
+        if let Ok(settings) = settings_rx.try_recv() {
+            app.apply_settings(settings);
+            settings_pending = false;
+        }
+        if let Ok(Some(domain)) = domain_rx.try_recv() {
+            app.domain = domain;
+        }
         while let Ok(done) = action_rx.try_recv() {
             app.msg = match done.output {
                 Ok(output) if output.status.success() => {
@@ -578,7 +748,11 @@ fn main() -> std::io::Result<()> {
                 // Mouse is navigation + copy only — never a confirm. While a
                 // pending confirm or the post-open prompt is up, ignore it so a
                 // stray click can't answer a destructive question.
-                Event::Mouse(m) if app.pending.is_none() && app.post_open.is_none() => {
+                Event::Mouse(m)
+                    if app.pending.is_none()
+                        && app.post_open.is_none()
+                        && app.config_path_selection.is_none() =>
+                {
                     match m.kind {
                         MouseEventKind::ScrollDown => app.move_by(1),
                         MouseEventKind::ScrollUp => app.move_by(-1),
@@ -594,6 +768,38 @@ fn main() -> std::io::Result<()> {
                     }
                 }
                 Event::Key(k) => {
+                    if let Some(selected) = app.config_path_selection {
+                        match k.code {
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                app.config_path_selection =
+                                    Some((selected + 1) % CONFIG_PATHS.len());
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                app.config_path_selection =
+                                    Some((selected + CONFIG_PATHS.len() - 1) % CONFIG_PATHS.len());
+                            }
+                            KeyCode::Enter => {
+                                // A very quick Enter must still use the configured opener.
+                                if settings_pending {
+                                    app.apply_settings(settings_rx.recv().ok().flatten());
+                                    settings_pending = false;
+                                }
+                                let path = app.config_dir.join(CONFIG_PATHS[selected].1);
+                                app.msg = open_config_path(&path, app.config_opener.as_deref());
+                                app.config_path_selection = None;
+                            }
+                            KeyCode::Char('c') => {
+                                let path = app.config_dir.join(CONFIG_PATHS[selected].1);
+                                app.msg = copy_to_clipboard(&path.to_string_lossy());
+                                app.config_path_selection = None;
+                            }
+                            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('C') => {
+                                app.config_path_selection = None;
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
                     // Post-open: after the box shell exits, offer pull / kill / leave.
                     if let Some((label, key, wt)) = app.post_open.take() {
                         match k.code {
@@ -650,6 +856,7 @@ fn main() -> std::io::Result<()> {
                         KeyCode::Char('p') => app.arm(Verb::Pull),
                         KeyCode::Char('x') => app.arm(Verb::Kill),
                         KeyCode::Char('c') => app.copy_selected_id(),
+                        KeyCode::Char('C') => app.config_path_selection = Some(0),
                         KeyCode::Char('z') => app.pause_or_resume(),
                         // Enter is the row's PRIMARY action, and on a board of
                         // sandboxes that's "open this one". Jumping to the local
@@ -682,14 +889,16 @@ fn main() -> std::io::Result<()> {
             app.reload();
             last = Instant::now();
         }
-        if app.domain_checked.elapsed() >= Duration::from_secs(10) {
-            if let Some(d) = probe_domain() {
-                app.domain = d;
-            }
-            app.domain_checked = Instant::now();
-        }
     };
-    let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
-    ratatui::restore();
+    if popup && res.is_ok() {
+        // Herdr removes the entire PTY when we exit. Restoring its empty main
+        // screen first produces a blank popup frame; Terminal::drop also shows
+        // the cursor. Keep the last frame untouched until Herdr removes it.
+        let _ = crossterm::terminal::disable_raw_mode();
+        std::mem::forget(terminal);
+    } else {
+        let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
+        ratatui::restore();
+    }
     res
 }

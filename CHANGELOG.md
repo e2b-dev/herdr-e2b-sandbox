@@ -6,6 +6,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Closing the popup keeps its last frame and hidden cursor intact until Herdr
+  removes the overlay, preventing an intermediate blank-screen/cursor flash.
+
+- Native Herdr popup bindings can use `e2b-popup --render` to bypass the
+  action/CLI round trip. Reopened dashboards reuse cached theme and region
+  immediately, then refresh settings in the background.
+
+- Dashboard/popups paint before configuration and region resolution finishes.
+  Startup reads display settings once in the background; periodic region checks
+  also run off the UI thread so they cannot interrupt painting or keyboard input.
+
 ### Changed
 
 - `e2b-box auth` now combines saved connections, config, and discovery in a compact
@@ -19,9 +32,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or open config files using the dashboard's opener. Explicit discovery and
   non-interactive calls retain their report/save behavior.
 
+- `e2b-popup` / `e2b-box popup`: the dashboard in a centered Herdr popup over
+  the existing panes, with the same UI and controls. Also available as the
+  `popup` plugin action for keybindings. Herdr settings offer independently
+  bindable `e2b-dash (pane view)` and `e2b-popup (overlay view)` actions.
+
 - Claude connection names use the detected organization (such as `claude-e2b`)
   for Team/Enterprise accounts. Setup and list distinguish the local account
   from connection access; existing connection IDs remain unchanged.
+
+- Dashboard `C` config-path picker: Enter opens the active `config.toml`,
+  `auth.toml`, or saved connections directory; `c` copies its path, including
+  when there are no boxes. `[dashboard].config_opener` selects a custom shell
+  command, with the plugin directory and selected path passed as arguments.
 
 - Named personal coding-agent connections: `auth connect`, `list`, `explain`,
   `check`, `reconnect`, and `disconnect`. Claude uses first-party setup-token

@@ -163,12 +163,19 @@ pub(crate) fn save_theme(name: &str) {
 /// Starting theme: a saved `T` choice wins (so it persists), else the
 /// E2B_DASH_THEME seed ("auto" -> terminal), else default (terminal).
 pub(crate) fn initial_theme_idx() -> usize {
+    initial_theme_idx_with_default("")
+}
+
+pub(crate) fn initial_theme_idx_with_default(configured: &str) -> usize {
     if let Ok(s) = fs::read_to_string(theme_file()) {
         if let Some(i) = THEMES.iter().position(|&t| t == s.trim()) {
             return i;
         }
     }
-    let mut want = std::env::var("E2B_DASH_THEME").unwrap_or_default();
+    let mut want = std::env::var("E2B_DASH_THEME")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| configured.into());
     if want == "auto" {
         want = "terminal".into();
     }
