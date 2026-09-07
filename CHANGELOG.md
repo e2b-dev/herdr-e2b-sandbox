@@ -8,6 +8,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Closing the popup keeps its last frame and hidden cursor intact until Herdr
+  removes the overlay, preventing an intermediate blank-screen/cursor flash.
+
+- Native Herdr popup bindings can use `e2b-popup --render` to bypass the
+  action/CLI round trip. Reopened dashboards reuse cached theme and region
+  immediately, then refresh settings in the background.
+
 - Dashboard/popups paint before configuration and region resolution finishes.
   Startup reads display settings once in the background; periodic region checks
   also run off the UI thread so they cannot interrupt painting or keyboard input.
@@ -20,6 +27,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fallback key. Long details wrap; pipes and `NO_COLOR` use plain text.
 
 ### Added
+
+- `e2b-popup` / `e2b-box popup`: the dashboard in a centered Herdr popup over
+  the existing panes, with the same UI and controls. Also available as the
+  `popup` plugin action for keybindings. Herdr settings offer independently
+  bindable `e2b-dash (pane view)` and `e2b-popup (overlay view)` actions.
 
 - Claude connection names use the detected organization (such as `claude-e2b`)
   for Team/Enterprise accounts. Setup and list distinguish the local account
