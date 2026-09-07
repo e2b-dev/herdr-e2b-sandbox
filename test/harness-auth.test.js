@@ -493,6 +493,15 @@ test("auth view stays readable in narrow terminals and contains no ANSI in plain
   assert.equal(formatSummary([]), "")
 })
 
+test("interactive table preserves numbered selection within narrow pane widths", () => {
+  const summary = [{ id: "claude", mark: "ok", auth: "OAuth token", source: "claude-work" }]
+  for (const width of [32, 44, 64, 76]) {
+    const text = formatSummary(summary, { width, selected: 0, showIssues: false })
+    assert.ok(text.split("\n").every((line) => [...line].length <= width))
+    assert.match(text, /^> \|/m)
+  }
+})
+
 // ── ADR 0011: grok's session ships whole, refresh token included ───────────────
 
 const grokSessionRow = { id: "grok", installed: true, state: "authenticated", source: "session" }

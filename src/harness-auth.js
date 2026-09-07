@@ -510,6 +510,7 @@ async function collectAuthState() {
   }
   const cfg = { ...resolveEnvConfig({ sandbox: userCfg.sandbox, templates: userCfg.templates }),
     connections: readConnections(), connectionsDir: CONNECTIONS_DIR,
+    dashboardConfigOpener: process.env.E2B_DASH_CONFIG_OPENER || (typeof userCfg.dashboard?.config_opener === "string" ? userCfg.dashboard.config_opener : ""),
     templateConnections: Object.fromEntries(Object.entries(userCfg.templates || {})
       .filter(([, value]) => typeof value?.connection === "string")
       .map(([name, value]) => [name, value.connection])),
@@ -523,6 +524,7 @@ async function collectAuthState() {
 
 async function main(argv) {
   const yes = argv.includes("--yes") || argv.includes("-y")
+  const discover = argv.includes("--discover")
   const unknown = argv.find((a) => !["--yes", "-y", "--discover"].includes(a))
   if (unknown) {
     process.stderr.write("e2b-box auth: invalid option. Run e2b-box auth --help.\n")
@@ -531,6 +533,15 @@ async function main(argv) {
   if (process.stderr.isTTY) process.stderr.write("  Checking local agents…")
   const state = await collectAuthState()
   if (process.stderr.isTTY) process.stderr.write("\r\x1b[2K")
+  if (!yes && !discover && process.stdin.isTTY && process.stdout.isTTY) {
+    const { runAuthMenu } = await import("./auth-menu.js")
+    await runAuthMenu({ initial: state, refresh: collectAuthState,
+      render: (summary, selected) => formatSummary(summary, { width: process.stdout.columns || 76, selected, showIssues: false,
+        color: !Object.hasOwn(process.env, "NO_COLOR") && process.env.TERM !== "dumb" }),
+      save: (plan) => writeAuthFile(renderAuthToml(plan), AUTH_PATH),
+    })
+    return process.exitCode || 0
+  }
   const { plan, summary, warning } = state
   const width = process.stdout.columns || 76
   const color = !!process.stdout.isTTY && !Object.hasOwn(process.env, "NO_COLOR") && process.env.TERM !== "dumb"

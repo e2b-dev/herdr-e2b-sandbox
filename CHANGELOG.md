@@ -28,6 +28,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Interactive `e2b-box auth`: select an agent to connect, reconnect, inspect auth,
+  or open config files using the dashboard's opener. Explicit discovery and
+  non-interactive calls retain their report/save behavior.
+
 - `e2b-popup` / `e2b-box popup`: the dashboard in a centered Herdr popup over
   the existing panes, with the same UI and controls. Also available as the
   `popup` plugin action for keybindings. Herdr settings offer independently

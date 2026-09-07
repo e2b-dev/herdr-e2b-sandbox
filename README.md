@@ -50,7 +50,14 @@ sign-in screen. It asks for no harness credential and cannot fail the install: a
 machine with no harnesses installed just gets a report. Install a new harness
 later and re-run `e2b-box auth` yourself; nothing probes on its own.
 
-`auth` and `auth discover` report a compact ASCII table with agent, auth method (OAuth token,
+`e2b-box auth` opens an interactive table in a terminal: use arrows or `j/k`,
+numbers to jump, and Enter for agent actions. Connect/reconnect Claude or Codex,
+inspect authentication, or open the config files. `f` opens API-key/template config,
+`a` opens generated `auth.toml`, `s` saves discovery after confirmation, `r` refreshes,
+and `q`/Esc exits without saving. File opening uses `[dashboard].config_opener`.
+
+`auth discover` retains the report-and-save prompt; `auth --yes` saves without a
+menu. Piped output remains a compact ASCII table with agent, auth method (OAuth token,
 OAuth session, or API key), source, and status. The overview combines saved connections,
 manual configuration, and discovered credentials, and shows setup steps only
 where needed. Missing, expired, or ambiguous selected connections require attention;
