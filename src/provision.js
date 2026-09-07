@@ -26,6 +26,7 @@ import {
   CONFIG_PATH,
 } from "./config.js"
 import { seedCommand } from "./fleet-seed.js"
+import { selectConnection } from "./connections.js"
 import {
   requireApiKey,
   sdkConn,
@@ -94,10 +95,13 @@ async function main() {
   let sandbox = null
   let created = false
   const prev = await readRecord(key)
+  if (input.connection && prev?.sandboxId) throw new Error("An existing box retains its credentials. --connection is only supported for a new box.")
+  cfg.selectedConnection = input.connection || prev?.connectionId
   // Which template the box ACTUALLY runs — the requested one, or `base` when the
   // requested one was not built on this cluster. Held out here because the seeding
   // below needs it and both branches (fresh create, reconnect) can set it.
   let boxTemplate = prev?.template ?? ""
+  let connectionHarness = prev?.connectionHarness || null
   // A box lives on exactly one cluster, and an API key belongs to exactly one
   // cluster. Touching a domain-pinned box therefore needs credentials KNOWN to
   // be on that cluster — cfg.domain is that knowledge (key + domain resolve as
@@ -160,6 +164,9 @@ async function main() {
     // An explicit choice (`e2b-box open --template …`, the picker, E2B_TEMPLATE)
     // beats the per-branch rules; without one, the rules and default decide.
     const template = input.template || resolveTemplate(branch, cfg)
+    const connection = selectConnection(cfg, template)
+    connectionHarness = connection?.harness || null
+    const createEnv = resolveEnv(cfg, template, process.env)
     let usedTemplate = template
     await step(`creating sandbox (${template})`)
     // Resolved once and recorded below: the lifecycle is fixed at create time,
@@ -207,7 +214,7 @@ async function main() {
             `warning: $${missing} was recorded by 'e2b-box auth' but is not set here, so this box will not get it — export it from ~/.profile (herdr uses a login shell), or set the box's own variable in ${CONFIG_PATH}`,
           )
         }
-        sandbox = await Sandbox.create(template, { ...opts, envs: resolveEnv(cfg, template, process.env) })
+        sandbox = await Sandbox.create(template, { ...opts, envs: createEnv })
       } catch (e) {
         // If a custom template isn't built yet, don't hard-fail — fall back to base.
         const msg = (e && e.message) || String(e)
@@ -217,6 +224,7 @@ async function main() {
     }
 
     if (unavailable) {
+      if (connection) throw new Error(`Template '${template}' is unavailable. Connection '${connection.id}' was selected, so no base box was created.`)
       // Name the REGION, not just the template. "template 'x' not found" is the
       // signature symptom of asking the wrong region, and reads as a missing
       // template unless it says where we looked.
@@ -238,6 +246,9 @@ async function main() {
     await writeRecord(key, {
       sandboxId: sandbox.sandboxId,
       template: usedTemplate,
+      connectionId: connection?.id || null,
+      connectionRevision: connection?.revision || null,
+      connectionHarness,
       // What this box does at its idle timeout ("pause" or "kill"), and for a
       // pause which snapshot kind — set at create time and immutable, so
       // e2b-box's leave/pull messages read it from here rather than guessing
@@ -328,7 +339,7 @@ async function main() {
   //
   // Best-effort, every time, for every box: a sandbox whose agent could not be seeded
   // still opens and still works — it just asks its questions.
-  const seed = seedCommand(boxTemplate, cfg.fleetSeeds)
+  const seed = seedCommand(boxTemplate, cfg.fleetSeeds, connectionHarness)
   if (seed) {
     await sandbox.files.write("/home/user/.herdr-e2b-seed.sh", `${seed}\n`)
     await sandbox.commands

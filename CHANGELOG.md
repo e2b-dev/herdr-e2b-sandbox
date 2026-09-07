@@ -6,7 +6,26 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- `e2b-box auth` now combines saved connections, config, and discovery in a compact
+  ASCII table with explicit OAuth/API-key labels. Selected connections are credited correctly, setup advice appears
+  only when needed, and unavailable connections cannot appear ready through a
+  fallback key. Long details wrap; pipes and `NO_COLOR` use plain text.
+
 ### Added
+
+- Claude connection names use the detected organization (such as `claude-e2b`)
+  for Team/Enterprise accounts. Setup and list distinguish the local account
+  from connection access; existing connection IDs remain unchanged.
+
+- Named personal coding-agent connections: `auth connect`, `list`, `explain`,
+  `check`, `reconnect`, and `disconnect`. Claude uses first-party setup-token
+  capture with token redaction; Codex borrows its local session without its real
+  refresh token. Claude subscription type and organization are detected as local
+  account metadata. `open`/`up --connection ID` selects one method for a new box
+  and removes competing auth variables. Existing discovery remains available as
+  `auth` or `auth discover`; organization sharing requires a future shared service.
 
 - **Muse Code is a template.** `muse`, E2B's public template for Meta's coding agent, is in
   the `open` picker and the fleet roster, and `e2b-box auth` detects the local install. A

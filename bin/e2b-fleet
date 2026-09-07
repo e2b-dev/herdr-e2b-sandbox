@@ -881,8 +881,9 @@ fi
 # bash never learns which variable a template wants. It reads config only: nothing
 # on this path may spawn a harness binary, which is the whole reason `auth` is a
 # subcommand you run on purpose. One block for the roster, never one per member, and
-# never a refusal — the credential may be the next thing the user configures.
-auth_note=$(printf '%s\n' "$members" | "$NODE" "$PLUGIN_DIR/src/fleet-auth.js" 2>/dev/null)
+# missing discovery credentials never refuse. An invalid selected connection does:
+# switching billing accounts would contradict the user's choice (ADR 0013).
+auth_note=$(printf '%s\n' "$members" | "$NODE" "$PLUGIN_DIR/src/fleet-auth.js") || exit 1
 [ -n "$auth_note" ] && printf '%s\n' "$auth_note" >&2
 
 # Which workspace a member hangs off is not cosmetic: herdr groups worktree

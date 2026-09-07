@@ -4,27 +4,9 @@ import os from "node:os"
 import TOML from "@iarna/toml"
 
 import { HARNESSES, readHarnessFile } from "./harnesses.js"
-
-// Plugin config dir. Prefer herdr's own HERDR_PLUGIN_CONFIG_DIR — the docs call
-// it the place for "user-editable config such as .env files", and it is the only
-// value herdr actually promises; the XDG path below is where it points today, not
-// a contract. Keep IN SYNC with bin/lib/paths.sh and install.sh.
-const CONFIG_DIR =
-  process.env.HERDR_PLUGIN_CONFIG_DIR ||
-  path.join(
-    process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"),
-    "herdr/plugins/config/e2b-dev.herdr-e2b",
-  )
-
-/** The config file itself. Exported so error messages can name the path the
- * plugin will actually read, not the one it used to hardcode. */
-export const CONFIG_PATH = path.join(CONFIG_DIR, "config.toml")
-
-/** The file `e2b-box auth` GENERATES, beside the one the user writes. Two files
- * with one writer each is the whole point: this one is regenerated wholesale by
- * that command and merged UNDER config.toml, so a hand-written value always wins
- * (ADR 0009). Nothing but `e2b-box auth` may write it. */
-export const AUTH_PATH = path.join(CONFIG_DIR, "auth.toml")
+import { AUTH_PATH, CONFIG_PATH, CONNECTIONS_DIR } from "./config-paths.js"
+import { applyConnection, readConnections, selectConnection } from "./connections.js"
+export { AUTH_PATH, CONFIG_PATH } from "./config-paths.js"
 
 // Where the `e2b` CLI keeps its login (@e2b/cli USER_CONFIG_PATH — hardcoded
 // there, no env override, no XDG). The SDK itself reads NOTHING from disk, so
@@ -439,6 +421,8 @@ export function resolveEnv(cfg, template, env = {}, now = Date.now(), readFile =
   // key exactly where it was, which is what makes the fallback work at all.
   const supersedes = cfg?.envSession?.[template]?.supersedes
   if (supersedes && Object.keys(session).length) delete merged[supersedes]
+  const connection = selectConnection(cfg, template)
+  if (connection) return applyConnection(connection, merged, { directory: cfg.connectionsDir, readFile, now })
   return Object.keys(merged).length ? merged : undefined
 }
 
@@ -546,6 +530,12 @@ export function discoveredSources(cfg, readFile = readHarnessFile) {
   // the picker actually has to keep.
   for (const t of Object.keys(cfg?.envSession || {})) {
     out[t] = Object.keys(sessionValue(cfg, t, Date.now(), readFile)).length ? "session" : "session-expired"
+  }
+  for (const template of new Set([...Object.values(HARNESSES).map((h) => h.template), ...Object.keys(cfg?.templateConnections || {})])) {
+    try {
+      const connection = selectConnection(cfg, template)
+      if (connection) out[template] = "connection"
+    } catch { out[template] = "connection-choice" }
   }
   return out
 }
@@ -838,6 +828,11 @@ export function loadConfig() {
   // exactly the way the user's own per-template tables do — one path, no new seam.
   const auth = readAuthConfig()
   return {
+    connections: readConnections(),
+    connectionsDir: CONNECTIONS_DIR,
+    templateConnections: Object.fromEntries(Object.entries(file.templates || {})
+      .filter(([, value]) => typeof value?.connection === "string")
+      .map(([name, value]) => [name, value.connection])),
     // Default theme for the dashboard TUI (empty = let the TUI decide: a saved
     // choice, else "terminal"). See [dashboard] in config.example.toml.
     dashboardTheme: dashboard.theme ?? "",

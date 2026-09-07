@@ -426,7 +426,8 @@ test("the summary credits a hand-set config.toml value, which discovery cannot s
   const rows = [row({ id: "claude", state: "no-key", source: "login" })]
   const plan = buildPlan(rows, { readText: noFiles })
   const s = buildSummary(rows, plan, { envByTemplate: { claude: { CLAUDE_CODE_OAUTH_TOKEN: "x" } } })
-  assert.deepEqual(s, [{ id: "claude", mark: "ok", method: "CLAUDE_CODE_OAUTH_TOKEN hand-set in config.toml — always wins" }])
+  assert.equal(s[0].mark, "ok")
+  assert.equal(s[0].method, "CLAUDE_CODE_OAUTH_TOKEN hand-set in config.toml")
 })
 
 test("a hand-set value outranks a discovered forward, mirroring resolveEnv", () => {
@@ -474,17 +475,21 @@ test("nothing anywhere is a plain no, and not-installed says so", () => {
   assert.match(s[1].method, /not installed/)
 })
 
-test("formatSummary draws one framed row per provider, marks as emoji", () => {
+test("auth view stays readable in narrow terminals and contains no ANSI in plain output", () => {
   const out = formatSummary([
-    { id: "claude", mark: "ok", method: "hand-set" },
+    { id: "claude", mark: "ok", auth: "OAuth token", source: "claude-personal", method: "hand-set" },
     { id: "opencode", mark: "warn", method: "host only" },
     { id: "droid", mark: "no", method: "nothing" },
   ])
-  assert.match(out, /│ claude {3}│ ✅ │/)
-  assert.match(out, /│ opencode │ ⚠️ │/)
-  assert.match(out, /│ droid {4}│ ❌ │/)
-  assert.match(out, /┌─+┬─+┬─+┐/)
-  assert.match(out, /└─+┴─+┴─+┘/)
+  assert.match(out, /\| Claude\s+\| OAuth token\s+\| claude-personal\s+\| Configured/)
+  assert.match(out, /\| OpenCode\s+\|.*Setup/)
+  assert.match(out, /\| Droid\s+\|.*Setup/)
+  assert.doesNotMatch(out, /\x1b|[┌┬└┴]/)
+  for (const width of [32, 76]) {
+    const narrow = formatSummary([{ id: "claude", mark: "ok", method: "a/very/long/".repeat(15), details: ["\x1b[31m" + "a/very/long/".repeat(15)] }], { width })
+    assert.ok(narrow.split("\n").every((line) => [...line].length <= width))
+    assert.doesNotMatch(narrow, /\x1b/)
+  }
   assert.equal(formatSummary([]), "")
 })
 

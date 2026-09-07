@@ -209,6 +209,29 @@ dashboard, and has **no prebuilt** — it needs the Rust toolchain.
 
 ## State model — one JSON record per box
 
+### Named coding-agent connections
+
+`src/auth-cli.js` handles `auth connect/list/explain/check/reconnect/disconnect`.
+`src/connections.js` owns metadata, private credential storage, account classification,
+selection, and the two delivery adapters. `src/config-paths.js` shares config locations
+with discovery without introducing an import cycle. `bin/lib/capture-setup-token.py`
+is the optional Python PTY bridge to the first-party Claude CLI; it returns the token
+on a private pipe and redacts it from displayed output.
+
+Connections live in `$CONFIG_DIR/connections/`: metadata JSON plus revisioned private
+token files. `loadConfig` loads metadata only; `resolveEnv` resolves the selected
+connection's credential at create time and removes competing auth variables. That
+path is also used for box/fleet preflight. Existing discovery precedence remains
+unchanged when no connection is selected. See ADR 0013 for ownership, file permissions,
+selection failures, and the difference between local readiness and provider acceptance.
+
+Box records additionally carry `connectionId`, `connectionRevision`, and `connectionHarness` when a
+connection was selected at creation. Bash preserves these through record rewrites.
+Connections are not refreshed into existing boxes, and changing one requires a new
+box. Organization subscription metadata does not enable organization sharing.
+
+### Box records
+
 `$STATE_DIR/boxes/<key>.json` (+ `<key>.log`), where `STATE_DIR` resolves the same
 way in `store.js`, `paths.sh`, and the TUI: `HERDR_PLUGIN_STATE_DIR` →
 `HERDR_E2B_STATE_DIR` → XDG. `CONFIG_DIR` follows the same shape in `config.js`,

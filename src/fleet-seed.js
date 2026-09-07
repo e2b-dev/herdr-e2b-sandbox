@@ -158,9 +158,10 @@ export const DEFAULT_SEEDS = {
  * default — inventing one would write junk into somebody's home directory — so it
  * seeds nothing until `[fleet.seed]` says what to run.
  */
-export function seedCommand(template, seeds = {}) {
+export function seedCommand(template, seeds = {}, connectionHarness = null) {
   const t = String(template ?? "")
   if (seeds && Object.prototype.hasOwnProperty.call(seeds, t)) return seeds[t]
+  if (connectionHarness && connectionHarness !== t) return seedCommand(connectionHarness, seeds)
   return DEFAULT_SEEDS[t] ?? ""
 }
 

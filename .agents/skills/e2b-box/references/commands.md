@@ -71,7 +71,39 @@ creating verbs (`open`, `up`): what a NEW box boots from; otherwise a branch rul
 | `e2b-box url` | the forwarded preview URL (port from `server_port`, default 3000) |
 | `e2b-box logs` | `tail -f` the provisioning log |
 
-### pass-throughs
+### Coding-agent authentication
+
+- `auth discover [--yes]` / piped `auth`: ASCII table of agent, auth type,
+  source, and status across saved connections,
+  manual config, and local discovery. Selected connections take precedence;
+  missing/expired/ambiguous selections show an actionable error, with no fallback.
+  Only discovered paths/variable names are saved to `auth.toml`, after confirmation
+  or `--yes` (`auth --yes` also saves directly). Config and named connections stay unchanged. Colors are TTY-only
+  and respect `NO_COLOR`; narrow terminals omit secondary columns. Use
+  `auth explain --template NAME` for paths and account details.
+- `auth connect claude [--user] [--name ID] [--yes]`: first-party setup-token flow
+  with private capture (requires Python 3). `--token-stdin --yes` accepts an existing
+  token from a private pipe; never put a token in argv.
+  Default names use the detected Team/Enterprise organization (`claude-e2b`),
+  the plan if its organization name is unavailable (`claude-team`), `claude-personal`
+  for Pro/Max, or `claude-local` for unknown plans. `--name` overrides the suggestion;
+  reconnect preserves the existing ID. `Local account` and `Access` are separate.
+- `auth connect codex [--user] [--name ID] [--yes]`: pointer to the local Codex
+  session; its real refresh token is never delivered to boxes.
+- `auth list [--json]`: metadata only; detected plan/org describe the local login.
+- `auth explain --template NAME [--connection ID] [--json]`: explain selection.
+- `auth check ID [--json]`: local availability and known expiry, no model request.
+- `auth reconnect ID [--yes] [--token-stdin]`: update the local connection.
+- `auth disconnect ID [--yes]`: remove local metadata and stored token revisions.
+- `open` / `up --connection ID`: select for a new box. Existing boxes reject this
+  option and retain their credentials; reconnect/disconnect do not alter them.
+
+One connection for a harness is its default; several require explicit selection or
+`[templates.<name>] connection = "ID"`. A selected invalid connection fails instead
+of falling back. All connections currently have personal access. Team/Enterprise
+detection is metadata; `--org` is rejected until a shared service is configured.
+
+### Pass-through commands
 
 - `e2b-box fleet …` → `e2b-fleet` (exec, flags forwarded untouched)
 - `e2b-box dash` / `e2b-box dash toggle` → `e2b-dash` / `e2b-dash-toggle`
