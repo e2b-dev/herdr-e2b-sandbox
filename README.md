@@ -388,8 +388,27 @@ press `prefix+shift+d` (bound in [Install](#install)).
 
 ```
 ↑/↓ move · ↵/o open · w worktree · s sync · p pull · z pause/resume
-x kill · c copy id · r refresh · T theme · q quit
+x kill · c copy id · C config paths · r refresh · T theme · q quit
 ```
+
+Press `C` (Shift+C) to choose a config path, then `Enter` to open it with the
+shell's `open` on macOS (`xdg-open` on Linux), or `c` to copy its path:
+`config.toml` for templates and manually configured API keys, `auth.toml` for
+discovered credential sources, or `connections/` for saved agent connections.
+The picker uses the active config directory and works with no boxes. `Esc`
+closes it. Paths can be copied before the files exist.
+
+Set `[dashboard].config_opener` to customize how Enter opens a path. It runs in
+your interactive shell with the plugin directory as both the working directory
+and `$1`, and the selected path as `$2`. For example, to open a new editor window:
+
+```toml
+[dashboard]
+config_opener = 'code --new-window "$1" "$2"'
+```
+
+`E2B_DASH_CONFIG_OPENER` overrides this setting. With neither set, the picker
+uses your shell's `open` on macOS or `xdg-open` on Linux.
 
 The header names the **region** a new box would land on (`us` / `eu`, resolved the
 same way every other verb resolves it, re-asked while the board is open) with the
