@@ -69,3 +69,27 @@ test("parseStatusZ: paths keep spaces and leading dashes; directory entries are 
 test("parseStatusZ: garbage entries are skipped, not thrown", () => {
   assert.deepEqual(parseStatusZ("x" + NUL + "??" + NUL + "?? ok.js" + NUL), { changed: ["ok.js"], deleted: [] })
 })
+
+// --- CLI invocation error handling -------------------------------------------
+import { execFile } from "node:child_process"
+import { fileURLToPath } from "node:url"
+import path from "node:path"
+
+const downloadScript = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src/download.js")
+
+test("CLI execution with invalid JSON exits with code 2", (t, done) => {
+  execFile("node", [downloadScript, "{not: valid json"], (err, stdout, stderr) => {
+    assert.equal(err?.code, 2)
+    assert.ok(stderr.includes("invalid JSON payload"))
+    done()
+  })
+})
+
+test("CLI execution with missing key/destRoot exits with code 2", (t, done) => {
+  execFile("node", [downloadScript, JSON.stringify({ key: "my-key" })], (err, stdout, stderr) => {
+    assert.equal(err?.code, 2)
+    assert.ok(stderr.includes("missing key/destRoot"))
+    done()
+  })
+})
+

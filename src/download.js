@@ -97,6 +97,8 @@ async function main({ key, destRoot, check = false }) {
     const atRisk = []
     for (const rel of files) {
       if (!dirty.has(rel) || relIsUnsafe(rel)) continue
+      // An unreadable dirty file is not evidence that pulling it is safe.
+      // Let the CLI fall back to its conservative guard when this check fails.
       const data = Buffer.from(await sandbox.files.read(posix.join(projectPath, rel), { format: "bytes" }))
       let local = null
       try {
@@ -134,33 +136,36 @@ async function main({ key, destRoot, check = false }) {
   const added = []
   const overwritten = []
   const skipped = []
+  const failed = []
   let unchanged = 0
   const batchSize = cfg.batchSize > 0 ? cfg.batchSize : 40
   for (let i = 0; i < files.length; i += batchSize) {
     const batch = files.slice(i, i + batchSize)
     await Promise.all(
       batch.map(async (rel) => {
-        const dest = await safeDest(rel)
-        if (!dest) {
-          skipped.push(rel)
-          return // unsafe path (traversal / symlink) — never write it
-        }
-        const data = Buffer.from(await sandbox.files.read(posix.join(projectPath, rel), { format: "bytes" }))
-        let local = null
         try {
-          local = await readFile(dest)
-        } catch {
-          local = null // doesn't exist locally
+          const dest = await safeDest(rel)
+          if (!dest) {
+            skipped.push(rel)
+            return // unsafe path (traversal / symlink) — never write it
+          }
+          const data = Buffer.from(await sandbox.files.read(posix.join(projectPath, rel), { format: "bytes" }))
+          let local = null
+          try {
+            local = await readFile(dest)
+          } catch {
+            local = null // doesn't exist locally
+          }
+          if (local !== null && local.equals(data)) {
+            unchanged += 1
+            return // identical — leave it alone
+          }
+          await writeFile(dest, data)
+          if (local === null) added.push(rel)
+          else overwritten.push(rel)
+        } catch (err) {
+          failed.push({ rel, error: err?.message || String(err) })
         }
-        if (local === null) {
-          added.push(rel)
-        } else if (!local.equals(data)) {
-          overwritten.push(rel)
-        } else {
-          unchanged += 1
-          return // identical — leave it alone
-        }
-        await writeFile(dest, data)
       }),
     )
   }
@@ -168,6 +173,7 @@ async function main({ key, destRoot, check = false }) {
   added.sort()
   overwritten.sort()
   skipped.sort()
+  failed.sort((a, b) => a.rel.localeCompare(b.rel))
   deleted.sort()
   for (const f of added) console.log(`  + ${f}  (new)`)
   for (const f of overwritten) console.log(`  ~ ${f}  (overwrote local)`)
@@ -176,19 +182,24 @@ async function main({ key, destRoot, check = false }) {
   // here and left for you: `git rm` locally if the agent was right.
   for (const f of deleted) console.log(`  - ${f}  (deleted in sandbox — kept locally)`)
   for (const f of skipped) console.log(`  ! ${f}  (skipped — unsafe path/symlink)`)
+  for (const f of failed) console.error(`  ! ${f.rel}  (failed — ${f.error})`)
   const changed = added.length + overwritten.length
   const tail =
     (deleted.length ? `, ${deleted.length} deleted in sandbox (kept)` : "") +
-    (skipped.length ? `, ${skipped.length} skipped` : "")
+    (skipped.length ? `, ${skipped.length} skipped` : "") +
+    (failed.length ? `, ${failed.length} failed` : "")
   const how = viaStatus ? "changed since the baseline" : "every file, byte-compared"
   console.log(
-    changed === 0
-      ? `nothing to pull — local already matches the sandbox (${how}; ${unchanged} unchanged)${tail}`
-      : `pulled ${changed} file(s): ${added.length} new, ${overwritten.length} overwritten, ${unchanged} unchanged (${how})${tail}`,
+    failed.length
+      ? `pull incomplete: ${changed} file(s) pulled, ${unchanged} unchanged (${how})${tail}`
+      : changed === 0
+        ? `nothing to pull — local already matches the sandbox (${how}; ${unchanged} unchanged)${tail}`
+        : `pulled ${changed} file(s): ${added.length} new, ${overwritten.length} overwritten, ${unchanged} unchanged (${how})${tail}`,
   )
   await log(
-    `pull (${viaStatus ? "changed-set" : "full"}): ${added.length} new, ${overwritten.length} overwritten, ${unchanged} unchanged, ${deleted.length} deleted-in-box, ${skipped.length} skipped → ${destRoot}`,
+    `pull (${viaStatus ? "changed-set" : "full"}): ${added.length} new, ${overwritten.length} overwritten, ${unchanged} unchanged, ${deleted.length} deleted-in-box, ${skipped.length} skipped, ${failed.length} failed → ${destRoot}`,
   )
+  if (failed.length) process.exitCode = 1
 }
 
 /** Paths with uncommitted local changes (modified, added, deleted, untracked). Empty
@@ -222,8 +233,14 @@ try {
   invokedDirectly = false
 }
 if (invokedDirectly) {
-  const input = JSON.parse(process.argv[2] || "{}")
-  if (!input.key || !input.destRoot) {
+  let input
+  try {
+    input = JSON.parse(process.argv[2] || "{}")
+  } catch (err) {
+    console.error(`download: invalid JSON payload: ${(err && err.message) || String(err)}`)
+    process.exit(2)
+  }
+  if (!input || typeof input !== "object" || !input.key || !input.destRoot) {
     console.error("download: missing key/destRoot")
     process.exit(2)
   }
