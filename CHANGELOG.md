@@ -6,7 +6,26 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-07
+
 ### Fixed
+
+- `pull` finishes every batch even when one remote file is unreadable or a local
+  write fails: each failure is reported per file, only successful writes count
+  as new or overwritten, and an incomplete pull exits 1 instead of claiming the
+  local tree matches the box. (#36)
+
+- Attach plans clamp pane dimensions to positive integers: missing, nonpositive
+  or nonfinite columns/rows default independently to 80/24 before they reach PTY
+  creation or resizing. (#35)
+
+- `exec` always emits its JSON result: malformed input, invalid timeouts, and
+  configuration or credential failures return one object with `ok: false` and
+  `exitCode: null` instead of crashing before the grader can read it. (#34)
+
+- Concurrent record writes in one process no longer share a temporary path;
+  each write gets its own tempfile, removed again if the write or rename fails.
+  (#33)
 
 - Closing the popup keeps its last frame and hidden cursor intact until Herdr
   removes the overlay, preventing an intermediate blank-screen/cursor flash.
@@ -443,7 +462,8 @@ Initial public release. A herdr plugin that mirrors a git worktree into an E2B
 sandbox: `e2b-box` for a single box, `e2b-box fleet` for a branch-per-agent
 fleet, and the `e2b-dash` TUI for watching them.
 
-[Unreleased]: https://github.com/e2b-dev/herdr-e2b-sandbox/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/e2b-dev/herdr-e2b-sandbox/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/e2b-dev/herdr-e2b-sandbox/releases/tag/v0.5.0
 [0.4.0]: https://github.com/e2b-dev/herdr-e2b-sandbox/releases/tag/v0.4.0
 [0.3.0]: https://github.com/e2b-dev/herdr-e2b-sandbox/releases/tag/v0.3.0
 [0.2.0]: https://github.com/e2b-dev/herdr-e2b-sandbox/releases/tag/v0.2.0
