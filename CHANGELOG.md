@@ -21,6 +21,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The popup border shows a GitHub icon and `herdr-e2b-sandbox`; its dashboard
+  header omits the repeated project name.
+
+- Config openers use the current user's Herdr config folder as the editor root
+  and working directory, with the selected config file passed separately.
+
+- The sandbox open and fleet creation actions always open and focus a new pane
+  below the invoking pane. Fleet creation continues into the dashboard there.
+
 - `e2b-box auth` now combines saved connections, config, and discovery in a compact
   ASCII table with explicit OAuth/API-key labels. Selected connections are credited correctly, setup advice appears
   only when needed, and unavailable connections cannot appear ready through a

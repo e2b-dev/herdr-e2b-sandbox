@@ -139,6 +139,10 @@ key = "prefix+shift+d"                                          # the board, eve
 command = "herdr plugin action invoke dashboard-toggle --plugin e2b-dev.herdr-e2b"
 ```
 
+`prefix+shift+e` opens the template picker and sandbox shell in a new pane below
+the invoking pane. `prefix+shift+f` opens fleet creation below it, then shows the
+dashboard there. Both focus the new pane, like `prefix+-`.
+
 `prefix+shift+p` is herdr's own `rename_pane` out of the box; move it first
 (`rename_pane = "alt+r"` in the `[keys]` table) or the pull never fires. The pull
 reports as a herdr notification and refuses to overwrite uncommitted local edits,
@@ -409,14 +413,15 @@ command = "herdr plugin action invoke dashboard --plugin e2b-dev.herdr-e2b"
 
 [[keys.command]]
 key = "prefix+ctrl+d"
-type = "popup"
-command = 'exec "$HOME/.local/bin/e2b-popup" --render'
-width = "90%"
-height = "85%"
+type = "shell"
+command = 'exec "$HOME/.local/bin/e2b-popup"'
 ```
 
-The native popup binding opens the dashboard directly, skipping the plugin
-action and CLI round trip. Use it for the fastest shortcut. The first frame
+The popup border shows ` herdr-e2b-sandbox` (the GitHub glyph uses a Nerd Font),
+leaving more room for the count and region in the dashboard header. Herdr builds
+that supply `HERDR_POPUP_VERSION` show the version on the top-right border; older
+builds keep it in the dashboard header. The shortcut
+uses the plugin popup entrypoint so Herdr can display that title. The first frame
 reuses the last resolved theme and region while fresh settings load in the
 background. Box records are read fresh, and config commands are never cached.
 
@@ -437,8 +442,9 @@ The picker uses the active config directory and works with no boxes. `Esc`
 closes it. Paths can be copied before the files exist.
 
 Set `[dashboard].config_opener` to customize how Enter opens a path. It runs in
-your interactive shell with the plugin directory as both the working directory
-and `$1`, and the selected path as `$2`. For example, to open a new editor window:
+your interactive shell with the Herdr config folder as both the working directory
+and `$1`, and the selected path as `$2`. The folder resolves to
+`$XDG_CONFIG_HOME/herdr`, or `$HOME/.config/herdr` when XDG is unset. For example, to open a new editor window:
 
 ```toml
 [dashboard]
