@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Relicensed from MIT to Apache-2.0, matching the rest of the e2b-dev org, with
+  the copyright holder corrected from the scaffold's to FoundryLabs, Inc.
+  `package.json` carries the `Apache-2.0` SPDX id and the README's License
+  section points at `LICENSE`.
+
 ## [0.5.0] - 2026-09-07
 
 ### Fixed
