@@ -59,11 +59,21 @@ pane_is_idle() {
 }
 
 # Anchor the split to the invocation, even if focus has since moved elsewhere.
+#
+#   pane_open_below <entrypoint> [target-pane] [herdr pane-open args...]
+#
+# An empty target means "the invoking pane" (plugin context, then focus). The
+# popup dashboard passes one explicitly: inside a popup, context and focus both
+# name the popup itself, so only the launcher knew which pane it floated over.
+# Anything after the target is handed to herdr as-is (`--cwd`, `--env`).
 pane_open_below() {
-  local entrypoint="$1" herdr node target
+  local entrypoint="$1" target="${2:-}" herdr node
+  shift; [ "$#" -gt 0 ] && shift
   herdr=$(pane_herdr) || { echo "e2b: can't find the herdr binary" >&2; return 1; }
   node=$(pane_node) || { echo "e2b: can't find node — set HERDR_E2B_NODE=/path/to/node" >&2; return 1; }
-  target=$(printf '%s' "${HERDR_PLUGIN_CONTEXT_JSON:-}" | "$node" "$PLUGIN_DIR/src/pane-parse.js" origin)
+  if [ -z "$target" ]; then
+    target=$(printf '%s' "${HERDR_PLUGIN_CONTEXT_JSON:-}" | "$node" "$PLUGIN_DIR/src/pane-parse.js" origin)
+  fi
   if [ "${target:--}" = "-" ]; then
     read -r target _ _ <<EOF
 $(pane_query "$herdr" "$node" "")
@@ -71,5 +81,5 @@ EOF
   fi
   [ "${target:--}" != "-" ] || { echo "e2b: no invoking pane" >&2; return 1; }
   "$herdr" plugin pane open --plugin e2b-dev.herdr-e2b --entrypoint "$entrypoint" \
-    --placement split --target-pane "$target" --direction down --focus >/dev/null
+    --placement split --target-pane "$target" --direction down --focus ${1+"$@"} >/dev/null
 }
