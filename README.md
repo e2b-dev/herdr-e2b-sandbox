@@ -160,6 +160,7 @@ cd ~/some/checkout
 e2b-box                             # pick a template, boot, land in the box's shell
 e2b-box exec 'npm test'             # …or run one command and get JSON back
 e2b-box pull                        # bring the box's changes down
+e2b-box run -t claude --task GOAL.md --push --json        # headless: task in, branch out
 
 e2b-fleet                           # name a task, tick a roster, watch the board
 e2b-bench login-fix --grade 'npm test'
@@ -310,6 +311,8 @@ open [-t NAME]        boot or reconnect this checkout's box, then attach
 up [-t NAME]          same, but the box boots behind you
 connect [<id>]        attach to a box that already exists
 exec <cmd>            run one command inside the box, print its output
+run --task TEXT       headless: boot, hand the task to the box's agent, wait,
+                      pull the result, [--push], tear down; exit 0 only if all landed
 sync                  upload this checkout into the box    local → box
 pull [--force]        download the box's project dir back  box → local
 pause · resume        freeze / thaw — state kept, billing clock stopped
@@ -320,9 +323,49 @@ wait · doctor         block until ready · check node, CLI, credentials, state
 dash [toggle]         the live board of every tracked box
 ```
 
-`--json` on `list`/`status`/`wait`, `--timeout-ms N` on `exec`/`wait`, `-b KEY`
-to act on another box. `status`/`list` show the **last known** state; `open`
+`--json` on `list`/`status`/`wait`/`run`, `--timeout-ms N` on `exec`/`wait`/`run`,
+`-b KEY` to act on another box. `status`/`list` show the **last known** state; `open`
 reconciles with E2B and reprovisions a box that idle-timed-out.
+
+#### `e2b-box run`: headless, for a cron or a delivery lane
+
+`open` and `fleet` need a pane and a human in it; `exec` runs one command. `run`
+is the verb with neither: it boots this checkout's box (or re-syncs the tracked
+one so it sees the current tree), writes the task into the box as a file, starts
+the template's agent in its **non-interactive** mode and waits for it to exit,
+pulls what changed back into this checkout, and **pauses** the box, so `e2b-box
+open` can put you back in the run nobody watched (`--kill` destroys it instead,
+`--keep` leaves it running). Exit 0 means every step landed; anything else is 1,
+with the step that failed in `status`.
+
+```bash
+e2b-box run -t claude --task 'fix the login redirect loop'
+e2b-box run -t codex  --task GOAL.md --push --json           # a file: read it; commit + push this branch
+cat GOAL.md | e2b-box run -t amp --task - --timeout-ms 3600000   # `-`: stdin
+e2b-box run -t claude --task GOAL.md --dry-run               # the plan, nothing created
+```
+
+`--task` takes the text itself, the path of a file to read, or `-` for stdin.
+
+- **Templates**: `claude`, `codex`, `opencode`, `amp` ship a verified headless
+  command; anything else (including `base`, the default) is refused by name until
+  `[run.agents]` maps it, see `config.example.toml`.
+- **`--push`** commits everything the pull left different on the **local** branch
+  and pushes it to `--remote` (`origin`). The box holds a baseline and no history
+  (ADR 0012), so the branch with the real history is the one on this machine. A
+  tree that was dirty before the run is part of the snapshot the agent worked
+  from, and so part of the commit; `run` says so.
+- **Clobber guard** is `pull`'s: a file the agent changed that also carries
+  uncommitted local edits aborts the pull and the run fails as `pull-failed`;
+  the box is never killed then, even under `--kill`, so nothing is lost.
+  `--force` overrides.
+- **`--json`** prints one object: `{ok, key, sandboxId, template, status, agent:
+  {ok, exitCode, stdout, stderr, error}, pull, push, box, elapsedMs, error}`.
+  `status` is `done`, or the step that decided otherwise: `boot-failed`,
+  `task-failed`, `agent-unmeasured` (never ran to a verdict: unreachable, or
+  killed at `--timeout-ms`), `agent-failed` (exited non-zero), `pull-failed`,
+  `push-failed`, `teardown-failed`. `box` is what the box is now: `paused`,
+  `killed` or `running`.
 
 ### `e2b-fleet` — one base ref, one box per template
 

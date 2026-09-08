@@ -147,12 +147,52 @@ errors are never folded into failures: "2/4 passed" means something very differe
 when the other two never ran. Rubrics, LLM judging and ranking stay out
 (`docs/adr/0004`, "What stays out").
 
+## The fourth flow: `e2b-box run`
+
+Headless: no pane, no human, one exit code. What a cron or a delivery lane
+dispatches (#47), and the only verb that drives an agent to *completion* rather
+than starting one for someone to sit in front of.
+
+1. Parse the task (`--task`: the text, a readable file, or `-` for stdin) and resolve
+   the template: a tracked box keeps its own; else `-t` / `E2B_TEMPLATE` / the
+   branch rules / `[sandbox] template`. Ask `src/run-agent.js` for that template's
+   headless command. **No command → exit 2 before anything boots**: the default
+   template is `base`, and a usage error must never cost a box. `--dry-run` prints
+   the plan here and stops (the feature's test seam).
+2. `provision_from_cwd … sync` + `spin_until_ready`: a fresh box is created and
+   uploaded, a tracked one is reconnected (resumed if paused) and **re-uploaded**,
+   so the agent always works the current tree. Interrupting here kills a box this
+   run created (`arm_boot_abort`), never one that already existed.
+3. The task goes into the box as a **file** over `exec` (base64, the same
+   `TASK_FILE` `e2b-fleet` writes its brief to), then the agent command runs over
+   `exec` with `--timeout-ms` (30 min default), killed at the bound, so a stuck
+   agent cannot hold a cron. `exec`'s `ok:false` / `exitCode` split becomes
+   `agent-unmeasured` / `agent-failed`.
+4. **Whatever the agent did, its work comes home**: a child `e2b-box pull` with the
+   clobber guard intact. A pull that did not complete never lets the box be killed
+   (`--kill` is downgraded to a pause), the one thing this verb must never do is
+   destroy work that has not landed. `--force` is `pull`'s.
+5. `--push`: on the **local** branch, `git add -A && git commit && git push -u
+   <remote> <branch>`. Local because the box holds a baseline commit and no
+   history (ADR 0012); the branch with the real history is the one on this
+   machine. A tree that was dirty before the run is named as riding in the commit
+   (ADR 0003's shape: say it, then do what was asked).
+6. The box is **paused** (`src/lifecycle.js`): a headless run is the one nobody
+   watched, so the box is the evidence, and a paused box costs nothing while
+   `e2b-box open` can still put you back in it. `--kill` destroys it instead
+   (`sdk_kill`; a kill that fails keeps the record, same rule as `kill`), `--keep`
+   leaves it running. Either teardown failing fails the run as `teardown-failed`.
+
+One result: `{ok, key, sandboxId, template, status, agent, pull, push, box,
+elapsedMs, error}` on stdout with `--json` (progress on stderr), exit 0 iff
+`status == "done"`; `box` is `paused`, `killed` or `running`.
+
 ## Component reference
 
 ### Control plane — `bin/`
 | File | Responsibility |
 | --- | --- |
-| `e2b-box` | The CLI. Subcommands `open/up/shell/status/list/url/logs/sync/pull/exec/pause/resume/kill/doctor/auth`, plus `--template` on the creating verbs. Key derivation, optimistic connect, `spin_until_ready`, `connect_shell`, template selection (`pick_template`; the chooser itself lives in `lib/chooser.sh`), disconnect + on-close prompts, `pull` safety gate. |
+| `e2b-box` | The CLI. Subcommands `open/up/shell/status/list/url/logs/sync/pull/exec/run/pause/resume/kill/doctor/auth`, plus `--template` on the creating verbs. Key derivation, optimistic connect, `spin_until_ready`, `connect_shell`, template selection (`pick_template`; the chooser itself lives in `lib/chooser.sh`), disconnect + on-close prompts, `pull` safety gate. The `run` verb (headless, #47) composes the others in order, `provision_from_cwd … sync`, `exec` for the task file and then the agent, `pull` via a child `e2b-box pull`, `sdk_kill`, and owns nothing new but the order, the `status` vocabulary and the exit code. |
 | `e2b-box-open` | The `open` keybinding/action: opens the template picker and sandbox shell in a new, focused pane below the invoking pane. A herdr action has no terminal of its own, so it can host neither the shell nor the chooser. |
 | `e2b-fleet` | The fleet verb: one base ref → N members, one per roster template. Two ways in — bare (two picker screens, then the board) and `create <slug>` (flags only; `-s`, `--agents a,b,c` / `all`, `--task`) — dedupe, the roster spell-check against `resolve-template.js --known` (`--force` overrides), the `--dry-run` plan, the herdr-version probe, concurrent spawn (background jobs + per-member result files), the per-member first-run seeding + agent auto-start + fleet-task delivery (`set_seed_argv` / `set_agent_argv` / `set_rename_argv` / `set_prompt_argv` — the plan and the real call share every builder, so they cannot drift), the `N/M up` summary. Also the `kill` verb: the branch glob, the conservative teardown, the kept-branch report. Drives herdr's socket API only — never the E2B SDK. |
 | `e2b-fleet-open` | The `fleet` keybinding/action: opens the fleet pickers and subsequent dashboard in a new, focused pane below the invoking pane. |
@@ -185,6 +225,7 @@ when the other two never ran. Rubrics, LLM judging and ranking stay out
 | `harnesses.js` | Which coding CLIs are installed on the USER's machine and whether a box may borrow their credentials: `HARNESSES` (per harness — the binary, its version and auth probes, its own parse rule, the variable it uses **here** vs the one a **box** needs, and any documented plain-key file) for the eight harnesses behind a shipped template, and `interpretProbe`, which reads a probe's RESULT and never spawns anything. Pure, so every parse rule is testable with none of them installed. A harness resolves to `authenticated` / `no-key` / `unknown`, and `unknown` is never collapsed into "not installed". Bounded by ADR 0009: no Keychain, no OAuth cache, environment and documented config only. |
 | `harness-probe.js` | The impure half of the above: spawns the probes for all eight harnesses concurrently with a 5s ceiling, `shell: false` (so a shell function cannot answer for the binary) and stdin on `/dev/null` (one harness with no key opens a browser and blocks forever), then formats one row per harness. Read-only — it never writes. |
 | `harness-auth.js` | `e2b-box auth` itself: probe, show, ask **once** for the whole batch, write. `buildPlan` turns probe rows into what will be kept and is pure given its file reader; `renderAuthToml` and `formatPlan` are pure; only `writeAuthFile` touches disk. It writes a GENERATED `auth.toml` beside `config.toml` at mode `0600`, regenerated whole on every run, and never touches `config.toml` — one writer each is what makes "hand-written always wins" true. ADR 0009's split lives here: a value read out of a **file** is stored, a value seen only in the **shell** records the variable's NAME and nothing else. Missing credentials are reported and never prompted for; `--yes` skips the question, and no terminal plus no flag writes nothing. It also warns when a variable it recorded by NAME is invisible to a login shell (`invisibleToLoginShell`, one `bash -lc` for the whole batch, names only in both directions) — herdr launches plugin commands from one, so a key exported from a zsh rc is found here and absent at create time. Two entry points, one implementation: the verb a user types, and `install.sh`'s `harness_discovery` on first run — the installer shells out to the very same subcommand with `--yes` (a build step has no TTY), indents its report, and treats any failure as a report rather than a failed install. |
+| `run-agent.js` | The headless agent table `e2b-box run` drives a box with: `DEFAULT_RUN_AGENTS` (template → that vendor's verified **non-interactive** command, `claude -p`, `codex exec`, `opencode run`, `amp -x`, each with its skip-approvals flag, each reading the task from `TASK_FILE` inside the box, never from argv) and `runCommand` (`[run.agents]` over those, by key presence, so `""` means "no headless agent"). Kept apart from `fleetAgents` on purpose: the interactive command for a template is not a flag away from its headless one. A template with no verified headless mode has no default and `run` refuses it by name. Also the CLI bash calls (`<template>`, `--task-file`, `--shipped`). |
 | `fleet-seed.js` | The first-run state a member's agent needs before it will work instead of asking questions: `DEFAULT_SEEDS` (the verified `~/.claude.json` / `~/.codex/auth.json` shapes, as one-line POSIX sh) and `seedCommand` (`[fleet.seed]` over those, by key presence, so `""` means "seed nothing"). The shell lives here rather than in bash so `node --test` can execute it. Every command names the credential's **variable**, computes what it needs (Claude approves a key by its last 20 characters) inside the box, and refuses to overwrite a file that already exists. |
 
 ### Grader — `bin/e2b-bench` + `tui/src/{bench,grade}.rs` + `tui/src/bin/e2b-bench.rs`
@@ -349,6 +390,10 @@ fleet still isn't (`docs/adr/0005`). The member list is never stored.
   `e2b-fleet --dry-run` prints the exact text the box is sent.
 - *"How is a fleet torn down?"* → the `down` block at the top of `bin/e2b-fleet`
   (`dn_safe` is the "holds commits that exist nowhere else" judgement).
+- *"What will `run` actually execute in the box?"* → `e2b-box run … --dry-run`
+  prints it; `DEFAULT_RUN_AGENTS` in `src/run-agent.js` is where the per-template
+  headless command lives, `[run.agents]` overrides it. *"Why was my template
+  refused?"* → it has no verified headless mode there; `run` never invents a flag.
 - *"Why did a member grade as `error` instead of `fail`?"* → `src/exec.js` decides
   it (`ok:false` = unreachable / gone / timed out), `Verdict::from_exec` in
   `tui/src/bench.rs` maps it, and a missing exit code is deliberately an error —

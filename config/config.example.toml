@@ -325,3 +325,36 @@ ignore = [".git", "node_modules", ".next", "dist", "build", ".turbo", ".cache",
 # [fleet.seed]
 # mine = 'test -f "$HOME/.mine.json" || printf "{\"key\":\"%s\"}" "$MY_API_KEY" > "$HOME/.mine.json"'
 # claude = ""
+
+[run]
+# `e2b-box run` is the HEADLESS verb: no pane, no human, a cron or a delivery lane
+# boots (or re-syncs) this checkout's box, hands the box's agent one task, waits for
+# it to finish, pulls the result home, optionally commits and pushes it, tears the
+# box down, and exits 0 only when every step landed.
+#
+# Which command works the task is the template's, and it is NOT the `[fleet.agents]`
+# command: that one starts an interactive TUI for a human to sit in front of, this
+# one is the vendor's non-interactive mode, read a prompt, work until the turn ends,
+# print, exit with a code. The shipped defaults, each with that vendor's own
+# skip-approvals flag (the box is disposable and nobody is attached to approve):
+#
+#   claude    claude --dangerously-skip-permissions -p "$(cat $HOME/.herdr-e2b-task.md)"
+#   codex     codex exec --dangerously-bypass-approvals-and-sandbox - < $HOME/.herdr-e2b-task.md
+#   opencode  opencode run --auto "$(cat $HOME/.herdr-e2b-task.md)"
+#   amp       amp -x --dangerously-allow-all < $HOME/.herdr-e2b-task.md
+#
+# THE RULE, if you write your own: the task is a FILE in the box, at
+# $HOME/.herdr-e2b-task.md, written over the SDK before the command runs. Your
+# command reads it from there, `"$(cat …)"` as a positional or `< …` on stdin,
+# whichever the CLI documents, and must exit when the agent is done, because
+# `run` waits on the exit code (bounded by --timeout-ms, 30 minutes by default).
+# One line; it runs in the box's project dir.
+#
+# Templates the plugin ships no headless mode for (grok, droid, prime, muse, base,
+# your own) are refused BY NAME until you map them here: an invented flag fails to
+# launch and looks exactly like an agent that did nothing. An empty string switches
+# a shipped default off.
+# [run.agents]
+# muse = 'muse --yolo "$(cat $HOME/.herdr-e2b-task.md)"'
+# "ondrejs-project/herdr-agents" = 'claude --dangerously-skip-permissions -p "$(cat $HOME/.herdr-e2b-task.md)"'
+# claude = ""
