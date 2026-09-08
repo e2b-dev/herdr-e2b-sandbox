@@ -11,7 +11,7 @@ pub(crate) struct DashboardSettings {
     pub(crate) theme: String,
     pub(crate) opener: String,
     pub(crate) domain: String,
-    /// Where the popup's Enter opens a box: below · right · tab. Empty (an older
+    /// Where the popup's Enter opens a box: below · right · above · left · tab. Empty (an older
     /// resolver) means the TUI keeps its default.
     #[serde(default)]
     pub(crate) popup_open: String,

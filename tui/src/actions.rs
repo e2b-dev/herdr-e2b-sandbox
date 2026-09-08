@@ -51,8 +51,8 @@ pub(crate) fn action_command(verb: &str, key: &str, wt: &str) -> Command {
 
 /// Enter from the popup: open the box in a regular pane anchored to `origin`
 /// (the pane the popup floats over) instead of inside the overlay, whose
-/// terminal herdr discards when the popup closes. `placement` is below, right or
-/// tab (`[dashboard].popup_open`). `e2b-box-open` makes the herdr call; `--box`
+/// terminal herdr discards when the popup closes. `placement` is below, right,
+/// above, left or tab (`[dashboard].popup_open`). `e2b-box-open` makes the herdr call; `--box`
 /// + `--cwd` is the same KEY/worktree pairing `action_command` uses.
 pub(crate) fn popup_open_command(origin: &str, placement: &str, key: &str, wt: &str) -> Command {
     let mut command = Command::new("e2b-box-open");

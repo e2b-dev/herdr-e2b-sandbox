@@ -2,7 +2,7 @@
 # Open the template picker and sandbox shell in a focused pane below the invoking
 # pane. No flags is the `open` action. The popup dashboard says where and which:
 # `--target-pane` (the pane it floats over, not the popup), `--placement`
-# (below, right or tab; `[dashboard].popup_open`), `--cwd` (the box's worktree)
+# (below, right, above, left or tab; `[dashboard].popup_open`), `--cwd` (the box's worktree)
 # and `--box` (its key, exported as KEY so `e2b-box open` never re-derives one
 # from the cwd).
 set -uo pipefail

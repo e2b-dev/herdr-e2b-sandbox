@@ -221,9 +221,9 @@ server_port  = 3000
 # overrides this). Presets: terminal · solarized-light · tokyo-night · dracula ·
 # nord · gruvbox.
 # theme = "terminal"
-# Where Enter in the popup dashboard (e2b-popup) opens a box: "below" (default,
-# a split under the pane the popup floats over), "right" (a split beside it) or
-# "tab" (a new tab). Herdr splits right or down only, so there is no left or up.
+# Where Enter in the popup dashboard (e2b-popup) opens a box: "below" (default),
+# "right", "above" or "left" (a split on that side of the pane the popup floats
+# over), or "tab" (a new tab).
 # popup_open = "below"
 # Optional shell opener: $1 is the Herdr config directory, $2 the selected config path.
 # Runs in $XDG_CONFIG_HOME/herdr (or $HOME/.config/herdr); defaults to shell `open` (macOS) / `xdg-open` (Linux).

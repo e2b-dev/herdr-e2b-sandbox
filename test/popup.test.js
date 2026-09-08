@@ -15,6 +15,7 @@ function fixture(t) {
   const calls = path.join(dir, "calls")
   writeFileSync(herdr, `#!/bin/sh
 printf "%s\\n" "$@" > "$POPUP_CALLS"
+printf "%s\\n" "$*" >> "$POPUP_CALLS.all"
 case "$1 $2" in
   "pane list") printf '%s\\n' '{"result":{"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","focused":true}]}}' ;;
   "pane process-info") printf '%s\\n' '{"result":{"process_info":{"foreground_processes":[{"name":"zsh"}]}}}' ;;
@@ -153,14 +154,25 @@ test("the popup's Enter opens the box where [dashboard].popup_open says, pinned 
       "plugin", "pane", "open", "--plugin", "e2b-dev.herdr-e2b", "--entrypoint", "box", ...expected, ...tail,
     ])
   }
-  assert.equal(f.run("e2b-box-open", ["--placement", "left"]).status, 2)
+  // above/left: herdr only splits down/right, so the new pane trades places
+  // with the origin afterwards. A failed swap is a warning, not a failed open.
+  for (const [placement, direction] of [["above", "down"], ["left", "right"]]) {
+    rmSync(`${f.calls}.all`, { force: true })
+    const result = f.run("e2b-box-open", ["--target-pane", "w5:p6", "--placement", placement, "--box", "tree-abc12345"], env)
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(readFileSync(`${f.calls}.all`, "utf8").trim().split("\n"), [
+      `plugin pane open --plugin e2b-dev.herdr-e2b --entrypoint box --placement split --target-pane w5:p6 --direction ${direction} --focus --env KEY=tree-abc12345`,
+      `pane swap --pane w5:p6 --direction ${direction}`,
+    ])
+  }
+  assert.equal(f.run("e2b-box-open", ["--placement", "up"]).status, 2)
   assert.equal(f.run("e2b-box-open", ["--box"]).status, 2)
   assert.equal(f.run("e2b-box-open", ["--nope"]).status, 2)
 })
 
 test("[dashboard].popup_open reaches the dashboard's settings, anything else means below", (t) => {
   const f = fixture(t)
-  for (const [value, expected] of [['"tab"', "tab"], ['"right"', "right"], ['"left"', "below"], [null, "below"]]) {
+  for (const [value, expected] of [['"tab"', "tab"], ['"right"', "right"], ['"above"', "above"], ['"left"', "left"], ['"up"', "below"], [null, "below"]]) {
     writeFileSync(path.join(f.dir, "config.toml"), value === null ? "" : `[dashboard]\npopup_open = ${value}\n`)
     const result = spawnSync(process.execPath, [path.join(root, "src/resolve-dashboard.js")], {
       encoding: "utf8",

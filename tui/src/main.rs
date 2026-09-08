@@ -48,7 +48,7 @@ use theme::{
 struct App {
     popup: bool,
     origin_pane: Option<String>, // popup only: the pane it floats over (E2B_DASH_ORIGIN_PANE)
-    popup_open: String,          // popup only: where Enter opens a box (below · right · tab)
+    popup_open: String, // popup only: where Enter opens a box (below · right · above · left · tab)
     dir: PathBuf,
     config_dir: PathBuf,
     config_path_selection: Option<usize>,
