@@ -175,6 +175,10 @@ placement = "zoomed"
 command = ["bash", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/e2b-dash\""]
 
 # The popup carries the project name in its border; its dashboard header is compact.
+# Enter there does not run the box shell inside the overlay (herdr discards that
+# terminal on close): it opens the box in a regular pane split below the pane the
+# popup floats over, then closes the popup. e2b-popup records that pane as
+# E2B_DASH_ORIGIN_PANE at launch, which is why the popup is opened through it.
 [[panes]]
 id = "popup"
 title = " herdr-e2b-sandbox"

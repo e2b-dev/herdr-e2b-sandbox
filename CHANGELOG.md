@@ -6,6 +6,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Enter in the popup dashboard opens the box in a regular pane split below the
+  pane the popup floats over, then closes the popup, instead of running the
+  sandbox shell inside the overlay (whose terminal herdr discards on close).
+  `e2b-popup` records the pane it was summoned over as `E2B_DASH_ORIGIN_PANE`
+  and the TUI hands it to `e2b-box-open --target-pane … --cwd … --box …`, which
+  now takes those flags; the zoomed and split dashboards still open inline.
+
 ### Changed
 
 - Relicensed from MIT to Apache-2.0, matching the rest of the e2b-dev org, with
