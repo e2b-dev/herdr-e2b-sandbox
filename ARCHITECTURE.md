@@ -185,7 +185,8 @@ than starting one for someone to sit in front of.
 
 One result: `{ok, key, sandboxId, template, status, agent, pull, push, box,
 elapsedMs, error}` on stdout with `--json` (progress on stderr), exit 0 iff
-`status == "done"`; `box` is `paused`, `killed` or `running`.
+`status == "done"`; `box` is `paused`, `killed` or `running`. The user-facing
+guide, with a CI example, is [docs/headless-run.md](docs/headless-run.md).
 
 ## Component reference
 

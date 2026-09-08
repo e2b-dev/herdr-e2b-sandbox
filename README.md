@@ -346,6 +346,8 @@ e2b-box run -t claude --task GOAL.md --dry-run               # the plan, nothing
 ```
 
 `--task` takes the text itself, the path of a file to read, or `-` for stdin.
+The full contract, the box lifecycle and a GitHub Actions example live in
+[docs/headless-run.md](docs/headless-run.md).
 
 - **Templates**: `claude`, `codex`, `opencode`, `amp` ship a verified headless
   command; anything else (including `base`, the default) is refused by name until

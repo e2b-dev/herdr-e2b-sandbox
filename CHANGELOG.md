@@ -19,6 +19,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   prints one result object with the deciding `status`. `claude`, `codex`,
   `opencode` and `amp` ship verified headless commands (`src/run-agent.js`);
   other templates are refused by name until `[run.agents]` maps them.
+  `docs/headless-run.md` is the guide, with a GitHub Actions example.
 
 ### Fixed
 
