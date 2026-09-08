@@ -8,6 +8,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `e2b-box run` drives every shipped agent template headless: `grok`
+  (`--prompt-file`), `droid` (`droid exec -f`), `muse` (`muse exec --prompt-file`)
+  and `prime` (`prime-agent -p`) join `claude`, `codex`, `opencode` and `amp` in
+  `DEFAULT_RUN_AGENTS`, each with its vendor's skip-approvals flag, verified off the
+  CLIs' own `--help`. Only `base` and a user's own template still need `[run.agents]`.
+
 - `e2b-box run`, the headless verb (#47): boot or re-sync this checkout's box,
   write the task into it as a file, start the template's agent in its
   non-interactive mode and wait for it to exit, pull what changed back, optionally
