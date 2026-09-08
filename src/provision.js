@@ -26,6 +26,7 @@ import {
   CONFIG_PATH,
 } from "./config.js"
 import { seedCommand } from "./fleet-seed.js"
+import { pinCommand } from "./model-pin.js"
 import { selectConnection } from "./connections.js"
 import {
   requireApiKey,
@@ -344,6 +345,20 @@ async function main() {
     await sandbox.files.write("/home/user/.herdr-e2b-seed.sh", `${seed}\n`)
     await sandbox.commands
       .run('bash "$HOME/.herdr-e2b-seed.sh"', { cwd: projectPath })
+      .catch(() => {})
+  }
+
+  // The model pin (`[templates.<name>] model` / `reasoning`), for the harnesses that
+  // read it from their own config file. After the seed, because the seed may have
+  // created that file, and it only ever adds keys the file does not have. The values
+  // arrive as HERDR_E2B_MODEL / HERDR_E2B_REASONING in the box's environment (set at
+  // create time by resolveEnv), so this command carries no value and does nothing on
+  // a box created before the pin was configured. Best-effort like the seed.
+  const pin = pinCommand(boxTemplate, cfg.templateModels?.[boxTemplate])
+  if (pin) {
+    await sandbox.files.write("/home/user/.herdr-e2b-model.sh", `${pin}\n`)
+    await sandbox.commands
+      .run('bash "$HOME/.herdr-e2b-model.sh"', { cwd: projectPath })
       .catch(() => {})
   }
 

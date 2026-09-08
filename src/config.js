@@ -4,6 +4,7 @@ import os from "node:os"
 import TOML from "@iarna/toml"
 
 import { HARNESSES, readHarnessFile } from "./harnesses.js"
+import { modelEnv, normalizePin } from "./model-pin.js"
 import { AUTH_PATH, CONFIG_PATH, CONNECTIONS_DIR } from "./config-paths.js"
 import { applyConnection, readConnections, selectConnection } from "./connections.js"
 export { AUTH_PATH, CONFIG_PATH } from "./config-paths.js"
@@ -264,12 +265,18 @@ function nameTable(raw) {
 export function resolveEnvConfig({ sandbox = {}, templates = {} } = {}) {
   const byTemplate = {}
   const prefer = {}
+  const models = {}
   if (templates && typeof templates === "object" && !Array.isArray(templates)) {
     for (const [template, section] of Object.entries(templates)) {
       const name = String(template).trim()
       if (!name) continue
       const env = envTable(section?.env)
       if (Object.keys(env).length) byTemplate[name] = env
+      // `model` / `reasoning`: which model that template's agent uses and how hard it
+      // thinks, for every box booted from it. Free strings, each harness has its own
+      // vocabulary; src/model-pin.js knows where each harness reads them from.
+      const pin = normalizePin(section)
+      if (pin) models[name] = pin
       // `prefer = "env"` — the documented way to take back the precedence a
       // discovered SESSION otherwise wins (ADR 0010). Only that one value means
       // anything; anything else is left unset rather than guessed at, so a typo
@@ -277,7 +284,7 @@ export function resolveEnvConfig({ sandbox = {}, templates = {} } = {}) {
       if (String(section?.prefer ?? "").trim() === "env") prefer[name] = "env"
     }
   }
-  return { envShared: envTable(sandbox?.env), envByTemplate: byTemplate, templatePrefer: prefer }
+  return { envShared: envTable(sandbox?.env), envByTemplate: byTemplate, templatePrefer: prefer, templateModels: models }
 }
 
 /**
@@ -433,6 +440,11 @@ export function resolveEnv(cfg, template, env = {}, now = Date.now(), readFile =
   const session = sessionValue(cfg, template, now, readFile)
   const merged = {
     ...(cfg?.templateEnvDefaults?.[template] || {}),
+    // The model pin (`[templates.<name>] model` / `reasoning`), as the variables the
+    // harness reads plus the two shared ones the file-route pin command reads
+    // (src/model-pin.js). Below the user's own `env` table, so a hand-written
+    // ANTHROPIC_MODEL still wins over the pin.
+    ...modelEnv(template, cfg?.templateModels?.[template]),
     // The discovered rung has two halves, and forwarding wins between them: a name
     // resolves from THIS run's environment, while a stored value is a copy taken
     // whenever `e2b-box auth` last ran. When both name the same box variable the
@@ -923,6 +935,8 @@ export function loadConfig() {
     // hand-written value — and `templatePrefer` is how the user takes that back.
     envSession: auth.envSession,
     templatePrefer: env.templatePrefer,
+    // `[templates.<name>] model` / `reasoning` → {model, reasoning} per template.
+    templateModels: env.templateModels,
     // Shipped per-template env (behaviour, never credentials). Carried through
     // from DEFAULTS rather than read from the file: nothing in config.toml sets
     // it, and resolveEnv puts the user's own tables OVER it.

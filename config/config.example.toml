@@ -211,6 +211,46 @@ server_port  = 3000
 # # ANTHROPIC_API_KEY = "sk-ant-…"
 # # OPENAI_API_KEY = "sk-…"
 
+# Which MODEL a template's agent uses, and how hard it thinks, for EVERY box booted
+# from that template: open, fleet and run alike. Every harness has a default and a
+# TUI to change it; a box has nobody at the TUI, so an agent left alone runs whatever
+# its vendor or provider ranks first (an opencode member on an OpenRouter key came up
+# on an image model with no tool use). Set here once instead of `-m` in every launch
+# command.
+#
+# Both keys are optional, free strings, each harness's own vocabulary:
+#
+#   template  model                                   reasoning
+#   claude    a Claude model id or alias              low | medium | high | xhigh
+#   codex     an OpenAI model id                      minimal | low | medium | high | xhigh
+#   grok      a grok model id (grok-build, grok-4.5)  none … max
+#   droid     a Factory model id (glm-5.2, kimi-k3)   off | low | medium | high | max, per model
+#   prime     "<provider>/<model>", split at the      prime's thinking levels (off … max)
+#             first slash (openai-codex/gpt-6-astra,
+#             prime-inference/z-ai/glm-5.2)
+#   opencode  "<provider>/<model>" as `opencode        (not pinned: opencode does reasoning as
+#             models` prints it                        per-model variants)
+#   muse      (not pinned: no verified settings key,   none … ultra
+#             use --model in your agent command)
+#   amp       (nothing: amp has no model setting, `--mode low|medium|high|ultra` is its knob)
+#
+# How it reaches the agent is the harness's own way (src/model-pin.js): claude and
+# opencode read it from the environment (ANTHROPIC_MODEL, CLAUDE_CODE_EFFORT_LEVEL,
+# OPENCODE_CONFIG_CONTENT); codex, grok, droid, prime and muse get it written into
+# their config file right after the first-run seed, and only for keys that file does
+# not already set. Every pinned box also carries HERDR_E2B_MODEL and
+# HERDR_E2B_REASONING, so a CLI this plugin has no route for can still take it from
+# your own [fleet.agents] / [run.agents] command: `mine --model "$HERDR_E2B_MODEL"`.
+# A value in [templates.<name>.env] for the same variable wins over the pin. Applied
+# at CREATE, like everything else in this table.
+# [templates.opencode]
+# model = "openrouter/qwen/qwen3.8-max-0902"
+# [templates.codex]
+# model = "gpt-5.4"
+# reasoning = "high"
+# [templates.claude]
+# reasoning = "xhigh"
+
 [dashboard]
 # View shortcuts are configured separately in Herdr's config.toml:
 #   e2b-dev.herdr-e2b.dashboard — e2b-dash (pane view)

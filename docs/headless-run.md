@@ -82,6 +82,25 @@ The skip-approvals flags are the point of a box: disposable, isolated from your
 machine, nobody attached to approve an edit. They are not a cage. The box has
 network egress and holds the credential `[templates.<name>.env]` gave it.
 
+## Model and reasoning
+
+`run` does not take a model flag. The model is the template's, set once in config
+and applied to every box booted from it, headless or not:
+
+```toml
+[templates.opencode]
+model = "openrouter/qwen/qwen3.8-max-0902"
+[templates.codex]
+model = "gpt-5.4"
+reasoning = "high"
+```
+
+The plugin delivers it the way each harness reads it (environment for claude and
+opencode, the harness's own config file for codex, grok, droid, prime and muse;
+`config.example.toml` has the per-harness table). Every pinned box also carries
+`HERDR_E2B_MODEL` and `HERDR_E2B_REASONING`, so a `[run.agents]` command of your
+own can use `--model "$HERDR_E2B_MODEL"`.
+
 ## What becomes of the box
 
 | flag | afterwards | when |
