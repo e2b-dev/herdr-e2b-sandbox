@@ -18,7 +18,7 @@ for t in jq git node; do command -v "$t" >/dev/null || { echo "cli.test: '$t' no
 echo "── lint: bash -n ──"
 for f in "$ROOT"/bin/e2b-box "$ROOT"/bin/e2b-box-open "$ROOT"/bin/e2b-box-pull "$ROOT"/bin/e2b-fleet "$ROOT"/bin/e2b-fleet-open \
          "$ROOT"/bin/e2b-dash "$ROOT"/bin/e2b-dash-toggle "$ROOT"/bin/e2b-popup "$ROOT"/bin/e2b-bench \
-         "$ROOT"/bin/e2b-domain "$ROOT"/bin/teardown-worktree "$ROOT"/bin/lib/*.sh "$ROOT"/install.sh; do
+         "$ROOT"/bin/e2b-domain "$ROOT"/bin/teardown-worktree "$ROOT"/bin/lib/*.sh "$ROOT"/install.sh "$ROOT"/test/e2e-run.sh; do
   if bash -n "$f" 2>/dev/null; then ok "bash -n $(basename "$f")"; else bad "bash -n $(basename "$f")"; fi
 done
 echo "── lint: node --check ──"
@@ -80,7 +80,7 @@ for form in "--help" "-h" "help"; do
 done
 
 before=$(ls -1 "$HERDR_PLUGIN_STATE_DIR/boxes" | wc -l | tr -d ' ')
-for v in open up pull sync exec status list wait doctor auth; do
+for v in open up pull sync exec run status list wait doctor auth; do
   out=$("$E2B" "$v" --help 2>/dev/null); rc=$?
   { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qE "^e2b-box( auth)? —"; } \
     && ok "$v --help → usage, exit 0" || bad "$v --help (rc=$rc)"
@@ -450,6 +450,100 @@ out=$(KEY=nobox "$E2B" exec 'npm test' 2>/dev/null); rc=$?
   && [ "$(printf '%s' "$out" | jq -r '.exitCode')" = "null" ] \
   && printf '%s' "$out" | jq -e '.error | test("no sandbox tracked")' >/dev/null; } \
   && ok "exec with no box → {ok:false, exitCode:null} + exit 1" || bad "exec with no box (rc=$rc, out=$out)"
+
+echo "── behavior: run (the headless verb: a usage error must never cost a box) ──"
+# Every refusal below happens BEFORE provision: the box count is checked at the end.
+RUNREPO="$TMP/runrepo"; mkdir -p "$RUNREPO"
+( cd "$RUNREPO" && git init -q -b main && printf 'v1\n' > f.txt \
+  && git -c user.email=t@t -c user.name=t add -A && git -c user.email=t@t -c user.name=t commit -qm init )
+run_before=$(ls -1 "$HERDR_PLUGIN_STATE_DIR/boxes" | wc -l | tr -d ' ')
+
+out=$(cd "$RUNREPO" && "$E2B" run 2>&1); rc=$?
+{ [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "needs a task"; } \
+  && ok "run with no task → exit 2" || bad "run with no task (rc=$rc, out=$out)"
+
+out=$(cd "$RUNREPO" && "$E2B" run --task '   ' -t claude 2>&1); rc=$?
+{ [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "needs a task"; } \
+  && ok "run with a blank task → exit 2" || bad "run with a blank task (rc=$rc, out=$out)"
+
+# One flag, three shapes: a name that is a readable file is read, `-` is stdin, and
+# anything else is the task text, so a filename that does not exist is just text.
+printf 'goal in a file\n' > "$RUNREPO/GOAL.md"
+out=$(cd "$RUNREPO" && "$E2B" run -t claude --task GOAL.md --dry-run 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && [ "$(printf '%s' "$out" | jq -r '.taskBytes')" = "14" ]; } \
+  && ok "run --task GOAL.md reads the file (14 bytes, not 7)" || bad "run --task <file> (rc=$rc, out=$out)"
+out=$(cd "$RUNREPO" && "$E2B" run -t claude --task nope.md --dry-run 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && [ "$(printf '%s' "$out" | jq -r '.taskBytes')" = "7" ]; } \
+  && ok "run --task nope.md (no such file) is the text 'nope.md'" || bad "run --task <missing> (rc=$rc, out=$out)"
+
+out=$(cd "$RUNREPO" && "$E2B" run --task x --timeout-ms soon 2>&1); rc=$?
+{ [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "positive integer"; } \
+  && ok "run --timeout-ms with a non-number → exit 2" || bad "run --timeout-ms non-number (rc=$rc, out=$out)"
+
+out=$(cd "$RUNREPO" && "$E2B" run --task x --dashboard 2>&1); rc=$?
+{ [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "doesn't take"; } \
+  && ok "run with an unknown flag → exit 2" || bad "run unknown flag (rc=$rc, out=$out)"
+
+# The default template is `base`, which ships no agent, and a template nobody has
+# verified a headless mode for has no default either. Both are refused BY NAME with
+# the fix on the line, and nothing boots.
+# An empty config dir, so the developer's own [sandbox] template cannot answer here.
+NOCFG="$TMP/nocfg"; mkdir -p "$NOCFG"
+out=$(cd "$RUNREPO" && HERDR_PLUGIN_CONFIG_DIR="$NOCFG" "$E2B" run --task x 2>&1); rc=$?
+{ [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "no headless agent command for template 'base'" \
+  && printf '%s' "$out" | grep -q "\[run.agents\]"; } \
+  && ok "run on the default template → refused by name, exit 2" || bad "run on base (rc=$rc, out=$out)"
+out=$(cd "$RUNREPO" && "$E2B" run -t grok --task x 2>&1); rc=$?
+{ [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "for template 'grok'" \
+  && printf '%s' "$out" | grep -q "pass -t one of: claude, codex, opencode, amp"; } \
+  && ok "run -t grok (interactive-only default) → refused by name, exit 2" || bad "run -t grok (rc=$rc, out=$out)"
+
+# --dry-run is the plan and only the plan: what would run, where the task lands,
+# what happens after. Every default reads the task FILE, never the task text.
+out=$(cd "$RUNREPO" && "$E2B" run -t claude --task 'fix the login redirect' --dry-run 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] \
+  && [ "$(printf '%s' "$out" | jq -r '.dryRun')" = "true" ] \
+  && [ "$(printf '%s' "$out" | jq -r '.template')" = "claude" ] \
+  && [ "$(printf '%s' "$out" | jq -r '.taskFile')" = '$HOME/.herdr-e2b-task.md' ] \
+  && [ "$(printf '%s' "$out" | jq -r '.taskBytes')" = "22" ] \
+  && [ "$(printf '%s' "$out" | jq -r '.timeoutMs')" = "1800000" ] \
+  && [ "$(printf '%s' "$out" | jq -r '.pull')" = "true" ] \
+  && [ "$(printf '%s' "$out" | jq -r '.push')" = "false" ] \
+  && [ "$(printf '%s' "$out" | jq -r '.after')" = "pause" ] \
+  && printf '%s' "$out" | jq -e '.agentCommand | startswith("claude ") and contains("-p") and contains("$HOME/.herdr-e2b-task.md") and (contains("fix the login") | not)' >/dev/null; } \
+  && ok "run --dry-run → the plan as one JSON object, task by file not by text" || bad "run --dry-run (rc=$rc, out=$out)"
+
+out=$(cd "$RUNREPO" && printf 'goal from stdin\n' | "$E2B" run -t codex --task - --push --remote mine --kill --force --timeout-ms 5000 --dry-run 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] \
+  && [ "$(printf '%s' "$out" | jq -r '.template')" = "codex" ] \
+  && [ "$(printf '%s' "$out" | jq -r '.taskBytes')" = "15" ] \
+  && [ "$(printf '%s' "$out" | jq -r '.timeoutMs')" = "5000" ] \
+  && [ "$(printf '%s' "$out" | jq -r '.push')" = "true" ] \
+  && [ "$(printf '%s' "$out" | jq -r '.remote')" = "mine" ] \
+  && [ "$(printf '%s' "$out" | jq -r '.force')" = "true" ] \
+  && [ "$(printf '%s' "$out" | jq -r '.after')" = "kill" ]; } \
+  && ok "run --task - reads stdin; --push/--remote/--kill/--force land in the plan" || bad "run stdin plan (rc=$rc, out=$out)"
+
+# The task path the plan names is the one bin/e2b-fleet writes its brief to.
+fleet_task_file=$(grep -E "^TASK_FILE=" "$ROOT/bin/e2b-fleet" | head -1 | sed "s/^TASK_FILE=//; s/^'//; s/'\$//")
+[ "$fleet_task_file" = '$HOME/.herdr-e2b-task.md' ] \
+  && ok "run and fleet hand the box the same task file" || bad "task file drifted: fleet has '$fleet_task_file'"
+
+# [run.agents] is read: "" switches a shipped command off (refused by name), and a
+# mapping teaches a template the plugin ships no headless mode for.
+RUNCFG="$TMP/runcfg"; mkdir -p "$RUNCFG"
+printf '[run.agents]\nclaude = ""\nmuse = "muse --yolo \\"$(cat $HOME/.herdr-e2b-task.md)\\""\n' > "$RUNCFG/config.toml"
+out=$(cd "$RUNREPO" && HERDR_PLUGIN_CONFIG_DIR="$RUNCFG" "$E2B" run -t claude --task x --dry-run 2>&1); rc=$?
+{ [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "for template 'claude'"; } \
+  && ok "[run.agents] claude = \"\" switches the shipped command off" || bad "run.agents off (rc=$rc, out=$out)"
+out=$(cd "$RUNREPO" && HERDR_PLUGIN_CONFIG_DIR="$RUNCFG" "$E2B" run -t muse --task x --dry-run 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | jq -e '.agentCommand | startswith("muse --yolo ") and contains("$HOME/.herdr-e2b-task.md")' >/dev/null; } \
+  && ok "[run.agents] teaches a template a headless command" || bad "run.agents override (rc=$rc, out=$out)"
+
+run_after=$(ls -1 "$HERDR_PLUGIN_STATE_DIR/boxes" | wc -l | tr -d ' ')
+[ "$run_before" = "$run_after" ] \
+  && ok "no run refusal or dry-run wrote a box record ($run_after, unchanged)" \
+  || bad "a run path created state ($run_before → $run_after)"
 
 echo "── behavior: pull safety (dirty tree, non-interactive → abort, no clobber) ──"
 REPO="$TMP/repo"; mkdir -p "$REPO"
