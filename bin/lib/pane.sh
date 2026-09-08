@@ -58,17 +58,25 @@ pane_is_idle() {
   [ "$seen" -gt 0 ]
 }
 
-# Anchor the split to the invocation, even if focus has since moved elsewhere.
+# Anchor a new pane to the invocation, even if focus has since moved elsewhere.
 #
-#   pane_open_below <entrypoint> [target-pane] [herdr pane-open args...]
+#   pane_open_from <entrypoint> <where> [target-pane] [herdr pane-open args...]
 #
-# An empty target means "the invoking pane" (plugin context, then focus). The
-# popup dashboard passes one explicitly: inside a popup, context and focus both
-# name the popup itself, so only the launcher knew which pane it floated over.
+# `where` is below (a split under the target), right (a split beside it) or tab
+# (a new tab); herdr splits right or down only, so there is no left or up. An
+# empty target means "the invoking pane" (plugin context, then focus). The popup
+# dashboard passes one explicitly: inside a popup, context and focus both name
+# the popup itself, so only the launcher knew which pane it floated over.
 # Anything after the target is handed to herdr as-is (`--cwd`, `--env`).
-pane_open_below() {
-  local entrypoint="$1" target="${2:-}" herdr node
-  shift; [ "$#" -gt 0 ] && shift
+pane_open_from() {
+  local entrypoint="$1" where="$2" target="${3:-}" herdr node direction=
+  shift 2; [ "$#" -gt 0 ] && shift
+  case "$where" in
+    below) direction=down ;;
+    right) direction=right ;;
+    tab) ;;
+    *) echo "e2b: unknown placement '$where' (below, right or tab)" >&2; return 2 ;;
+  esac
   herdr=$(pane_herdr) || { echo "e2b: can't find the herdr binary" >&2; return 1; }
   node=$(pane_node) || { echo "e2b: can't find node — set HERDR_E2B_NODE=/path/to/node" >&2; return 1; }
   if [ -z "$target" ]; then
@@ -80,6 +88,18 @@ $(pane_query "$herdr" "$node" "")
 EOF
   fi
   [ "${target:--}" != "-" ] || { echo "e2b: no invoking pane" >&2; return 1; }
-  "$herdr" plugin pane open --plugin e2b-dev.herdr-e2b --entrypoint "$entrypoint" \
-    --placement split --target-pane "$target" --direction down --focus ${1+"$@"} >/dev/null
+  if [ -n "$direction" ]; then
+    "$herdr" plugin pane open --plugin e2b-dev.herdr-e2b --entrypoint "$entrypoint" \
+      --placement split --target-pane "$target" --direction "$direction" --focus ${1+"$@"} >/dev/null
+  else
+    "$herdr" plugin pane open --plugin e2b-dev.herdr-e2b --entrypoint "$entrypoint" \
+      --placement tab --target-pane "$target" --focus ${1+"$@"} >/dev/null
+  fi
+}
+
+# The `open` and `fleet` actions: a split under the invoking pane.
+pane_open_below() {
+  local entrypoint="$1"
+  shift
+  pane_open_from "$entrypoint" below ${1+"$@"}
 }

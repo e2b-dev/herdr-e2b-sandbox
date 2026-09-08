@@ -14,6 +14,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `e2b-popup` records the pane it was summoned over as `E2B_DASH_ORIGIN_PANE`
   and the TUI hands it to `e2b-box-open --target-pane … --cwd … --box …`, which
   now takes those flags; the zoomed and split dashboards still open inline.
+  `[dashboard].popup_open` chooses where that pane goes: `below` (default),
+  `right` or `tab`.
 
 ### Changed
 

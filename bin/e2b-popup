@@ -32,8 +32,9 @@ usage
   e2b-popup --render         draw inside an existing popup terminal
 
 The same UI and controls as e2b-dash, at 90% width and 85% height.
-Enter opens the selected box in a regular pane split below the pane the popup
-floats over, and closes the popup. Press q or Esc to close it without opening.
+Enter opens the selected box in a regular pane and closes the popup: a split
+below the pane the popup floats over, or beside it / a new tab with
+[dashboard].popup_open = "right" / "tab". Press q or Esc to close it without opening.
 Requires a running Herdr session with this plugin enabled.
 
 Keybinding in Herdr config.toml:

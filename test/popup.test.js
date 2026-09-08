@@ -136,19 +136,37 @@ test("box and fleet splits follow the invoking pane and focus below it", (t) => 
   }
 })
 
-test("the popup's Enter opens the box below the pane it floats over, pinned to that box", (t) => {
+test("the popup's Enter opens the box where [dashboard].popup_open says, pinned to that box", (t) => {
   const f = fixture(t)
   // Explicit target beats context and focus: inside a popup both name the popup.
-  const result = f.run("e2b-box-open", ["--target-pane", "w5:p6", "--cwd", "/tmp/work tree", "--box", "tree-abc12345"], {
-    HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({ focused_pane_id: "w9:p9" }),
-    HERDR_PANE_ID: "w9:p9",
-  })
-  assert.equal(result.status, 0, result.stderr)
-  assert.deepEqual(readFileSync(f.calls, "utf8").trim().split("\n"), [
-    "plugin", "pane", "open", "--plugin", "e2b-dev.herdr-e2b", "--entrypoint", "box",
-    "--placement", "split", "--target-pane", "w5:p6", "--direction", "down", "--focus",
-    "--cwd", "/tmp/work tree", "--env", "KEY=tree-abc12345",
-  ])
+  const env = { HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({ focused_pane_id: "w9:p9" }), HERDR_PANE_ID: "w9:p9" }
+  const tail = ["--focus", "--cwd", "/tmp/work tree", "--env", "KEY=tree-abc12345"]
+  for (const [placement, expected] of [
+    [[], ["--placement", "split", "--target-pane", "w5:p6", "--direction", "down"]],
+    [["--placement", "below"], ["--placement", "split", "--target-pane", "w5:p6", "--direction", "down"]],
+    [["--placement", "right"], ["--placement", "split", "--target-pane", "w5:p6", "--direction", "right"]],
+    [["--placement", "tab"], ["--placement", "tab", "--target-pane", "w5:p6"]],
+  ]) {
+    const result = f.run("e2b-box-open", ["--target-pane", "w5:p6", ...placement, "--cwd", "/tmp/work tree", "--box", "tree-abc12345"], env)
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(readFileSync(f.calls, "utf8").trim().split("\n"), [
+      "plugin", "pane", "open", "--plugin", "e2b-dev.herdr-e2b", "--entrypoint", "box", ...expected, ...tail,
+    ])
+  }
+  assert.equal(f.run("e2b-box-open", ["--placement", "left"]).status, 2)
   assert.equal(f.run("e2b-box-open", ["--box"]).status, 2)
   assert.equal(f.run("e2b-box-open", ["--nope"]).status, 2)
+})
+
+test("[dashboard].popup_open reaches the dashboard's settings, anything else means below", (t) => {
+  const f = fixture(t)
+  for (const [value, expected] of [['"tab"', "tab"], ['"right"', "right"], ['"left"', "below"], [null, "below"]]) {
+    writeFileSync(path.join(f.dir, "config.toml"), value === null ? "" : `[dashboard]\npopup_open = ${value}\n`)
+    const result = spawnSync(process.execPath, [path.join(root, "src/resolve-dashboard.js")], {
+      encoding: "utf8",
+      env: { ...process.env, HERDR_PLUGIN_CONFIG_DIR: f.dir, HERDR_PLUGIN_STATE_DIR: f.dir },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(JSON.parse(result.stdout).popup_open, expected, `popup_open = ${value}`)
+  }
 })

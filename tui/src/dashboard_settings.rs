@@ -11,6 +11,10 @@ pub(crate) struct DashboardSettings {
     pub(crate) theme: String,
     pub(crate) opener: String,
     pub(crate) domain: String,
+    /// Where the popup's Enter opens a box: below · right · tab. Empty (an older
+    /// resolver) means the TUI keeps its default.
+    #[serde(default)]
+    pub(crate) popup_open: String,
 }
 
 pub(crate) fn dashboard_settings() -> Option<DashboardSettings> {
@@ -141,6 +145,7 @@ mod tests {
             theme: theme.into(),
             domain: domain.into(),
             opener: "never persist this command or its secret argument".into(),
+            popup_open: String::new(),
         }
     }
 

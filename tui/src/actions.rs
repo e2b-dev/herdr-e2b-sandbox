@@ -49,14 +49,24 @@ pub(crate) fn action_command(verb: &str, key: &str, wt: &str) -> Command {
     command
 }
 
-/// Enter from the popup: open the box in a regular pane split below `origin`
+/// Enter from the popup: open the box in a regular pane anchored to `origin`
 /// (the pane the popup floats over) instead of inside the overlay, whose
-/// terminal herdr discards when the popup closes. `e2b-box-open` makes the herdr
-/// call; `--box` + `--cwd` is the same KEY/worktree pairing `action_command` uses.
-pub(crate) fn open_below_command(origin: &str, key: &str, wt: &str) -> Command {
+/// terminal herdr discards when the popup closes. `placement` is below, right or
+/// tab (`[dashboard].popup_open`). `e2b-box-open` makes the herdr call; `--box`
+/// + `--cwd` is the same KEY/worktree pairing `action_command` uses.
+pub(crate) fn popup_open_command(origin: &str, placement: &str, key: &str, wt: &str) -> Command {
     let mut command = Command::new("e2b-box-open");
     command
-        .args(["--target-pane", origin, "--cwd", wt, "--box", key])
+        .args([
+            "--target-pane",
+            origin,
+            "--placement",
+            placement,
+            "--cwd",
+            wt,
+            "--box",
+            key,
+        ])
         .env_remove("HERDR_PLUGIN_CONTEXT_JSON");
     command
 }
@@ -120,7 +130,7 @@ fi",
 mod tests {
     use std::ffi::OsStr;
 
-    use super::{action_command, key_only, open_below_command};
+    use super::{action_command, key_only, popup_open_command};
     use crate::state::{
         branch_cell, branch_column_width, git_dir_link, head_branch, parse_head, plugin_version,
         region_label, resolve_branch, status_detail, template_cell, template_downgraded,
@@ -223,8 +233,8 @@ mod tests {
     }
 
     #[test]
-    fn popup_open_splits_below_the_origin_pane() {
-        let command = open_below_command("w1:p2", "box'1", "/tmp/work tree");
+    fn popup_open_anchors_to_the_origin_pane_with_a_placement() {
+        let command = popup_open_command("w1:p2", "right", "box'1", "/tmp/work tree");
 
         assert_eq!(command.get_program(), OsStr::new("e2b-box-open"));
         assert_eq!(
@@ -232,6 +242,8 @@ mod tests {
             [
                 "--target-pane",
                 "w1:p2",
+                "--placement",
+                "right",
                 "--cwd",
                 "/tmp/work tree",
                 "--box",
