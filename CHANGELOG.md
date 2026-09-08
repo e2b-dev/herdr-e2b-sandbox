@@ -14,6 +14,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `DEFAULT_RUN_AGENTS`, each with its vendor's skip-approvals flag, verified off the
   CLIs' own `--help`. Only `base` and a user's own template still need `[run.agents]`.
 
+### Fixed
+
+- A discovered prime key now travels with the account's team id: `PRIME_TEAM_ID` is
+  read out of `~/.prime/config.json` at create time beside `PRIME_API_KEY`, so a box
+  bills the team rather than an empty personal balance (`402 Insufficient balance`
+  inside the box, fine on the laptop). A hand-written `[templates.prime.env]` value
+  still wins.
+
 - `e2b-box run`, the headless verb (#47): boot or re-sync this checkout's box,
   write the task into it as a file, start the template's agent in its
   non-interactive mode and wait for it to exit, pull what changed back, optionally

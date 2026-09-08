@@ -72,6 +72,12 @@ claude = ""    # switch a shipped one off
 The command must read the task file and must exit when the agent is done. It runs
 in the box's project dir. `e2b-box run … --dry-run` prints exactly what would run.
 
+Two account-side things seen live that look like launch failures and are not:
+opencode with no configured model picks one by internal priority, which can land on
+a model with no tool use (`opencode run --auto -m <provider/model> …` in
+`[run.agents]` pins it); and amp reports `Out of Credits` on stderr with exit 0, so
+`run` says `done` while `pull` finds nothing changed.
+
 The skip-approvals flags are the point of a box: disposable, isolated from your
 machine, nobody attached to approve an edit. They are not a cage. The box has
 network egress and holds the credential `[templates.<name>.env]` gave it.
