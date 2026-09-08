@@ -662,17 +662,20 @@ test("resolveEnv: amp gets the welcome-splash skip, and a user can still overrid
   )
 })
 
-test("fleetTemplateChoices: a fleet is agents only — the plain default is not a member", () => {
+test("fleetTemplateChoices: a fleet is agents only: agentless templates are not members", () => {
   // A fleet is several coding agents on one checkout, so a box with no agent in it
   // is a shell nobody asked for. `base` is also the one template whose name is not
   // a CLI, so a member built from it typed `base` into a sandbox shell and waited
   // for a TUI that never came.
   const cfg = { template: "base", templates: ["claude", "codex", "base"], templateRules: [] }
   assert.deepEqual(fleetTemplateChoices(cfg), ["claude", "codex"])
-  // Filtered by the CONFIGURED default, not the literal "base", so someone whose
-  // plain image is called something else gets the same treatment.
-  const mine = { template: "plain", templates: ["plain", "claude"], templateRules: [] }
-  assert.deepEqual(fleetTemplateChoices(mine), ["claude"])
+  // The configured default is NOT what is filtered: the shipped default is `muse`, an
+  // agent, and the member most people want. A plain image of your own leaves the
+  // roster the documented way, `[fleet.agents] plain = ""`.
+  const mine = { template: "muse", templates: ["muse", "plain", "claude"], templateRules: [], fleetAgents: { plain: "" } }
+  assert.deepEqual(fleetTemplateChoices(mine), ["muse", "claude"])
+  const unmapped = { template: "muse", templates: ["muse", "plain", "claude"], templateRules: [] }
+  assert.deepEqual(fleetTemplateChoices(unmapped), ["muse", "plain", "claude"])
   // And the box picker is untouched — one plain box is a fine thing to want.
   assert.deepEqual(templateChoices(cfg), ["claude", "codex", "base"])
 })

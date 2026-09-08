@@ -484,15 +484,21 @@ out=$(cd "$RUNREPO" && "$E2B" run --task x --dashboard 2>&1); rc=$?
 { [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "doesn't take"; } \
   && ok "run with an unknown flag → exit 2" || bad "run unknown flag (rc=$rc, out=$out)"
 
-# The default template is `base`, which ships no agent, and a template nobody has
-# verified a headless mode for has no default either. Both are refused BY NAME with
-# the fix on the line, and nothing boots.
-# An empty config dir, so the developer's own [sandbox] template cannot answer here.
-NOCFG="$TMP/nocfg"; mkdir -p "$NOCFG"
-out=$(cd "$RUNREPO" && HERDR_PLUGIN_CONFIG_DIR="$NOCFG" "$E2B" run --task x 2>&1); rc=$?
+# `base` ships no agent, and a template nobody has verified a headless mode for has
+# no default either. Both are refused BY NAME with the fix on the line, and nothing
+# boots.
+out=$(cd "$RUNREPO" && "$E2B" run -t base --task x 2>&1); rc=$?
 { [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "no headless agent command for template 'base'" \
   && printf '%s' "$out" | grep -q "\[run.agents\]"; } \
-  && ok "run on the default template → refused by name, exit 2" || bad "run on base (rc=$rc, out=$out)"
+  && ok "run -t base → refused by name, exit 2" || bad "run on base (rc=$rc, out=$out)"
+# With nothing configured the shipped default template is `muse`, an agent, so a bare
+# `run` has something to run. An empty config dir, so the developer's own [sandbox]
+# template cannot answer here.
+NOCFG="$TMP/nocfg"; mkdir -p "$NOCFG"
+out=$(cd "$RUNREPO" && HERDR_PLUGIN_CONFIG_DIR="$NOCFG" "$E2B" run --task x --dry-run 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && [ "$(printf '%s' "$out" | jq -r '.template')" = "muse" ] \
+  && printf '%s' "$out" | jq -e '.agentCommand | startswith("muse exec ")' >/dev/null; } \
+  && ok "run with no -t and no config → the shipped default, muse" || bad "default template (rc=$rc, out=$out)"
 out=$(cd "$RUNREPO" && "$E2B" run -t my-project/my-template --template-any --task x 2>&1); rc=$?
 { [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "for template 'my-project/my-template'" \
   && printf '%s' "$out" | grep -q "pass -t one of: claude, codex, opencode, amp, grok, droid, muse, prime"; } \
