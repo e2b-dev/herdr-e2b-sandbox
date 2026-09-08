@@ -502,6 +502,17 @@ export const HARNESSES = {
     // at all), so it is read as narrowly as every other: this one field, this one
     // path, and a miss degrades the row to no-key rather than throwing.
     valueFile: { path: PRIME_CONFIG, read: (text) => JSON.parse(text)?.api_key || null },
+    // What travels WITH the key, out of the same file, under its own name. A prime
+    // key belongs to a person, and the person may be on a team: requests are billed
+    // to the personal balance unless they carry `X-Prime-Team-ID`, which prime-agent
+    // sends only when PRIME_TEAM_ID is in its environment (or ~/.prime/config.json
+    // is, and a box has no such file). A key forwarded alone therefore 402s inside
+    // the box on an account that works fine on the laptop (observed live, 2026-09-08:
+    // "Insufficient balance ... billed to the personal balance unless the request
+    // includes X-Prime-Team-ID"). Not a secret, so it may ride as a value; read at
+    // create time from the pointer the key already names, so switching teams in the
+    // prime CLI is picked up without re-running discovery.
+    companions: { PRIME_TEAM_ID: (text) => JSON.parse(text)?.team_id || null },
     // PRIME_API_KEY is prime's OWN key (Prime Inference), and it is the only one
     // recorded, but it is not the only one prime accepts: its shipped
     // docs/providers.md tables about twenty provider variables — ANTHROPIC_API_KEY,

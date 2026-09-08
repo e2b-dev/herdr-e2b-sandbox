@@ -1169,3 +1169,33 @@ test("resolveRun: [run.agents] keeps strings, trimmed, including the empty one",
   const r = resolveRun({ agents: { claude: "", muse: '  muse --yolo "$(cat $HOME/.herdr-e2b-task.md)"  ', droid: 7 } })
   assert.deepEqual(r.agents, { claude: "", muse: 'muse --yolo "$(cat $HOME/.herdr-e2b-task.md)"' })
 })
+
+// --- companions: a setting that rides with a file-sourced key ------------------
+// prime's key is billed to a personal balance unless PRIME_TEAM_ID travels with it
+// (harnesses.js). The team id is read out of the same file the key pointer names,
+// at create time, and only ever beside the key.
+
+const primeFileCfg = () => ({
+  envFile: { prime: { var: "PRIME_API_KEY", path: "/fake/prime.json", harness: "prime" } },
+})
+const primeReader = (json) => (p) => (p === "/fake/prime.json" ? json : null)
+
+test("a file-sourced prime key brings its team id along, under its own name", () => {
+  const env = resolveEnv(primeFileCfg(), "prime", {}, Date.now(), primeReader('{"api_key":"pit_x","team_id":"team-1"}'))
+  assert.deepEqual(env, { PRIME_API_KEY: "pit_x", PRIME_TEAM_ID: "team-1" })
+})
+
+test("a prime key with no team in the file travels alone, nothing invented", () => {
+  const env = resolveEnv(primeFileCfg(), "prime", {}, Date.now(), primeReader('{"api_key":"pit_x"}'))
+  assert.deepEqual(env, { PRIME_API_KEY: "pit_x" })
+})
+
+test("a companion never travels without its key", () => {
+  assert.equal(resolveEnv(primeFileCfg(), "prime", {}, Date.now(), primeReader('{"team_id":"team-1"}')), undefined)
+})
+
+test("the user's own [templates.prime.env] still beats the companion", () => {
+  const cfg = { ...primeFileCfg(), envByTemplate: { prime: { PRIME_TEAM_ID: "hand-written" } } }
+  const env = resolveEnv(cfg, "prime", {}, Date.now(), primeReader('{"api_key":"pit_x","team_id":"team-1"}'))
+  assert.equal(env.PRIME_TEAM_ID, "hand-written")
+})
