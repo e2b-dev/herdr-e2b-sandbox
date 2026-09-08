@@ -12,8 +12,8 @@
     "git-worktree",
     "cloud-dev"
   ],
-  "author": "Tomas Varga",
-  "license": "MIT",
+  "author": "FoundryLabs, Inc.",
+  "license": "Apache-2.0",
   "homepage": "https://github.com/tomasvarga/herdr-e2b#readme",
   "repository": {
     "type": "git",
