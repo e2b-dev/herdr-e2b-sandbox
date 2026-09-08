@@ -1169,3 +1169,45 @@ test("resolveRun: [run.agents] keeps strings, trimmed, including the empty one",
   const r = resolveRun({ agents: { claude: "", muse: '  muse --yolo "$(cat $HOME/.herdr-e2b-task.md)"  ', droid: 7 } })
   assert.deepEqual(r.agents, { claude: "", muse: 'muse --yolo "$(cat $HOME/.herdr-e2b-task.md)"' })
 })
+
+// --- [templates.<name>] model / reasoning ------------------------------------------
+// One knob per template, applied to every box booted from it. The pin arrives in
+// the box as environment (src/model-pin.js), below the user's own `env` table.
+
+test("resolveEnvConfig: model and reasoning are read per template, trimmed, blanks dropped", () => {
+  const r = resolveEnvConfig({
+    templates: {
+      opencode: { model: " openrouter/qwen/qwen3.8-max-0902 " },
+      codex: { model: "gpt-5.4", reasoning: "high", env: { A: "b" } },
+      claude: { reasoning: "  " },
+      amp: {},
+    },
+  })
+  assert.deepEqual(r.templateModels, {
+    opencode: { model: "openrouter/qwen/qwen3.8-max-0902" },
+    codex: { model: "gpt-5.4", reasoning: "high" },
+  })
+  assert.deepEqual(r.envByTemplate, { codex: { A: "b" } })
+  assert.deepEqual(resolveEnvConfig().templateModels, {})
+})
+
+test("resolveEnv: a pin becomes the harness's variables plus the two shared ones", () => {
+  const cfg = { templateModels: { claude: { model: "claude-opus-5", reasoning: "high" }, codex: { model: "gpt-5.4" } } }
+  assert.deepEqual(resolveEnv(cfg, "claude"), {
+    HERDR_E2B_MODEL: "claude-opus-5",
+    HERDR_E2B_REASONING: "high",
+    ANTHROPIC_MODEL: "claude-opus-5",
+    CLAUDE_CODE_EFFORT_LEVEL: "high",
+  })
+  assert.deepEqual(resolveEnv(cfg, "codex"), { HERDR_E2B_MODEL: "gpt-5.4" })
+  assert.equal(resolveEnv(cfg, "grok"), undefined)
+})
+
+test("resolveEnv: the user's own env table beats the pin", () => {
+  const cfg = {
+    templateModels: { claude: { model: "claude-opus-5" } },
+    envByTemplate: { claude: { ANTHROPIC_MODEL: "claude-sonnet-5" } },
+  }
+  assert.equal(resolveEnv(cfg, "claude").ANTHROPIC_MODEL, "claude-sonnet-5")
+  assert.equal(resolveEnv(cfg, "claude").HERDR_E2B_MODEL, "claude-opus-5")
+})
