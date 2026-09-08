@@ -18,6 +18,7 @@ import {
   templateChoices,
   fleetTemplateChoices,
   resolveFleet,
+  resolveRun,
   resolveEnvConfig,
   resolveEnv,
   describeRegion,
@@ -1151,4 +1152,20 @@ test("resolveCredentials: a split pair that survives is warned about", () => {
     sandbox: { region: "eu" },
   })
   assert.match(r.credWarning, /different sources|does not belong/i)
+})
+
+// --- the [run] block ---------------------------------------------------------
+// `e2b-box run`'s headless agent table. Only the user's overrides live here,
+// src/run-agent.js owns the defaults, and "" must survive, because it is how a
+// template's shipped headless command is switched OFF.
+
+test("resolveRun: nothing configured → no overrides", () => {
+  for (const r of [resolveRun(), resolveRun({}), resolveRun(null), resolveRun({ agents: [] })]) {
+    assert.deepEqual(r, { agents: {} })
+  }
+})
+
+test("resolveRun: [run.agents] keeps strings, trimmed, including the empty one", () => {
+  const r = resolveRun({ agents: { claude: "", muse: '  muse --yolo "$(cat $HOME/.herdr-e2b-task.md)"  ', droid: 7 } })
+  assert.deepEqual(r.agents, { claude: "", muse: 'muse --yolo "$(cat $HOME/.herdr-e2b-task.md)"' })
 })
