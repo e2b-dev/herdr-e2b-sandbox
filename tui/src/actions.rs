@@ -49,6 +49,18 @@ pub(crate) fn action_command(verb: &str, key: &str, wt: &str) -> Command {
     command
 }
 
+/// Enter from the popup: open the box in a regular pane split below `origin`
+/// (the pane the popup floats over) instead of inside the overlay, whose
+/// terminal herdr discards when the popup closes. `e2b-box-open` makes the herdr
+/// call; `--box` + `--cwd` is the same KEY/worktree pairing `action_command` uses.
+pub(crate) fn open_below_command(origin: &str, key: &str, wt: &str) -> Command {
+    let mut command = Command::new("e2b-box-open");
+    command
+        .args(["--target-pane", origin, "--cwd", wt, "--box", key])
+        .env_remove("HERDR_PLUGIN_CONTEXT_JSON");
+    command
+}
+
 /// Enter: go to a sandbox's local worktree. Focus an already-open herdr workspace
 /// for that path (or a subdir), else open it fresh. Only meaningful inside herdr.
 /// Returns a status message for the footer.
@@ -108,7 +120,7 @@ fi",
 mod tests {
     use std::ffi::OsStr;
 
-    use super::{action_command, key_only};
+    use super::{action_command, key_only, open_below_command};
     use crate::state::{
         branch_cell, branch_column_width, git_dir_link, head_branch, parse_head, plugin_version,
         region_label, resolve_branch, status_detail, template_cell, template_downgraded,
@@ -208,6 +220,27 @@ mod tests {
             command.get_current_dir(),
             Some(std::path::Path::new("/tmp/work tree"))
         );
+    }
+
+    #[test]
+    fn popup_open_splits_below_the_origin_pane() {
+        let command = open_below_command("w1:p2", "box'1", "/tmp/work tree");
+
+        assert_eq!(command.get_program(), OsStr::new("e2b-box-open"));
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                "--target-pane",
+                "w1:p2",
+                "--cwd",
+                "/tmp/work tree",
+                "--box",
+                "box'1"
+            ]
+            .map(OsStr::new)
+        );
+        // Not run in the worktree: herdr's --cwd is what places the new pane there.
+        assert_eq!(command.get_current_dir(), None);
     }
 
     // --- the BRANCH column ------------------------------------------------
