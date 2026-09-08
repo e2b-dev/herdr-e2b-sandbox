@@ -58,8 +58,7 @@ The template decides which agent works the task, and `run` needs that agent's
 | `muse` | `muse exec --yolo --user-input-auto-resolve --prompt-file $HOME/.herdr-e2b-task.md` |
 | `prime` | `prime-agent -p --no-session "$(cat $HOME/.herdr-e2b-task.md)"` |
 
-`base` (the default) and your own templates are refused by name before anything
-boots. An invented flag fails to launch and reads exactly like an agent
+`base` and your own templates are refused by name before anything boots. An invented flag fails to launch and reads exactly like an agent
 that did nothing. Teach one in `[run.agents]`:
 
 ```toml

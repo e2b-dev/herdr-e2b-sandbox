@@ -16,10 +16,13 @@ export { AUTH_PATH, CONFIG_PATH } from "./config-paths.js"
 const CLI_CONFIG_PATH = path.join(os.homedir(), ".e2b", "config.json")
 
 const DEFAULTS = {
-  // Safe minimal default that always exists. For real work build a bigger
-  // custom template (more disk/CPU + your toolchain) and set it here — see the
-  // README "Recommended: a bigger custom template" and install.sh.
-  template: "base",
+  // What a box boots from when nothing else decided: Meta's Muse Code template,
+  // an agent ready to work rather than an empty image to install one into. `base`
+  // (E2B's minimal image, always present) stays in the picker and stays the
+  // fallback a create lands on when the chosen template is not on the cluster.
+  // For real work build a bigger custom template (more disk/CPU + your toolchain)
+  // and set it here, see the README "Recommended: a bigger custom template".
+  template: "muse",
   templateRules: [], // [{pattern, template}] per-branch overrides
   // The `open` picker's menu, in the order shown. Ships with the plugin so the
   // picker is useful out of the box; `[sandbox] templates` in config REPLACES it.
@@ -1013,7 +1016,7 @@ export function templateRuleMatches(branch, cfg) {
  * always offered so "just boot the usual one" is one keypress.
  */
 /**
- * The templates a FLEET may be built from: the same list, minus the plain default.
+ * The templates a FLEET may be built from: the same list, minus the agentless ones.
  *
  * A fleet is several coding agents working one checkout in parallel, so a box with
  * no agent in it is not a member — it is a shell nobody asked for. `base` is also
@@ -1026,7 +1029,15 @@ export function templateRuleMatches(branch, cfg) {
  * keeps offering it: one plain box is a perfectly good thing to want.
  */
 export function fleetTemplateChoices(cfg) {
-  return templateChoices(cfg).filter((t) => t !== cfg.template)
+  // Agentless means: `base` (E2B's plain image, the one public template whose name
+  // is not a CLI), or a template the user mapped to "" in `[fleet.agents]`, the
+  // documented "plain shell, start nothing" for a control arm or their own plain
+  // image. NOT the configured default: since the default became an agent template
+  // (`muse`), filtering it out would drop the one member most people want.
+  const agents = cfg?.fleetAgents || {}
+  return templateChoices(cfg).filter(
+    (t) => t !== "base" && !(Object.prototype.hasOwnProperty.call(agents, t) && agents[t] === ""),
+  )
 }
 
 export function templateChoices(cfg) {
