@@ -8,6 +8,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `[templates.<name>] model = "…"` and `reasoning = "…"`: pin which model a
+  template's agent uses and how hard it thinks, for every box booted from it
+  (`open`, `fleet`, `run`). Delivered the way each harness reads its defaults
+  (`src/model-pin.js`): claude and opencode through their environment
+  (`ANTHROPIC_MODEL`, `CLAUDE_CODE_EFFORT_LEVEL`, `OPENCODE_CONFIG_CONTENT`),
+  codex, grok, droid, prime and muse through their own config file, written right
+  after the first-run seed and never over a key that is already set. Every pinned
+  box also carries `HERDR_E2B_MODEL` / `HERDR_E2B_REASONING` for your own launch
+  commands. `[templates.<name>.env]` still wins for the same variable.
+
 - `e2b-box run`, the headless verb (#47): boot or re-sync this checkout's box,
   write the task into it as a file, start the template's agent in its
   non-interactive mode and wait for it to exit, pull what changed back, optionally

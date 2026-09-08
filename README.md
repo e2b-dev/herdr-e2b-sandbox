@@ -188,7 +188,20 @@ OPENAI_API_KEY = "sk-…"
 
 [sandbox.env]                    # optional — every box, whatever it booted from
 HTTPS_PROXY = "http://proxy.internal:3128"
+
+[templates.opencode]             # optional: which model, how hard it thinks
+model = "openrouter/qwen/qwen3.8-max-0902"
+[templates.codex]
+model = "gpt-5.4"
+reasoning = "high"
 ```
+
+`model` and `reasoning` pin what a template's agent runs, for every box booted
+from it (`open`, `fleet`, `run`), in the harness's own way: claude and opencode
+read a variable, codex, grok, droid, prime and muse get their config file written
+right after the first-run seed. An agent left alone runs whatever its provider
+ranks first, which on an OpenRouter key was an image model. Per-harness keys and
+what each can pin are in `config.example.toml`.
 
 | Agent | Template | Key it reads | Started unattended as |
 | --- | --- | --- | --- |
