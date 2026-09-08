@@ -6,6 +6,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `e2b-box run`, the headless verb (#47): boot or re-sync this checkout's box,
+  write the task into it as a file, start the template's agent in its
+  non-interactive mode and wait for it to exit, pull what changed back, optionally
+  commit and push the local branch (`--push`, `--remote`, `-m`), pause the box
+  (`--kill` destroys it, `--keep` leaves it running), and exit 0 only when every
+  step landed. `--task` takes the text, a file to read,
+  or `-` for stdin; `--timeout-ms` bounds the agent (30 min default), `--force`
+  is `pull`'s, `--dry-run` prints the plan, `--json`
+  prints one result object with the deciding `status`. `claude`, `codex`,
+  `opencode` and `amp` ship verified headless commands (`src/run-agent.js`);
+  other templates are refused by name until `[run.agents]` maps them.
+  `docs/headless-run.md` is the guide, with a GitHub Actions example.
+
 ### Fixed
 
 - Enter in the popup dashboard opens the box in a regular pane split below the

@@ -196,6 +196,26 @@ export function resolveFleet(fleet = {}) {
 }
 
 /**
+ * Resolve the `[run]` block: `e2b-box run`'s side of the config. Pure.
+ *
+ * - `agents` template → the ONE-LINE command that works the task file to completion
+ *            and exits (src/run-agent.js owns the shipped defaults and the task
+ *            path). Only the user's overrides are kept here, by key presence, so
+ *            "" is a deliberate "no headless agent for this template" that
+ *            switches a shipped default off, the same rule as `[fleet.agents]`.
+ */
+export function resolveRun(run = {}) {
+  const r = run && typeof run === "object" ? run : {}
+  const agents = {}
+  if (r.agents && typeof r.agents === "object" && !Array.isArray(r.agents)) {
+    for (const [template, command] of Object.entries(r.agents)) {
+      if (typeof command === "string") agents[template] = command.trim()
+    }
+  }
+  return { agents }
+}
+
+/**
  * Normalize one `env` table into a `{NAME: "value"}` map the SDK will accept.
  * Pure. TOML gives us numbers and booleans too; E2B env values must be strings,
  * so those are stringified rather than dropped (a port or a `true` is a
@@ -822,6 +842,7 @@ export function loadConfig() {
   const secrets = file.secrets || {}
   const dashboard = file.dashboard || {}
   const fleet = resolveFleet(file.fleet)
+  const run = resolveRun(file.run)
   const env = resolveEnvConfig({ sandbox, templates: file.templates })
   // What `e2b-box auth` found, merged UNDER the two tables above by resolveEnv.
   // Read here rather than by a caller so discovery arrives in the resolved config
@@ -867,6 +888,9 @@ export function loadConfig() {
     // [fleet.seed] — template → the command that seeds its agent's first-run state
     // inside the box. Read through src/fleet-seed.js, which owns the defaults.
     fleetSeeds: fleet.seeds,
+    // [run.agents]: template → the headless command `e2b-box run` drives the box's
+    // agent with. Overrides only; src/run-agent.js owns the defaults.
+    runAgents: run.agents,
     // Env injected into a box at create time — `[sandbox.env]` for every box,
     // `[templates.<name>.env]` merged over it. Read with resolveEnv(cfg, template).
     envShared: env.envShared,

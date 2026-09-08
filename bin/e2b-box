@@ -16,6 +16,11 @@
 #                      aborts on a dirty/non-git tree unless --force)
 #   e2b-box exec CMD   run CMD inside the sandbox and print one JSON result
 #                      (--timeout-ms N bounds it; what `e2b-bench` grades with)
+#   e2b-box run --task 'fix the bug' | --task GOAL.md | --task -
+#                      headless: boot (or re-sync) the box, hand its agent the task,
+#                      wait for it to finish, pull the result home, [--push] it,
+#                      pause the box (--kill destroys it, --keep leaves it running);
+#                      exit 0 only when every step landed
 #   e2b-box kill       kill this worktree's sandbox
 set -uo pipefail
 # Resolve through the ~/.local/bin symlink to the real script dir so we can
@@ -669,7 +674,7 @@ boot_and_connect() {
 # pipe-separated string. Two columns, verb then plain-English result, one line each.
 # Every verb this CLI answers to, in one place: the did-you-mean below spell-checks
 # against it, so a verb that isn't here is a verb nobody can be nudged toward.
-VERBS="open up connect shell attach exec sync pull pause resume kill status list url logs wait doctor auth fleet dash"
+VERBS="open up connect shell attach exec run sync pull pause resume kill status list url logs wait doctor auth fleet dash"
 
 usage() {
   cat <<'USAGE'
@@ -685,6 +690,17 @@ session
   connect [<sandbox-id>]      attach to a box that already exists — this
                               worktree's, or the id `list` shows you
   exec <cmd>                  run one command inside the box, print its output
+
+headless                      no pane, no human: a cron or a delivery lane
+  run --task TASK             boot (or re-sync) the box, hand the task to its agent,
+                              wait for the agent to finish, pull the result home,
+                              pause the box; exit 0 only when every step landed
+                              TASK is the text itself, a file to read (GOAL.md),
+                              or `-` for stdin
+                              [-t NAME] [--push [--remote R] [-m MSG]] [--kill|--keep]
+                              [--force] [--timeout-ms N] [--dry-run] [--json]
+                              (needs a template with a headless agent: claude,
+                              codex, opencode, amp, or one mapped in [run.agents])
 
 files
   sync                        upload this worktree into the box      local → box
@@ -727,8 +743,14 @@ options                       (before the verb or after it — same thing)
   --connection ID             choose a connection for a NEW box (open, up)
   -b, --box KEY               act on that box instead of this worktree's
   --json                      machine-readable output (list, status, wait)
-  --force                     let `pull` overwrite a dirty or non-git tree
-  --timeout-ms N              bound for `exec` and `wait`
+  --force                     let `pull` (and `run`) overwrite a dirty or non-git tree
+  --timeout-ms N              bound for `exec`, `wait` and `run`'s agent (run: 30 min)
+  --push                      `run` only: commit what the agent changed and push
+                              this branch (--remote R, default origin; -m MSG)
+  --kill                      `run` only: destroy the box afterwards (default: pause
+                              it, so `e2b-box open` puts you back in)
+  --keep                      `run` only: leave the box running afterwards
+  --dry-run                   `run` only: print the plan as JSON, create nothing
   -h, --help · -V, --version  print this · print the plugin version
 
 also spelled                  ls=list · rm,destroy=kill · unpause=resume
@@ -891,7 +913,7 @@ set -- ${args[@]+"${args[@]}"}
 key="${box_flag:-${KEY:-$(key_from_cwd)}}"
 [ -z "$key" ] && key="workspace"
 if [ -n "$connection" ]; then
-  case "$cmd" in open|up) ;; *) echo "e2b-box: --connection is only supported for a new box (open, up)" >&2; exit 2 ;; esac
+  case "$cmd" in open|up|run) ;; *) echo "e2b-box: --connection is only supported for a new box (open, up, run)" >&2; exit 2 ;; esac
   if [ -n "$(field "$key" sandboxId)" ] || [ "$(field "$key" status)" = provisioning ]; then
     echo "e2b-box: --connection applies to a new box. This box retains its existing credentials; kill it explicitly before recreating." >&2
     exit 1
@@ -1142,6 +1164,259 @@ case "$cmd" in
     payload=$(jq -cn --arg k "$key" --arg c "$run_cmd" --arg t "$timeout_ms" \
       '{key:$k, cmd:$c} + (if $t == "" then {} else {timeoutMs: ($t | tonumber)} end)')
     "$node_bin" "$PLUGIN_DIR/src/exec.js" "$payload"
+    ;;
+  run)
+    # Headless: boot (or re-sync) this worktree's box, hand its agent ONE task, wait
+    # for the agent to finish, pull the result home, optionally commit and push it,
+    # tear the box down, and exit 0 only when every step landed. `open` and `fleet`
+    # need a pane and a human to sit in it; a cron or a delivery lane has neither
+    # (#47), and `exec` runs one command, not an agent to completion.
+    #
+    # Nothing here reaches the SDK on its own, the steps are this CLI's own verbs
+    # in order: provision (op=sync, so a reused box sees the current tree), exec
+    # (the task file, then the agent), pull, kill. What is new is the table of
+    # headless agent commands (src/run-agent.js) and the one exit code over all of it.
+    #
+    # With --json stdout is exactly ONE object; every progress line goes to stderr.
+    task=""; task_src=""; run_ms=""; do_push=0; after=pause; force=0; dry=0; remote="origin"; msg=""
+    run_need() { [ $# -ge 2 ] || { echo "e2b-box: $1 needs a value" >&2; exit 2; }; }
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --task)         run_need "$@"; task_src="$2"; shift 2 ;;
+        --task=*)       task_src="${1#*=}"; shift ;;
+        --timeout-ms)   run_need "$@"; run_ms="$2"; shift 2 ;;
+        --timeout-ms=*) run_ms="${1#*=}"; shift ;;
+        --remote)       run_need "$@"; remote="$2"; shift 2 ;;
+        --remote=*)     remote="${1#*=}"; shift ;;
+        -m|--message)   run_need "$@"; msg="$2"; shift 2 ;;
+        --message=*)    msg="${1#*=}"; shift ;;
+        --push)         do_push=1; shift ;;
+        # What becomes of the box once the result is home. Pause by default: a
+        # headless run is the one nobody watched, so the box IS the evidence, and a
+        # paused box costs nothing while `e2b-box open` can still put you back in it.
+        --pause)        after=pause; shift ;;
+        --kill)         after=kill; shift ;;
+        --keep)         after=keep; shift ;;
+        --force)        force=1; shift ;;
+        --dry-run)      dry=1; shift ;;
+        *) echo "e2b-box: run doesn't take '$1', see: e2b-box run --help" >&2; exit 2 ;;
+      esac
+    done
+    case "$run_ms" in
+      ""|*[!0-9]*|0) [ -z "$run_ms" ] || { echo "e2b-box: --timeout-ms must be a positive integer (milliseconds)" >&2; exit 2; } ;;
+    esac
+    # One flag, three shapes: `-` is stdin (how a lane that already holds GOAL.md in
+    # a variable hands it over without a temp file), a readable file is read, and
+    # anything else is the task text itself. A task that happens to spell an
+    # existing filename is that file, which is the only reading anyone means.
+    if [ "$task_src" = "-" ]; then task=$(cat)
+    elif [ -n "$task_src" ] && [ -f "$task_src" ] && [ -r "$task_src" ]; then task=$(cat "$task_src")
+    else task="$task_src"; fi
+    [ -n "$(printf '%s' "$task" | tr -d '[:space:]')" ] || {
+      echo "e2b-box: run needs a task: --task 'fix the login redirect', --task GOAL.md, or --task - (stdin)" >&2; exit 2
+    }
+    node_bin=$(e2b_node) || { echo "e2b-box: run needs Node >= 22 (set HERDR_E2B_NODE=/path/to/node)" >&2; exit 1; }
+    RUN_TASK_FILE=$("$node_bin" "$PLUGIN_DIR/src/run-agent.js" --task-path)
+
+    # Which agent will work the task is the template's, and a tracked box keeps the
+    # template it was built from, so `-t` only decides for a box that does not exist
+    # yet (same rule as `open`). Resolved BEFORE anything boots: a template with no
+    # headless command is a usage error, and a usage error must never cost a box.
+    run_sid=$(field "$key" sandboxId)
+    tpl=""
+    if [ -n "$run_sid" ]; then
+      tpl=$(field "$key" template)
+      [ -n "$template" ] && [ -n "$tpl" ] && [ "$template" != "$tpl" ] && \
+        echo "e2b-box: '$key' already has a '$tpl' box, -t $template only applies to a new box (kill this one first)" >&2
+    fi
+    if [ -z "$tpl" ]; then
+      tpl="${template:-${E2B_TEMPLATE:-}}"
+      if [ -z "$tpl" ]; then
+        b=""; at_repo_root && b=$(git_branch); [ "$b" = "HEAD" ] && b=""
+        tpl=$("$node_bin" "$PLUGIN_DIR/src/resolve-template.js" "$b" 2>/dev/null | head -1 | cut -f2)
+      fi
+    fi
+    agent_cmd=$("$node_bin" "$PLUGIN_DIR/src/run-agent.js" "$tpl")
+    [ -n "$agent_cmd" ] || {
+      shipped=$("$node_bin" "$PLUGIN_DIR/src/run-agent.js" --shipped | paste -sd, - | sed 's/,/, /g')
+      printf "e2b-box: no headless agent command for template '%s', nothing was created.\n" "${tpl:-base}" >&2
+      printf '  pass -t one of: %s\n' "$shipped" >&2
+      printf '  or teach the config:  [run.agents]  "%s" = "<its cli> <its non-interactive flags> \\"$(cat %s)\\""\n' "${tpl:-base}" "$RUN_TASK_FILE" >&2
+      exit 2
+    }
+
+    if [ "$dry" -eq 1 ]; then
+      # The plan, and only the plan, the feature's test seam, like `fleet --dry-run`.
+      jq -cn --arg k "$key" --arg t "$tpl" --arg c "$agent_cmd" --arg f "$RUN_TASK_FILE" \
+        --argjson n "$(printf '%s' "$task" | wc -c | tr -d ' ')" --arg ms "${run_ms:-1800000}" \
+        --argjson push "$([ "$do_push" -eq 1 ] && echo true || echo false)" --arg r "$remote" \
+        --argjson force "$([ "$force" -eq 1 ] && echo true || echo false)" \
+        --arg after "$after" \
+        --argjson reuse "$([ -n "$run_sid" ] && echo true || echo false)" \
+        '{dryRun:true, key:$k, template:$t, reuseBox:$reuse, agentCommand:$c, taskFile:$f, taskBytes:$n,
+          timeoutMs:($ms|tonumber), pull:true, force:$force, push:$push, remote:(if $push then $r else null end), after:$after}'
+      exit 0
+    fi
+
+    say() { if [ "$json" -eq 1 ]; then printf '%s\n' "$*" >&2; else printf '%s\n' "$*"; fi; }
+    run_exec() { # $1 = command run in the box's project dir, $2 = timeout ms or ""
+      local payload
+      payload=$(jq -cn --arg k "$key" --arg c "$1" --arg t "${2:-}" \
+        '{key:$k, cmd:$c} + (if $t == "" then {} else {timeoutMs: ($t | tonumber)} end)')
+      "$node_bin" "$PLUGIN_DIR/src/exec.js" "$payload"
+    }
+    # The one result. `status` is the step that decided it: done · boot-failed ·
+    # task-failed · agent-unmeasured (never ran to a verdict: unreachable, killed at
+    # the bound) · agent-failed (ran, exited non-zero) · pull-failed · push-failed ·
+    # teardown-failed. `ok` is true for `done` alone, and the exit code follows `ok`.
+    # `box` says what the box is now: paused · killed · running.
+    started=$(date +%s)
+    AGENT_JSON=null; PULL_JSON=null; PUSH_JSON=null; BOX_NOW=running
+    finish() { # $1 = status, $2 = error ("" when done)
+      local st="$1" err="${2:-}" ok=false
+      [ "$st" = done ] && ok=true
+      if [ "$json" -eq 1 ]; then
+        jq -cn --argjson ok "$ok" --arg k "$key" --arg sid "${run_sid:-}" --arg t "$tpl" --arg st "$st" --arg err "$err" \
+          --argjson agent "$AGENT_JSON" --argjson pull "$PULL_JSON" --argjson push "$PUSH_JSON" --arg box "$BOX_NOW" \
+          --argjson e "$(( ($(date +%s) - started) * 1000 ))" \
+          '{ok:$ok, key:$k, sandboxId:(if $sid == "" then null else $sid end), template:$t, status:$st,
+            agent:$agent, pull:$pull, push:$push, box:$box, elapsedMs:$e, error:$err}'
+      elif [ -n "$err" ]; then
+        echo "✗ $err" >&2
+      else
+        echo "● done in $(( $(date +%s) - started ))s"
+      fi
+      [ "$ok" = true ] && exit 0 || exit 1
+    }
+
+    # --- boot -----------------------------------------------------------------
+    dest=$(box_root)
+    pre_dirty=0
+    git -C "$dest" rev-parse --git-dir >/dev/null 2>&1 && pre_dirty=$(git -C "$dest" status --porcelain 2>/dev/null | grep -c .)
+    if [ -n "$run_sid" ]; then say "▸ $tpl box for '$key', re-syncing the tracked box $run_sid"
+    else say "▸ $tpl box for '$key', booting a fresh box (billable)"; fi
+    if [ "$(field "$key" status)" = provisioning ]; then
+      say "  a provision is already running for it, waiting"
+    else
+      arm_boot_abort "$key"
+      # The auth preflight inside reports the connection it picked on stdout; with
+      # --json that line belongs on stderr, or stdout stops being one object.
+      if [ "$json" -eq 1 ]; then
+        provision_from_cwd "$key" sync "$tpl" >&2 || finish boot-failed "the box could not be provisioned, see: e2b-box logs"
+      else
+        provision_from_cwd "$key" sync "$tpl" || finish boot-failed "the box could not be provisioned, see: e2b-box logs"
+      fi
+    fi
+    spin_until_ready "$key" "booting" >&2 || finish boot-failed "the box did not come up, see: e2b-box logs"
+    disarm_boot_abort
+    run_sid=$(field "$key" sandboxId)
+
+    # --- the task, then the agent ----------------------------------------------
+    # The task goes in as a FILE over the SDK, base64 so free text never meets a
+    # quoting boundary, the same path bin/e2b-fleet writes its brief to.
+    say "  writing the task into the box ($RUN_TASK_FILE)"
+    b64=$(printf '%s' "$task" | base64 | tr -d '\n')
+    out=$(run_exec "printf %s '$b64' | base64 -d > $RUN_TASK_FILE") || \
+      finish task-failed "the task could not be written into the box: $(printf '%s' "$out" | jq -r '.error // .stderr // empty' 2>/dev/null | head -1)"
+
+    say "  running: $agent_cmd"
+    # Bounded, and killed at the bound (src/exec.js), so a stuck agent cannot hold a
+    # cron forever. 30 minutes by default; keep it under [sandbox] timeout_ms, or the
+    # box pauses under the agent first.
+    AGENT_JSON=$(run_exec "$agent_cmd" "${run_ms:-1800000}"); arc=$?
+    printf '%s' "$AGENT_JSON" | jq -e . >/dev/null 2>&1 || \
+      AGENT_JSON=$(jq -cn --arg e "exec.js produced no JSON (exit $arc)" '{ok:false, exitCode:null, stdout:"", stderr:"", error:$e}')
+    status=done; err=""
+    a_ok=$(printf '%s' "$AGENT_JSON" | jq -r '.ok'); a_code=$(printf '%s' "$AGENT_JSON" | jq -r '.exitCode')
+    if [ "$a_ok" != true ]; then
+      status=agent-unmeasured; err="the agent never ran to a verdict: $(printf '%s' "$AGENT_JSON" | jq -r '.error')"
+    elif [ "$a_code" != 0 ]; then
+      status=agent-failed; err="the agent exited $a_code"
+    fi
+    say "  agent: $([ "$status" = done ] && echo "exit 0" || echo "$err")"
+    # Whatever the agent did, its work comes home, a failing run's half-finished
+    # tree is the evidence you want to read, and the box is about to be killed.
+
+    # --- pull -------------------------------------------------------------------
+    # The plugin's own `pull`, with its clobber guard intact: with no terminal it
+    # aborts, naming the uncommitted local files the box would overwrite, unless
+    # --force said so up front. A pull that did not complete KEEPS the box: the one
+    # thing this verb must never do is destroy work that did not come home.
+    say "  pulling the box's changes → $dest"
+    pull_args=(); [ "$force" -eq 1 ] && pull_args+=(--force)
+    pull_out=$(KEY="$key" "$0" pull ${pull_args[@]+"${pull_args[@]}"} </dev/null 2>&1); prc=$?
+    PULL_JSON=$(jq -cn --argjson ok "$([ "$prc" -eq 0 ] && echo true || echo false)" --arg o "$pull_out" '{ok:$ok, output:$o}')
+    printf '%s\n' "$pull_out" | sed 's/^/    /' | { if [ "$json" -eq 1 ]; then cat >&2; else cat; fi; }
+    if [ "$prc" -ne 0 ]; then
+      # Never destroy work that did not come home: a kill is downgraded to a pause.
+      [ "$after" = kill ] && after=pause
+      [ "$status" = done ] && { status=pull-failed; err="the pull did not complete, box kept so nothing is lost: $(printf '%s' "$pull_out" | grep -v '^$' | tail -1)"; }
+    fi
+
+    # --- push -------------------------------------------------------------------
+    # Local, not from the box: the box holds a baseline commit and no history (ADR
+    # 0012), so the branch with the real history is the one on this machine. Commit
+    # everything the pull left different and push THIS branch to the remote.
+    if [ "$do_push" -eq 1 ] && [ "$status" = done ]; then
+      pbranch=$(git -C "$dest" symbolic-ref --short HEAD 2>/dev/null || true)
+      commit=""
+      if [ -z "$pbranch" ]; then
+        status=push-failed; err="'$dest' is not on a branch, nothing to push"
+      else
+        # ADR 0003's shape: the dirty tree was part of the snapshot the agent worked
+        # from, so it is part of the result, say so, then do what was asked.
+        [ "$pre_dirty" -gt 0 ] && say "  note: $pre_dirty path(s) were already uncommitted before the run, they ride in this commit"
+        git -C "$dest" add -A
+        if ! git -C "$dest" diff --cached --quiet; then
+          : "${msg:=herdr-e2b run ($tpl): $(printf '%s' "$task" | head -1 | cut -c1-72)}"
+          if cout=$(git -C "$dest" commit -q -m "$msg" 2>&1); then
+            commit=$(git -C "$dest" rev-parse HEAD); say "  committed $(git -C "$dest" rev-parse --short HEAD) on $pbranch"
+          else
+            status=push-failed; err="commit failed: $(printf '%s' "$cout" | tail -1)"
+          fi
+        else
+          say "  nothing to commit, the tree already matched"
+        fi
+        if [ "$status" = done ]; then
+          if pout=$(git -C "$dest" push -u "$remote" "$pbranch" 2>&1); then
+            say "  pushed $pbranch → $remote"
+          else
+            status=push-failed; err="push $pbranch → $remote failed: $(printf '%s' "$pout" | grep -v '^$' | tail -1)"
+          fi
+        fi
+      fi
+      PUSH_JSON=$(jq -cn --argjson ok "$([ "$status" = done ] && echo true || echo false)" \
+        --arg r "$remote" --arg b "${pbranch:-}" --arg c "$commit" \
+        '{ok:$ok, remote:$r, branch:(if $b == "" then null else $b end), commit:(if $c == "" then null else $c end)}')
+    fi
+
+    # --- what becomes of the box ----------------------------------------------------
+    # Pause (default): frozen with its memory, nothing billing, `e2b-box open` puts
+    # you back in it and `e2b-box kill` ends it. Kill (--kill): gone, record removed.
+    # Keep (--keep): left running; it still auto-pauses at its idle timeout.
+    case "$after" in
+      keep)
+        say "  box left running$([ "$prc" -eq 0 ] || echo " (its changes have not all come home)"): e2b-box open · e2b-box kill" ;;
+      kill)
+        if sdk_kill "$run_sid" "$(field "$key" domain)" >/dev/null 2>&1; then
+          rm -f "$BOXES_DIR/$key.json" "$BOXES_DIR/$key.log"; BOX_NOW=killed
+          say "  box killed"
+        else
+          # Same rule as `kill`: a box we could not destroy keeps its record, and a
+          # run that leaves a billable box behind is not a run that landed.
+          say "  ✗ couldn't kill $run_sid, record kept so you can retry: e2b-box kill"
+          [ "$status" = done ] && { status=teardown-failed; err="the box could not be killed, retry: e2b-box kill"; }
+        fi ;;
+      *)
+        if "$node_bin" "$PLUGIN_DIR/src/lifecycle.js" pause "$key" "$run_sid" "$(field "$key" domain)" >/dev/null 2>&1; then
+          BOX_NOW=paused
+          say "  box paused$([ "$prc" -eq 0 ] || echo " (its changes have not all come home)"): e2b-box open puts you back · e2b-box kill ends it"
+        else
+          say "  ✗ couldn't pause $run_sid, left running: e2b-box pause · e2b-box kill"
+          [ "$status" = done ] && { status=teardown-failed; err="the box could not be paused, it is still running: e2b-box pause"; }
+        fi ;;
+    esac
+    finish "$status" "$err"
     ;;
   kill)
     sid=$(field "$key" sandboxId)

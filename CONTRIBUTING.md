@@ -50,6 +50,13 @@ layers, the data flow, the state model, and the invariants worth checking).
   back to the hand-written value. The login-shell visibility check takes its shell as
   an argument, so it runs identically on a machine where every key IS visible.
 
+`test/e2e-run.sh` is the one LIVE script: it boots three throwaway boxes (about a
+minute, killed on the way out) and proves `e2b-box run` end to end against a bare
+remote: the dirty-tree snapshot, the agent run, pull + commit + push, the
+`--timeout-ms` bound, and the clobber guard keeping the box. Needs `E2B_API_KEY`
+and a credential for the template (`E2E_TEMPLATE`, default `claude`). Run it by
+hand before a release that touches `run`; it is deliberately not in `npm test`.
+
 Live E2B round-trips (provision / sync / pull / kill) are verified manually,
 since they consume real sandbox time — use a throwaway git folder and kill the
 box afterward. CI (`.github/workflows/ci.yml`) runs `npm test` on Ubuntu and
