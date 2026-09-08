@@ -699,8 +699,8 @@ headless                      no pane, no human: a cron or a delivery lane
                               or `-` for stdin
                               [-t NAME] [--push [--remote R] [-m MSG]] [--kill|--keep]
                               [--force] [--timeout-ms N] [--dry-run] [--json]
-                              (needs a template with a headless agent: claude,
-                              codex, opencode, amp, or one mapped in [run.agents])
+                              (every shipped agent template has a headless command;
+                              your own template needs one in [run.agents])
 
 files
   sync                        upload this worktree into the box      local → box

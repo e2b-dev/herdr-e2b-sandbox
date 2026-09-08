@@ -12,19 +12,30 @@ const script = fileURLToPath(new URL("../src/run-agent.js", import.meta.url))
 // agent" is a choice a user can make for a template, and a choice must not fall
 // back to a default the moment it is spelled as the empty string.
 
-test("runCommand: a template with a verified headless mode gets it", () => {
-  assert.equal(runCommand("claude"), DEFAULT_RUN_AGENTS.claude)
-  assert.equal(runCommand("codex"), DEFAULT_RUN_AGENTS.codex)
-  assert.equal(runCommand("opencode"), DEFAULT_RUN_AGENTS.opencode)
-  assert.equal(runCommand("amp"), DEFAULT_RUN_AGENTS.amp)
+test("runCommand: every shipped agent template has a verified headless mode", () => {
+  for (const t of ["claude", "codex", "opencode", "amp", "grok", "droid", "muse", "prime"]) {
+    assert.equal(runCommand(t), DEFAULT_RUN_AGENTS[t])
+    assert.ok(DEFAULT_RUN_AGENTS[t], `${t}: no default`)
+  }
 })
 
 test("runCommand: a template nobody has verified a headless mode for runs nothing", () => {
   // An invented flag fails to launch and reads exactly like an agent that did
-  // nothing, so these wait for `[run.agents]` to say what to run, including the
-  // ones `[fleet.agents]` DOES start interactively.
-  for (const t of ["base", "grok", "droid", "prime", "muse", "", undefined, null]) {
+  // nothing, so these wait for `[run.agents]` to say what to run.
+  for (const t of ["base", "my-project/my-template", "", undefined, null]) {
     assert.equal(runCommand(t), "", `${t}: expected no default`)
+  }
+})
+
+test("every shipped command is that vendor's non-interactive mode, not its TUI", () => {
+  // The interactive command is never a flag away from the headless one; each row
+  // must name the vendor's documented one-shot entry point.
+  const oneShot = {
+    claude: " -p ", codex: "codex exec ", opencode: "opencode run ", amp: "amp -x ",
+    grok: "--prompt-file", droid: "droid exec ", muse: "muse exec ", prime: "prime-agent -p ",
+  }
+  for (const [t, marker] of Object.entries(oneShot)) {
+    assert.ok(DEFAULT_RUN_AGENTS[t].includes(marker), `${t}: missing ${marker}`)
   }
 })
 

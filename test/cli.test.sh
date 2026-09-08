@@ -493,10 +493,10 @@ out=$(cd "$RUNREPO" && HERDR_PLUGIN_CONFIG_DIR="$NOCFG" "$E2B" run --task x 2>&1
 { [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "no headless agent command for template 'base'" \
   && printf '%s' "$out" | grep -q "\[run.agents\]"; } \
   && ok "run on the default template → refused by name, exit 2" || bad "run on base (rc=$rc, out=$out)"
-out=$(cd "$RUNREPO" && "$E2B" run -t grok --task x 2>&1); rc=$?
-{ [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "for template 'grok'" \
-  && printf '%s' "$out" | grep -q "pass -t one of: claude, codex, opencode, amp"; } \
-  && ok "run -t grok (interactive-only default) → refused by name, exit 2" || bad "run -t grok (rc=$rc, out=$out)"
+out=$(cd "$RUNREPO" && "$E2B" run -t my-project/my-template --template-any --task x 2>&1); rc=$?
+{ [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "for template 'my-project/my-template'" \
+  && printf '%s' "$out" | grep -q "pass -t one of: claude, codex, opencode, amp, grok, droid, muse, prime"; } \
+  && ok "run -t <your own template> → refused by name, names the eight shipped, exit 2" || bad "run -t own template (rc=$rc, out=$out)"
 
 # --dry-run is the plan and only the plan: what would run, where the task lands,
 # what happens after. Every default reads the task FILE, never the task text.
