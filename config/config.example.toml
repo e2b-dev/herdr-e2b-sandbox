@@ -382,6 +382,10 @@ ignore = [".git", "node_modules", ".next", "dist", "build", ".turbo", ".cache",
 #   codex     codex exec --dangerously-bypass-approvals-and-sandbox - < $HOME/.herdr-e2b-task.md
 #   opencode  opencode run --auto "$(cat $HOME/.herdr-e2b-task.md)"
 #   amp       amp -x --dangerously-allow-all < $HOME/.herdr-e2b-task.md
+#   grok      grok --always-approve --prompt-file $HOME/.herdr-e2b-task.md
+#   droid     droid exec --skip-permissions-unsafe -f $HOME/.herdr-e2b-task.md
+#   muse      muse exec --yolo --user-input-auto-resolve --prompt-file $HOME/.herdr-e2b-task.md
+#   prime     prime-agent -p --no-session "$(cat $HOME/.herdr-e2b-task.md)"
 #
 # THE RULE, if you write your own: the task is a FILE in the box, at
 # $HOME/.herdr-e2b-task.md, written over the SDK before the command runs. Your
@@ -390,11 +394,10 @@ ignore = [".git", "node_modules", ".next", "dist", "build", ".turbo", ".cache",
 # `run` waits on the exit code (bounded by --timeout-ms, 30 minutes by default).
 # One line; it runs in the box's project dir.
 #
-# Templates the plugin ships no headless mode for (grok, droid, prime, muse, base,
-# your own) are refused BY NAME until you map them here: an invented flag fails to
-# launch and looks exactly like an agent that did nothing. An empty string switches
-# a shipped default off.
+# Templates the plugin ships no headless mode for (base, your own) are refused BY
+# NAME until you map them here: an invented flag fails to launch and looks exactly
+# like an agent that did nothing. An empty string switches a shipped default off.
 # [run.agents]
-# muse = 'muse --yolo "$(cat $HOME/.herdr-e2b-task.md)"'
 # "ondrejs-project/herdr-agents" = 'claude --dangerously-skip-permissions -p "$(cat $HOME/.herdr-e2b-task.md)"'
+# droid = 'droid exec --auto high -f $HOME/.herdr-e2b-task.md'   # a leash instead of the bypass
 # claude = ""

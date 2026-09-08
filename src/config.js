@@ -355,12 +355,27 @@ export function unresolvedForwards(cfg, template, env = {}) {
 function fileValue(cfg, template, readFile) {
   const f = cfg?.envFile?.[template]
   if (!f) return {}
-  const read = HARNESSES[f.harness]?.valueFile?.read
+  const h = HARNESSES[f.harness]
+  const read = h?.valueFile?.read
   if (!read) return {}
   try {
     const text = readFile(f.path)
     const v = text == null ? null : read(text)
-    return v ? { [f.var]: v } : {}
+    if (!v) return {}
+    const out = { [f.var]: v }
+    // Companions: non-secret settings the key needs beside it, read out of the same
+    // file (prime's team id, see harnesses.js). Only with the key: a companion
+    // without its credential configures a box that cannot authenticate anyway.
+    for (const [name, pick] of Object.entries(h.companions || {})) {
+      let c = null
+      try {
+        c = pick(text)
+      } catch {
+        c = null
+      }
+      if (c) out[name] = c
+    }
+    return out
   } catch {
     return {}
   }

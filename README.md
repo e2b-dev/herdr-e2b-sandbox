@@ -362,9 +362,10 @@ e2b-box run -t claude --task GOAL.md --dry-run               # the plan, nothing
 The full contract, the box lifecycle and a GitHub Actions example live in
 [docs/headless-run.md](docs/headless-run.md).
 
-- **Templates**: `claude`, `codex`, `opencode`, `amp` ship a verified headless
-  command; anything else (including `base`, the default) is refused by name until
-  `[run.agents]` maps it, see `config.example.toml`.
+- **Templates**: every shipped agent template (`claude`, `codex`, `opencode`,
+  `amp`, `grok`, `droid`, `muse`, `prime`) has a verified headless command; `base`
+  (the default) and your own templates are refused by name until `[run.agents]`
+  maps them, see `config.example.toml`.
 - **`--push`** commits everything the pull left different on the **local** branch
   and pushes it to `--remote` (`origin`). The box holds a baseline and no history
   (ADR 0012), so the branch with the real history is the one on this machine. A

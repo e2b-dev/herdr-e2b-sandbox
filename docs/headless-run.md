@@ -53,20 +53,30 @@ The template decides which agent works the task, and `run` needs that agent's
 | `codex` | `codex exec --dangerously-bypass-approvals-and-sandbox - < $HOME/.herdr-e2b-task.md` |
 | `opencode` | `opencode run --auto "$(cat $HOME/.herdr-e2b-task.md)"` |
 | `amp` | `amp -x --dangerously-allow-all < $HOME/.herdr-e2b-task.md` |
+| `grok` | `grok --always-approve --prompt-file $HOME/.herdr-e2b-task.md` |
+| `droid` | `droid exec --skip-permissions-unsafe -f $HOME/.herdr-e2b-task.md` |
+| `muse` | `muse exec --yolo --user-input-auto-resolve --prompt-file $HOME/.herdr-e2b-task.md` |
+| `prime` | `prime-agent -p --no-session "$(cat $HOME/.herdr-e2b-task.md)"` |
 
-Every other template, `base` (the default) included, is refused by name before
-anything boots. An invented flag fails to launch and reads exactly like an agent
+`base` (the default) and your own templates are refused by name before anything
+boots. An invented flag fails to launch and reads exactly like an agent
 that did nothing. Teach one in `[run.agents]`:
 
 ```toml
 [run.agents]
-muse = 'muse --yolo "$(cat $HOME/.herdr-e2b-task.md)"'
+droid = 'droid exec --auto high -f $HOME/.herdr-e2b-task.md'   # a leash instead of the bypass
 "my-project/my-template" = 'claude --dangerously-skip-permissions -p "$(cat $HOME/.herdr-e2b-task.md)"'
 claude = ""    # switch a shipped one off
 ```
 
 The command must read the task file and must exit when the agent is done. It runs
 in the box's project dir. `e2b-box run … --dry-run` prints exactly what would run.
+
+Two account-side things seen live that look like launch failures and are not:
+opencode with no configured model picks one by internal priority, which can land on
+a model with no tool use (`opencode run --auto -m <provider/model> …` in
+`[run.agents]` pins it); and amp reports `Out of Credits` on stderr with exit 0, so
+`run` says `done` while `pull` finds nothing changed.
 
 The skip-approvals flags are the point of a box: disposable, isolated from your
 machine, nobody attached to approve an edit. They are not a cage. The box has

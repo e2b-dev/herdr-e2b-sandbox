@@ -24,12 +24,13 @@
 // the credential `[templates.<name>.env]` gave it; the protection is a short-lived
 // box and a scoped key, not a constrained agent.
 //
-// Flags verified against each vendor's own docs (claude: code.claude.com/docs/en/headless;
-// codex: codex-rs/exec/src/cli.rs; opencode: opencode.ai/docs/cli; amp:
-// ampcode.com/docs/cli/execute-mode). A template nobody has verified a headless mode
-// for (grok, droid, prime, muse) has NO default: `run` refuses it by name and says
-// what to configure, because an invented flag fails to launch and looks exactly like
-// an agent that did nothing.
+// Flags verified against each vendor's own docs or `--help` (claude:
+// code.claude.com/docs/en/headless; codex: codex-rs/exec/src/cli.rs; opencode:
+// opencode.ai/docs/cli; amp: ampcode.com/docs/cli/execute-mode; grok 1.0.13, droid
+// 0.199.0, muse 1.0.3 and prime-agent 0.9.3 off their own `--help`, 2026-09-08). A
+// template nobody has verified a headless mode for (`base`, your own) has NO
+// default: `run` refuses it by name and says what to configure, because an invented
+// flag fails to launch and looks exactly like an agent that did nothing.
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 
@@ -54,6 +55,23 @@ export const DEFAULT_RUN_AGENTS = {
   // `-x` (--execute) sends one message, waits for the turn to end, prints the final
   // message and exits; a piped stdin is the message.
   amp: `amp -x --dangerously-allow-all < ${TASK_FILE}`,
+  // `--prompt-file` is a single-turn prompt: prints the response and exits (the
+  // file twin of `-p/--single`). `--always-approve` is the fleet default's flag.
+  grok: `grok --always-approve --prompt-file ${TASK_FILE}`,
+  // `droid exec` is the non-interactive subcommand, `-f` reads the prompt from a
+  // file. Its default is READ-ONLY; `--skip-permissions-unsafe` allows everything
+  // and is documented for "isolated environments (Docker, throwaway VMs)", which is
+  // what a box is. It cannot be combined with `--auto`.
+  droid: `droid exec --skip-permissions-unsafe -f ${TASK_FILE}`,
+  // `muse exec` is the headless subcommand, `--prompt-file` its file input.
+  // `--yolo` is the fleet default's flag (approvals off, OS sandbox off, workspace
+  // trusted); `--user-input-auto-resolve` cancels a question the agent would
+  // otherwise wait on forever with nobody there to answer.
+  muse: `muse exec --yolo --user-input-auto-resolve --prompt-file ${TASK_FILE}`,
+  // `-p/--print` prints a response and exits; the message is positional and there is
+  // no approval system to switch off. `--no-session` keeps a throwaway box from
+  // writing a session it will never resume.
+  prime: `prime-agent -p --no-session "$(cat ${TASK_FILE})"`,
 }
 
 /**
