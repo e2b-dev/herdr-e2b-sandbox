@@ -6,6 +6,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The shipped default template is `muse` (Meta's Muse Code), not `base`: a new box
+  with nothing configured boots an agent ready to work instead of an empty image.
+  `base` stays in the picker, stays the create-time fallback for a template that is
+  not on your cluster, and is still excluded from fleet rosters. A fleet roster now
+  drops templates that are agentless (`base`, or `[fleet.agents] <name> = ""`)
+  rather than whatever `[sandbox] template` names, so the default is a member.
+  `[sandbox] template = "base"` restores the old behaviour.
+
 ### Added
 
 - `[templates.<name>] model = "…"` and `reasoning = "…"`: pin which model a

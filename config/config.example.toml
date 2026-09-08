@@ -61,14 +61,18 @@
 # the plugin owns. An old `domain =` is an error, not an ignored line — silently
 # dropping it would move an EU user's boxes to US without a word.
 
-# E2B template. "base" (default) is minimal and always available — fine to try
-# the flow, but tight on disk/tools for real work.
-# RECOMMENDED: build a bigger CUSTOM template (more disk + CPU, your toolchain
-# baked in) and set it here — see the README and install.sh. Public agent
-# templates (claude, codex, opencode, … https://e2b.dev/docs/agents) also
-# work but can run out of space. (Claude Code's template is named `claude`;
+# E2B template a NEW box boots from when nothing else decided (no --template, no
+# branch rule, no picker answer). "muse" (default) is Meta's Muse Code agent, ready
+# to work once [templates.muse.env] holds a META_API_KEY. "base" is E2B's minimal
+# image, always available and always in the picker: fine to try the flow or for a
+# plain shell, tight on disk/tools for real work, and the image a create falls back
+# to when the chosen template is not built on your cluster.
+# RECOMMENDED for real work: build a bigger CUSTOM template (more disk + CPU, your
+# toolchain baked in) and set it here, see the README and install.sh. The other
+# public agent templates (claude, codex, opencode, … https://e2b.dev/docs/agents)
+# also work but can run out of space. (Claude Code's template is named `claude`;
 # Devin has no prebuilt template — install it into a base sandbox yourself.)
-template     = "base"
+template     = "muse"
 
 # The menu `e2b-box open` offers when it has to BUILD a sandbox and nothing else
 # decided which template (no --template, no matching rule below). The plugin

@@ -245,7 +245,7 @@ either, you get the chooser:
 ```
   E2B template for my-worktree
 
-   ▸ [1] base                     default
+   ▸ [1] muse                     default
      [2] claude
      [3] codex
      [4] opencode
@@ -253,14 +253,14 @@ either, you get the chooser:
      [6] grok
      [7] droid
      [8] prime
-     [9] muse
+     [9] base
 
   ↑/↓ · j/k move   enter confirm   number jumps   t type a name   q default
 ```
 
-`t` takes any name, so the menu is a shortcut and not a whitelist. `base` is
-E2B's minimal image — fine for trying the flow, tight on disk for real work. For
-that, [build a custom template](https://e2b.dev/docs/sandbox-template) with your
+`t` takes any name, so the menu is a shortcut and not a whitelist. `muse` (Meta's
+Muse Code) is the shipped default; `base` is E2B's minimal image, fine for trying
+the flow or a plain shell, tight on disk for real work. For that, [build a custom template](https://e2b.dev/docs/sandbox-template) with your
 toolchain and roomier resources, and point `[sandbox].template` at it.
 
 > **Regions are named, not spelled as hosts.** `[sandbox] region = "us" | "eu"`
