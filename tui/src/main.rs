@@ -33,7 +33,7 @@ use ratatui::{
     Frame,
 };
 
-use actions::{action_command, goto_worktree, key_only, Verb};
+use actions::{action_command, goto_worktree, key_only, popup_open_command, Verb};
 use dashboard_settings::{dashboard_settings, DashboardSettings, DisplayCache};
 use state::{
     branch_cell, branch_column_width, current_domain, load_boxes, plugin_version, probe_domain,
@@ -47,6 +47,8 @@ use theme::{
 
 struct App {
     popup: bool,
+    origin_pane: Option<String>, // popup only: the pane it floats over (E2B_DASH_ORIGIN_PANE)
+    popup_open: String, // popup only: where Enter opens a box (below · right · above · left · tab)
     dir: PathBuf,
     config_dir: PathBuf,
     config_path_selection: Option<usize>,
@@ -97,6 +99,9 @@ impl App {
                 self.config_opener = Some(settings.opener);
             }
             self.domain = settings.domain;
+            if !settings.popup_open.is_empty() {
+                self.popup_open = settings.popup_open;
+            }
         }
     }
     fn reload(&mut self) {
@@ -589,6 +594,10 @@ fn main() -> std::io::Result<()> {
     // sandbox shell or another dashboard launched from it.
     let popup = std::env::var("E2B_DASH_POPUP").is_ok_and(|value| value == "1");
     std::env::remove_var("E2B_DASH_POPUP");
+    let origin_pane = std::env::var("E2B_DASH_ORIGIN_PANE")
+        .ok()
+        .filter(|value| !value.is_empty());
+    std::env::remove_var("E2B_DASH_ORIGIN_PANE");
     let dir = std::env::args()
         .nth(1)
         .map(PathBuf::from)
@@ -604,6 +613,8 @@ fn main() -> std::io::Result<()> {
         });
     let mut app = App {
         popup,
+        origin_pane,
+        popup_open: "below".into(),
         dir,
         config_dir,
         config_path_selection: None,
@@ -720,6 +731,22 @@ fn main() -> std::io::Result<()> {
             // stops e2b-box cd-ing to the dashboard pane's context; KEY pins the
             // box; sh() single-quotes every value so odd paths can't break out.
             if verb == "open" {
+                // From the popup, never inline: this PTY is a floating overlay
+                // herdr discards on exit, so a shell here would be trapped in it.
+                // Open the box in a regular pane split below the pane the popup
+                // floats over, and quit so that pane is what's on screen. Without
+                // a recorded origin (launcher couldn't tell) fall back to inline.
+                if let (true, Some(origin)) = (app.popup, app.origin_pane.as_deref()) {
+                    match popup_open_command(origin, &app.popup_open, &key, &wt).status() {
+                        Ok(status) if status.success() => break Ok(()),
+                        Ok(status) => {
+                            app.msg =
+                                format!("open failed · {label} · e2b-box-open exited {status}")
+                        }
+                        Err(error) => app.msg = format!("open failed · {label} · {error}"),
+                    }
+                    continue;
+                }
                 // Hand the pane to the sandbox shell — mouse capture must go
                 // with it, or the shell receives mouse escape garbage.
                 let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);

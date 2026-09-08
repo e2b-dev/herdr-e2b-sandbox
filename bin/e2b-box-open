@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Open the template picker and sandbox shell in a focused pane below the invoking pane.
+# Open the template picker and sandbox shell in a focused pane below the invoking
+# pane. No flags is the `open` action. The popup dashboard says where and which:
+# `--target-pane` (the pane it floats over, not the popup), `--placement`
+# (below, right, above, left or tab; `[dashboard].popup_open`), `--cwd` (the box's worktree)
+# and `--box` (its key, exported as KEY so `e2b-box open` never re-derives one
+# from the cwd).
 set -uo pipefail
 SOURCE="${BASH_SOURCE[0]}"
 while [ -h "$SOURCE" ]; do
@@ -10,4 +15,20 @@ done
 DIR="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
 source "$DIR/lib/paths.sh"
 source "$DIR/lib/pane.sh"
-pane_open_below box
+
+target= ; where=below ; extra=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --target-pane|--placement|--cwd|--box)
+      [ $# -ge 2 ] || { echo "e2b-box-open: $1 needs a value" >&2; exit 2; } ;;
+    *) echo "e2b-box-open: unknown argument '$1'" >&2; exit 2 ;;
+  esac
+  case "$1" in
+    --target-pane) target="$2" ;;
+    --placement) where="$2" ;;
+    --cwd) extra+=(--cwd "$2") ;;
+    --box) extra+=(--env "KEY=$2") ;;
+  esac
+  shift 2
+done
+pane_open_from box "$where" "$target" ${extra[@]+"${extra[@]}"}

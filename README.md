@@ -402,6 +402,13 @@ overlay, at 90% width and 85% height, with the current panes visible behind it.
 It uses the same dashboard binary and controls. `q` or `Esc` from the main board
 closes the popup and returns to your panes.
 
+`Enter` (or `o`) in the popup opens the selected box in a regular pane and closes
+the popup, because the overlay's terminal is discarded when it closes. By default
+that pane is a split below the pane the popup floats over; `[dashboard].popup_open`
+moves it: `"below"` (default), `"right"`, `"above"`, `"left"` (a split on that side
+of the pane) or `"tab"` (a new tab). Herdr itself splits right or down only, so
+`above` and `left` split and then swap the new pane with the one you were in.
+
 Both views are independently keybindable in Herdr settings: **e2b-dash (pane
 view)** uses the `dashboard` action, and **e2b-popup (overlay view)** uses `popup`.
 You can keep both shortcuts in your Herdr `config.toml`, for example:

@@ -5,5 +5,6 @@ const cfg = loadConfig()
 process.stdout.write(JSON.stringify({
   theme: cfg.dashboardTheme,
   opener: cfg.dashboardConfigOpener,
+  popup_open: cfg.dashboardPopupOpen,
   domain: cfg.domain || "e2b.dev",
 }))

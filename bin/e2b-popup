@@ -32,7 +32,9 @@ usage
   e2b-popup --render         draw inside an existing popup terminal
 
 The same UI and controls as e2b-dash, at 90% width and 85% height.
-Press q or Esc from the main board to close it and return to your panes.
+Enter opens the selected box in a regular pane and closes the popup: a split
+below the pane the popup floats over by default; [dashboard].popup_open moves it
+(below, right, above, left or tab). Press q or Esc to close it without opening.
 Requires a running Herdr session with this plugin enabled.
 
 Keybinding in Herdr config.toml:
@@ -47,5 +49,20 @@ USAGE
 esac
 
 HERDR=$(pane_herdr) || { echo "e2b-popup: can't find the herdr binary" >&2; exit 1; }
+NODE=$(pane_node) || { echo "e2b-popup: can't find node — set HERDR_E2B_NODE=/path/to/node" >&2; exit 1; }
+
+# Remember the pane the popup floats over. Inside the popup, plugin context and
+# focus both name the popup's own pane, so this is the one moment "the pane you
+# were at" can be read. The TUI hands it to e2b-box-open when Enter opens a box:
+# the shell then lands in a split below that pane instead of inside the overlay,
+# whose terminal herdr discards the moment the popup closes.
+origin=$(printf '%s' "${HERDR_PLUGIN_CONTEXT_JSON:-}" | "$NODE" "$PLUGIN_DIR/src/pane-parse.js" origin)
+if [ "${origin:--}" = "-" ]; then
+  read -r origin _ _ <<EOF
+$(pane_query "$HERDR" "$NODE" "")
+EOF
+fi
+env_args=(--env E2B_DASH_POPUP=1)
+[ "${origin:--}" = "-" ] || env_args+=(--env "E2B_DASH_ORIGIN_PANE=$origin")
 "$HERDR" plugin pane open --plugin e2b-dev.herdr-e2b --entrypoint popup \
-  --placement popup --width 90% --height 85% --env E2B_DASH_POPUP=1 >/dev/null
+  --placement popup --width 90% --height 85% "${env_args[@]}" >/dev/null

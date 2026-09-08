@@ -15,6 +15,7 @@ function fixture(t) {
   const calls = path.join(dir, "calls")
   writeFileSync(herdr, `#!/bin/sh
 printf "%s\\n" "$@" > "$POPUP_CALLS"
+printf "%s\\n" "$*" >> "$POPUP_CALLS.all"
 case "$1 $2" in
   "pane list") printf '%s\\n' '{"result":{"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","focused":true}]}}' ;;
   "pane process-info") printf '%s\\n' '{"result":{"process_info":{"foreground_processes":[{"name":"zsh"}]}}}' ;;
@@ -49,22 +50,43 @@ test("settings actions launch pane and popup views without needing their own ter
     } else if (id === "open" || id === "fleet") {
       assert.deepEqual(called, ["plugin", "pane", "open", "--plugin", manifest.id, "--entrypoint", id === "open" ? "box" : "fleet", "--placement", "split", "--target-pane", "w1:p1", "--direction", "down", "--focus"])
     } else {
-      assert.deepEqual(called, ["plugin", "pane", "open", "--plugin", manifest.id, "--entrypoint", "popup", "--placement", "popup", "--width", "90%", "--height", "85%", "--env", "E2B_DASH_POPUP=1"])
+      assert.deepEqual(called, ["plugin", "pane", "open", "--plugin", manifest.id, "--entrypoint", "popup", "--placement", "popup", "--width", "90%", "--height", "85%", "--env", "E2B_DASH_POPUP=1", "--env", "E2B_DASH_ORIGIN_PANE=w1:p1"])
     }
   }
 })
 
 test("popup opens the existing dashboard in a floating terminal, including through e2b-box", (t) => {
   const f = fixture(t)
-  for (const [binary, args] of [["e2b-popup", []], ["e2b-box", ["popup"]]]) {
-    const result = f.run(binary, args)
+  // The origin pane is the invoking pane (plugin context, then HERDR_PANE_ID,
+  // then focus) — the same resolution the box/fleet splits use.
+  for (const [binary, args, env, origin] of [
+    [["e2b-popup"], [], {}, "w1:p1"],
+    [["e2b-box"], ["popup"], {}, "w1:p1"],
+    [["e2b-popup"], [], { HERDR_PANE_ID: "w3:p4" }, "w3:p4"],
+    [["e2b-popup"], [], { HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({ focused_pane_id: "w2:p3" }), HERDR_PANE_ID: "w3:p4" }, "w2:p3"],
+  ]) {
+    const result = f.run(binary[0], args, env)
     assert.equal(result.status, 0, result.stderr)
     assert.deepEqual(readFileSync(f.calls, "utf8").trim().split("\n"), [
       "plugin", "pane", "open", "--plugin", "e2b-dev.herdr-e2b", "--entrypoint", "popup",
       "--placement", "popup", "--width", "90%", "--height", "85%",
-      "--env", "E2B_DASH_POPUP=1",
+      "--env", "E2B_DASH_POPUP=1", "--env", `E2B_DASH_ORIGIN_PANE=${origin}`,
     ])
   }
+})
+
+test("popup still opens when no origin pane can be found", (t) => {
+  const f = fixture(t)
+  writeFileSync(f.herdr, `#!/bin/sh
+printf "%s\\n" "$@" > "$POPUP_CALLS"
+case "$1 $2" in
+  "pane list") printf '%s\\n' '{"result":{"panes":[]}}' ;;
+esac
+`, { mode: 0o755 })
+  const result = f.run("e2b-popup")
+  assert.equal(result.status, 0, result.stderr)
+  const called = readFileSync(f.calls, "utf8").trim().split("\n")
+  assert.deepEqual(called.slice(-2), ["--env", "E2B_DASH_POPUP=1"])
 })
 
 test("popup help and invalid arguments never contact Herdr", (t) => {
@@ -112,5 +134,51 @@ test("box and fleet splits follow the invoking pane and focus below it", (t) => 
       ])
     }
     assert.equal(f.run(binary, [], { POPUP_EXIT: "1", HERDR_PANE_ID: "w3:p4" }).status, 1)
+  }
+})
+
+test("the popup's Enter opens the box where [dashboard].popup_open says, pinned to that box", (t) => {
+  const f = fixture(t)
+  // Explicit target beats context and focus: inside a popup both name the popup.
+  const env = { HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({ focused_pane_id: "w9:p9" }), HERDR_PANE_ID: "w9:p9" }
+  const tail = ["--focus", "--cwd", "/tmp/work tree", "--env", "KEY=tree-abc12345"]
+  for (const [placement, expected] of [
+    [[], ["--placement", "split", "--target-pane", "w5:p6", "--direction", "down"]],
+    [["--placement", "below"], ["--placement", "split", "--target-pane", "w5:p6", "--direction", "down"]],
+    [["--placement", "right"], ["--placement", "split", "--target-pane", "w5:p6", "--direction", "right"]],
+    [["--placement", "tab"], ["--placement", "tab", "--target-pane", "w5:p6"]],
+  ]) {
+    const result = f.run("e2b-box-open", ["--target-pane", "w5:p6", ...placement, "--cwd", "/tmp/work tree", "--box", "tree-abc12345"], env)
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(readFileSync(f.calls, "utf8").trim().split("\n"), [
+      "plugin", "pane", "open", "--plugin", "e2b-dev.herdr-e2b", "--entrypoint", "box", ...expected, ...tail,
+    ])
+  }
+  // above/left: herdr only splits down/right, so the new pane trades places
+  // with the origin afterwards. A failed swap is a warning, not a failed open.
+  for (const [placement, direction] of [["above", "down"], ["left", "right"]]) {
+    rmSync(`${f.calls}.all`, { force: true })
+    const result = f.run("e2b-box-open", ["--target-pane", "w5:p6", "--placement", placement, "--box", "tree-abc12345"], env)
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(readFileSync(`${f.calls}.all`, "utf8").trim().split("\n"), [
+      `plugin pane open --plugin e2b-dev.herdr-e2b --entrypoint box --placement split --target-pane w5:p6 --direction ${direction} --focus --env KEY=tree-abc12345`,
+      `pane swap --pane w5:p6 --direction ${direction}`,
+    ])
+  }
+  assert.equal(f.run("e2b-box-open", ["--placement", "up"]).status, 2)
+  assert.equal(f.run("e2b-box-open", ["--box"]).status, 2)
+  assert.equal(f.run("e2b-box-open", ["--nope"]).status, 2)
+})
+
+test("[dashboard].popup_open reaches the dashboard's settings, anything else means below", (t) => {
+  const f = fixture(t)
+  for (const [value, expected] of [['"tab"', "tab"], ['"right"', "right"], ['"above"', "above"], ['"left"', "left"], ['"up"', "below"], [null, "below"]]) {
+    writeFileSync(path.join(f.dir, "config.toml"), value === null ? "" : `[dashboard]\npopup_open = ${value}\n`)
+    const result = spawnSync(process.execPath, [path.join(root, "src/resolve-dashboard.js")], {
+      encoding: "utf8",
+      env: { ...process.env, HERDR_PLUGIN_CONFIG_DIR: f.dir, HERDR_PLUGIN_STATE_DIR: f.dir },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(JSON.parse(result.stdout).popup_open, expected, `popup_open = ${value}`)
   }
 })

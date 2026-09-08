@@ -837,6 +837,10 @@ export function loadConfig() {
     // choice, else "terminal"). See [dashboard] in config.example.toml.
     dashboardTheme: dashboard.theme ?? "",
     dashboardConfigOpener: typeof dashboard.config_opener === "string" ? dashboard.config_opener : "",
+    // Where Enter in the popup dashboard opens a box: a split on that side of the
+    // pane the popup floats over (below by default), or a new tab. Anything else
+    // is below — a typo here must not strand the box in the overlay.
+    dashboardPopupOpen: ["below", "right", "above", "left", "tab"].includes(dashboard.popup_open) ? dashboard.popup_open : "below",
     template: sandbox.template ?? DEFAULTS.template,
     sandboxTimeoutMs: posInt(sandbox.timeout_ms, DEFAULTS.sandboxTimeoutMs),
     autoPause: sandbox.auto_pause ?? DEFAULTS.autoPause,
