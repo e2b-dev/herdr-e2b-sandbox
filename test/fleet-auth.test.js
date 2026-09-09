@@ -37,6 +37,14 @@ test("a value discovered by `e2b-box auth` authenticates the member", () => {
   assert.deepEqual(unauthenticatedMembers([member("claude")], cfg, {}), [])
 })
 
+test("opencode's auth.json pointer authenticates the member (its boxVar has no host variable)", () => {
+  // opencode forwards a whole auth.json under OPENCODE_AUTH_CONTENT and has no
+  // `hostVar`, so the row's own `boxVar` must count: a member that came up signed
+  // in was being named as unauthenticated (fleet test, 2026-09-08).
+  const cfg = { envDiscovered: { opencode: { OPENCODE_AUTH_CONTENT: '{"openrouter":{"type":"api","key":"k"}}' } } }
+  assert.deepEqual(unauthenticatedMembers([{ template: "opencode", label: "m" }], cfg, {}), [])
+})
+
 test("a forwarded NAME authenticates the member only when this shell holds it", () => {
   const cfg = { envForward: { claude: { ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY" } } }
   assert.deepEqual(unauthenticatedMembers([member("claude")], cfg, { ANTHROPIC_API_KEY: "sk-ant-x" }), [])

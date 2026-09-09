@@ -82,7 +82,13 @@ export function unauthenticatedMembers(members = [], cfg = {}, env = {}) {
     // Blank is missing. An empty credential is the failure that shows up furthest
     // from its cause — the agent boots, reads it and dies authenticating, which
     // reads as a broken key rather than an absent one.
+    // …and the row's own `boxVar`, which is not always among them: opencode has no
+    // host variable to forward (`hostVar: null`, its providers come from a file), so
+    // `credentialVars` is empty there and a member whose OPENCODE_AUTH_CONTENT was
+    // resolved from auth.json read as unauthenticated (observed live, fleet test,
+    // 2026-09-08: the warning named it, the box came up signed in).
     const boxVars = credentialVars(h).map((v) => v.boxVar)
+    if (h.boxVar) boxVars.push(h.boxVar)
     if (h.sessionFile) boxVars.push(h.sessionFile.boxVar)
     if (boxVars.some((v) => typeof resolved?.[v] === "string" && resolved[v].trim())) continue
     // The variable the remedy actually produces — the same one `e2b-box auth`'s own

@@ -1,5 +1,9 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { DEFAULT_SEEDS, seedCommand } from "../src/fleet-seed.js"
 
 // --- which command a template is seeded with ---------------------------------
@@ -56,4 +60,43 @@ test("a shipped command reads its credential from a variable, never a value", ()
   for (const [template, cmd] of Object.entries(DEFAULT_SEEDS)) {
     assert.match(cmd, /leaving it alone/, `${template}: no no-clobber bail-out`)
   }
+})
+
+// --- the droid seed, actually executed -----------------------------------------
+// Against a fake HOME and a fake project with a .git, the way provision.js runs it
+// from the project dir in a box. Exercised rather than read because the trust key
+// droid checks is computed in the box (realpath, nearest .git), and the autonomy
+// default is what keeps an unattended member from stopping at its first edit.
+
+function runDroidSeed(home) {
+  const proj = path.join(home, "proj")
+  mkdirSync(path.join(proj, ".git"), { recursive: true })
+  const out = execFileSync("bash", ["-c", DEFAULT_SEEDS.droid], {
+    cwd: proj,
+    env: { PATH: process.env.PATH, HOME: home },
+    encoding: "utf8",
+  })
+  return { out, settings: JSON.parse(readFileSync(path.join(home, ".factory/settings.json"), "utf8")) }
+}
+
+test("droid: trusts the git root and defaults new sessions to high autonomy, once", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "herdr-seed-"))
+  const { out, settings } = runDroidSeed(home)
+  assert.equal(Object.keys(settings.trustedFolders).length, 1)
+  assert.match(Object.keys(settings.trustedFolders)[0], /proj$/)
+  assert.equal(settings.sessionDefaultSettings.autonomyLevel, "high")
+  assert.match(out, /autonomy set to high/)
+  const again = runDroidSeed(home)
+  assert.match(again.out, /already trusts/)
+  assert.deepEqual(again.settings, settings)
+})
+
+test("droid: a chosen autonomy level and existing settings are left alone", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "herdr-seed-"))
+  mkdirSync(path.join(home, ".factory"))
+  writeFileSync(path.join(home, ".factory/settings.json"), JSON.stringify({ model: "kimi-k3", sessionDefaultSettings: { autonomyLevel: "off" } }))
+  const { settings } = runDroidSeed(home)
+  assert.equal(settings.model, "kimi-k3")
+  assert.equal(settings.sessionDefaultSettings.autonomyLevel, "off")
+  assert.equal(Object.keys(settings.trustedFolders).length, 1)
 })

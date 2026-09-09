@@ -78,6 +78,10 @@ export function authMenuActions(agent, connections) {
     id: "reconnect", label: `Reconnect ${c.id}`, connection: c.id,
   }))
   if (["claude", "codex"].includes(agent)) actions.push({ id: "connect", label: agent === "claude" ? "Connect new claude account" : "Connect local codex session" })
+  // The plugin's own sign-in (ADR 0015): the only managed method for muse and amp,
+  // the second one for codex.
+  if (agent === "codex") actions.push({ id: "connect-oauth", label: "Sign in to ChatGPT for a codex session of this plugin's own" })
+  if (["muse", "amp"].includes(agent)) actions.push({ id: "connect-oauth", label: `Sign in to ${agent} and store its credential` })
   actions.push({ id: "explain", label: "Inspect authentication" },
     { id: "config", label: "Open config.toml (templates / API keys)" },
     { id: "discovery", label: "Open auth.toml (generated sources)" },
@@ -135,8 +139,8 @@ export async function runAuthMenu({ initial, refresh, render, save }) {
       } else {
         let args
         if (action.id === "reconnect") args = ["reconnect", action.connection]
-        else if (action.id === "connect") {
-          args = ["connect", agent]
+        else if (action.id === "connect" || action.id === "connect-oauth") {
+          args = ["connect", agent, ...(action.id === "connect-oauth" && agent === "codex" ? ["--oauth"] : [])]
           if (state.cfg.connections.some((c) => c.harness === agent)) {
             const name = await question("\n  New connection name (blank cancels): ")
             if (!name) continue

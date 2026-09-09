@@ -41,12 +41,16 @@ export function suggestedConnectionId(harness, detected) {
   return detected?.classification === "personal" ? "claude-personal" : "claude-local"
 }
 
+/** Harnesses `method: "oauth"` (the plugin's own sign-in, src/oauth.js, ADR 0015) is defined for. */
+export const OAUTH_HARNESSES = ["muse", "amp", "codex"]
+
 function validate(record) {
   connectionId(record?.id)
   if (record.version !== 1 || record.owner !== "personal" ||
       !/^[0-9a-f-]{36}$/.test(record.revision || "") ||
       !((record.harness === "claude" && record.method === "setup-token") ||
-        (record.harness === "codex" && record.method === "borrowed-session" && typeof record.path === "string"))) {
+        (record.harness === "codex" && record.method === "borrowed-session" && typeof record.path === "string") ||
+        (record.method === "oauth" && OAUTH_HARNESSES.includes(record.harness)))) {
     throw new Error(`Invalid connection '${record.id}'.`)
   }
   return record
@@ -95,6 +99,14 @@ export function saveConnection(record, token, { directory = CONNECTIONS_DIR, rep
       if (!validSetupToken(token)) throw new Error("Expected a Claude setup-token value; nothing was saved.")
       writeFileSync(secretPath(next, directory), token, { mode: 0o600, flag: "wx" })
     }
+    // An OAuth connection's secret is the object src/oauth.js returned: a key for
+    // muse (minted by Meta) and amp (pasted from its Security page), codex's whole
+    // auth.json (real refresh token included - the plugin is its only custodian,
+    // boxes never see it; see connectionMaterial).
+    if (next.method === "oauth") {
+      if (!token || typeof token !== "object") throw new Error("Expected the sign-in's credential; nothing was saved.")
+      writeFileSync(secretPath(next, directory), `${JSON.stringify(token)}\n`, { mode: 0o600, flag: "wx" })
+    }
     writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600, flag: "wx" })
     renameSync(temporary, destination)
     committed = true
@@ -139,7 +151,50 @@ export function selectConnection(cfg = {}, template) {
   return candidates[0] || null
 }
 
+/** The stored secret of an OAuth connection, parsed. Throws the reconnect sentence when it is gone or unreadable. */
+export function readOauthSecret(record, directory = CONNECTIONS_DIR) {
+  try {
+    return JSON.parse(readFileSync(secretPath(record, directory), "utf8"))
+  } catch {
+    throw new Error(`Credential for '${record.id}' is unavailable. Run e2b-box auth reconnect ${record.id}.`)
+  }
+}
+
+/**
+ * Rewrite an OAuth connection's secret in place - the refresh path. Same revision,
+ * atomic rename: a provisioner reading the old bytes sees either the old file or
+ * the new one, never a torn write. Only codex ever needs this (its bearer expires
+ * and its refresh token is single-use, so the plugin rotates it, nobody else).
+ */
+export function rewriteOauthSecret(record, secret, directory = CONNECTIONS_DIR) {
+  const dest = secretPath(record, directory)
+  const tmp = `${dest}.tmp`
+  writeFileSync(tmp, `${JSON.stringify(secret)}\n`, { mode: 0o600, flag: "wx" })
+  try {
+    renameSync(tmp, dest)
+  } finally {
+    rmSync(tmp, { force: true })
+  }
+}
+
 export function connectionMaterial(record, { directory = CONNECTIONS_DIR, readFile = readHarnessFile, now = Date.now() } = {}) {
+  if (record.method === "oauth") {
+    const secret = readOauthSecret(record, directory)
+    if (record.harness === "muse" || record.harness === "amp") {
+      const name = record.harness === "muse" ? "META_API_KEY" : "AMP_API_KEY"
+      if (typeof secret?.[name] !== "string" || !secret[name].trim()) throw new Error(`Credential for '${record.id}' is invalid. Reconnect it.`)
+      return { env: { [name]: secret[name] }, expiresAt: null }
+    }
+    // codex: the plugin holds the real refresh token; the box gets the placeholder
+    // copy (ADR 0010) and lives until the bearer expires. An expired bearer is a
+    // reconnect, not a silent refresh here: provisioning stays synchronous, and
+    // `auth check` / `auth reconnect` are where the plugin rotates the chain.
+    let session = null
+    try { session = HARNESSES.codex.sessionFile.read(JSON.stringify(secret)) } catch { /* not a session */ }
+    if (!session) throw new Error(`Credential for '${record.id}' is invalid. Reconnect it.`)
+    if (Date.parse(session.expires) <= now) throw new Error(`Connection '${record.id}' has expired. Run e2b-box auth reconnect ${record.id} (a browser is only needed if the refresh fails).`)
+    return { env: { CODEX_AUTH_JSON: session.value }, expiresAt: session.expires }
+  }
   if (record.method === "setup-token") {
     if (record.expiresAt && (!Number.isFinite(Date.parse(record.expiresAt)) || Date.parse(record.expiresAt) <= now)) {
       throw new Error(`Connection '${record.id}' has expired. Run e2b-box auth reconnect ${record.id}.`)
@@ -162,6 +217,8 @@ export function connectionMaterial(record, { directory = CONNECTIONS_DIR, readFi
 export const CONFLICTING_AUTH = {
   claude: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_REFRESH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "ANTHROPIC_PROFILE", "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID"],
   codex: ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_AUTH_JSON", "OPENAI_BASE_URL"],
+  muse: ["META_API_KEY"],
+  amp: ["AMP_API_KEY"],
 }
 
 export function applyConnection(record, env, options) {
