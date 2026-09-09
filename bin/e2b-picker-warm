@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Herdr runs startup and event hooks asynchronously. Resolve only picker inputs;
+# opening panes or provisioning here would turn initialization into a user action.
+set -uo pipefail
+DIR="$(CDPATH= cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$DIR/lib/paths.sh"
+source "$DIR/lib/pane.sh"
+command -v jq >/dev/null 2>&1 || exit 0
+
+paths=$(
+  printf '%s' "${HERDR_PLUGIN_CONTEXT_JSON:-}" | jq -r '
+    [.focused_pane_cwd, .workspace_cwd] | .[] | select(type == "string" and length > 0)' 2>/dev/null
+  if [ "${1:-}" = --all ] && HERDR=$(pane_herdr); then
+    "$HERDR" pane list 2>/dev/null | jq -r '
+      (.result.panes // .panes // [])[] | [.foreground_cwd, .cwd][] | select(type == "string" and length > 0)' 2>/dev/null
+  fi
+)
+[ -n "$paths" ] || paths="$PWD"
+
+warm_cwd() (
+  cd "$1" 2>/dev/null || exit 0
+  mkdir -p "$PICKERS_DIR" || exit 0
+  work=$(mktemp -d "$PICKERS_DIR/warm.XXXXXX") || exit 0
+  trap 'rm -rf "$work"' EXIT
+  # A pane's pins and box key belong to that pane, not every restored workspace.
+  unset KEY E2B_TEMPLATE E2B_MODEL E2B_REASONING
+  export HERDR_PLUGIN_CONTEXT_JSON= E2B_PICKER_INPUT="$work/input"
+  "$DIR/e2b-box" pick >/dev/null 2>&1
+  "$DIR/e2b-box" fleet >/dev/null 2>&1
+  exit 0
+)
+seen=""
+while IFS= read -r cwd; do
+  [ -d "$cwd" ] || continue
+  case $'\n'"$seen"$'\n' in *$'\n'"$cwd"$'\n'*) continue ;; esac
+  seen="$seen"$'\n'"$cwd"
+  warm_cwd "$cwd"
+done <<< "$paths"
+exit 0

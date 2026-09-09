@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
-# Open the template picker and sandbox shell in a focused pane below the invoking
-# pane. No flags is the `open` action. The popup dashboard says where and which:
-# `--target-pane` (the pane it floats over, not the popup), `--placement`
-# (below, right, above, left or tab; `[dashboard].popup_open`), `--cwd` (the box's worktree)
-# and `--box` (its key, exported as KEY so `e2b-box open` never re-derives one
-# from the cwd).
+# The `open` action, and the hand-off every picker makes when it has an answer.
+#
+# No flags is the action (a keybinding, herdr's action menu): the POPUP opens at
+# once (bin/e2b-popup in `pick-box` mode) and asks template, model and effort;
+# then the popup closes and the box opens in a pane below the pane the popup
+# floated over. When there is nothing to ask (a live box to reattach, E2B_TEMPLATE,
+# a branch rule, a single candidate) the popup hands off without drawing a picker,
+# so it is on screen for a blink. Deciding that BEFORE opening the popup would cost
+# a whole e2b-box start (a cold Node import runs to a second) in front of a blank
+# screen, which is worse than the blink. The overlay is for configuring, never for
+# running: herdr discards its terminal the moment it closes.
+#
+# With flags it is the hand-off itself, as the popup dashboard and the popup picker
+# call it: `--target-pane` (the pane the popup floats over, not the popup),
+# `--placement` (below, right, above, left or tab; `[dashboard].popup_open`),
+# `--cwd` (the box's worktree), `--box` (its key, exported as KEY so `e2b-box open`
+# never re-derives one from the cwd), and what was picked: `--template`,
+# `--reasoning`, `--model`, which reach `e2b-box open` in the new pane as
+# E2B_TEMPLATE, E2B_REASONING and E2B_MODEL, ahead of its own picker.
 set -uo pipefail
 SOURCE="${BASH_SOURCE[0]}"
 while [ -h "$SOURCE" ]; do
@@ -16,19 +29,32 @@ DIR="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
 source "$DIR/lib/paths.sh"
 source "$DIR/lib/pane.sh"
 
-target= ; where=below ; extra=()
+target= ; where=below ; extra=() ; explicit=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --target-pane|--placement|--cwd|--box)
+    --target-pane|--placement|--cwd|--box|--template|--reasoning|--model)
       [ $# -ge 2 ] || { echo "e2b-box-open: $1 needs a value" >&2; exit 2; } ;;
     *) echo "e2b-box-open: unknown argument '$1'" >&2; exit 2 ;;
   esac
+  explicit=1
   case "$1" in
     --target-pane) target="$2" ;;
     --placement) where="$2" ;;
     --cwd) extra+=(--cwd "$2") ;;
     --box) extra+=(--env "KEY=$2") ;;
+    --template) [ -z "$2" ] || extra+=(--env "E2B_TEMPLATE=$2") ;;
+    --reasoning) [ -z "$2" ] || extra+=(--env "E2B_REASONING=$2") ;;
+    --model) [ -z "$2" ] || extra+=(--env "E2B_MODEL=$2") ;;
   esac
   shift 2
 done
-pane_open_from box "$where" "$target" ${extra[@]+"${extra[@]}"}
+
+if [ "$explicit" -eq 1 ]; then
+  pane_open_from box "$where" "$target" ${extra[@]+"${extra[@]}"}
+  exit
+fi
+
+# The action. No popup to be had (an older herdr): the pane below asks for itself.
+pane_open_popup pick-box "$(pane_context_cwd)" && exit 0
+echo "e2b-box-open: couldn't open the popup, asking in the pane instead" >&2
+pane_open_below box

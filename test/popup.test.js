@@ -13,6 +13,11 @@ function fixture(t) {
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const herdr = path.join(dir, "herdr")
   const calls = path.join(dir, "calls")
+  // `open`'s action asks `e2b-box pick --needed` before choosing popup or pane; a
+  // pinned menu of three keeps that answer independent of this machine's config.
+  const config = path.join(dir, "config")
+  mkdirSync(config)
+  writeFileSync(path.join(config, "config.toml"), '[sandbox]\ntemplate = "base"\ntemplates = ["claude", "codex", "base"]\n')
   writeFileSync(herdr, `#!/bin/sh
 printf "%s\\n" "$@" > "$POPUP_CALLS"
 printf "%s\\n" "$*" >> "$POPUP_CALLS.all"
@@ -26,12 +31,19 @@ exit "\${POPUP_EXIT:-0}"
     calls,
     herdr,
     dir,
+    config,
     run: (binary, args = [], env = {}) => spawnSync(path.join(root, "bin", binary), args, {
       encoding: "utf8",
-      env: { ...process.env, HERDR_PLUGIN_CONTEXT_JSON: "", HERDR_PANE_ID: "", HERDR_BIN_PATH: herdr, HERDR_PLUGIN_STATE_DIR: dir, POPUP_CALLS: calls, ...env },
+      env: { ...process.env, E2B_TEMPLATE: "", HERDR_PLUGIN_CONTEXT_JSON: "", HERDR_PANE_ID: "", HERDR_BIN_PATH: herdr, HERDR_PLUGIN_STATE_DIR: dir, HERDR_PLUGIN_CONFIG_DIR: config, POPUP_CALLS: calls, ...env },
     }),
   }
 }
+
+// The popup opened as a config surface: what bin/lib/pane.sh `pane_open_popup` asks herdr for.
+const popupCall = (mode, origin, cwd) => [
+  "plugin", "pane", "open", "--plugin", "e2b-dev.herdr-e2b", "--entrypoint", "popup", "--placement", "popup", "--width", "90%", "--height", "85%",
+  "--env", "E2B_DASH_POPUP=1", "--env", `E2B_POPUP_MODE=${mode}`, "--env", `E2B_DASH_ORIGIN_PANE=${origin}`, "--cwd", cwd, "--env", `E2B_PICK_CWD=${cwd}`,
+]
 
 test("settings actions launch pane and popup views without needing their own terminal", (t) => {
   const f = fixture(t)
@@ -41,14 +53,16 @@ test("settings actions launch pane and popup views without needing their own ter
     const action = manifest.actions.find((action) => action.id === id)
     const result = spawnSync(action.command[0], action.command.slice(1), {
       encoding: "utf8",
-      env: { ...process.env, HERDR_PLUGIN_ROOT: root, HERDR_PLUGIN_CONTEXT_JSON: "", HERDR_PANE_ID: "", HERDR_BIN_PATH: f.herdr, HERDR_PLUGIN_STATE_DIR: f.dir, POPUP_CALLS: f.calls },
+      env: { ...process.env, E2B_TEMPLATE: "", HERDR_PLUGIN_ROOT: root, HERDR_PLUGIN_CONTEXT_JSON: "", HERDR_PANE_ID: "", HERDR_BIN_PATH: f.herdr, HERDR_PLUGIN_STATE_DIR: f.dir, HERDR_PLUGIN_CONFIG_DIR: f.config, POPUP_CALLS: f.calls },
     })
     assert.equal(result.status, 0, result.stderr)
     const called = readFileSync(f.calls, "utf8").trim().split("\n")
     if (id === "dashboard") {
       assert.deepEqual(called, ["pane", "run", "w1:p1", "e2b-dash"])
     } else if (id === "open" || id === "fleet") {
-      assert.deepEqual(called, ["plugin", "pane", "open", "--plugin", manifest.id, "--entrypoint", id === "open" ? "box" : "fleet", "--placement", "split", "--target-pane", "w1:p1", "--direction", "down", "--focus"])
+      // Both actions put their questions in the popup, over the invoking pane, about
+      // the worktree the action ran in (here: the plugin root, the process cwd).
+      assert.deepEqual(called, popupCall(id === "open" ? "pick-box" : "pick-fleet", "w1:p1", process.cwd()))
     } else {
       assert.deepEqual(called, ["plugin", "pane", "open", "--plugin", manifest.id, "--entrypoint", "popup", "--placement", "popup", "--width", "90%", "--height", "85%", "--env", "E2B_DASH_POPUP=1", "--env", "E2B_DASH_ORIGIN_PANE=w1:p1"])
     }
@@ -122,19 +136,63 @@ printf '%s\\n' "$HERDR_PLUGIN_ID" "$HERDR_PLUGIN_ROOT" "$HERDR_PLUGIN_CONFIG_DIR
   assert.equal(f.run("e2b-popup", ["--render", "unexpected"]).status, 2)
 })
 
-test("box and fleet splits follow the invoking pane and focus below it", (t) => {
+test("box and fleet actions open the popup over the invoking pane, about its worktree", (t) => {
   const f = fixture(t)
-  for (const [binary, entrypoint] of [["e2b-box-open", "box"], ["e2b-fleet-open", "fleet"]]) {
+  for (const [binary, mode] of [["e2b-box-open", "pick-box"], ["e2b-fleet-open", "pick-fleet"]]) {
     for (const context of [JSON.stringify({ focused_pane_id: "w2:p3" }), ""]) {
       const result = f.run(binary, [], { HERDR_PLUGIN_CONTEXT_JSON: context, HERDR_PANE_ID: "w3:p4" })
       assert.equal(result.status, 0, result.stderr)
-      assert.deepEqual(readFileSync(f.calls, "utf8").trim().split("\n"), [
-        "plugin", "pane", "open", "--plugin", "e2b-dev.herdr-e2b", "--entrypoint", entrypoint,
-        "--placement", "split", "--target-pane", context ? "w2:p3" : "w3:p4", "--direction", "down", "--focus",
-      ])
+      assert.deepEqual(readFileSync(f.calls, "utf8").trim().split("\n"), popupCall(mode, context ? "w2:p3" : "w3:p4", process.cwd()))
     }
+    // The context's cwd is the worktree the popup is about, not where the action happens to run.
+    const ctx = JSON.stringify({ focused_pane_id: "w2:p3", focused_pane_cwd: f.dir })
+    assert.equal(f.run(binary, [], { HERDR_PLUGIN_CONTEXT_JSON: ctx }).status, 0)
+    assert.deepEqual(readFileSync(f.calls, "utf8").trim().split("\n"), popupCall(mode, "w2:p3", f.dir))
+    // No popup to be had: the pane below, as before. Both attempts failing is a failure.
     assert.equal(f.run(binary, [], { POPUP_EXIT: "1", HERDR_PANE_ID: "w3:p4" }).status, 1)
   }
+})
+
+test("--render in pick-box mode hands the answer to a pane under the origin and exits, closing the popup", (t) => {
+  const f = fixture(t)
+  const repo = path.join(f.dir, "repo")
+  mkdirSync(repo)
+  spawnSync("git", ["-C", repo, "init", "-q"])
+  spawnSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "init"])
+  // No terminal here, so the picker cannot draw: pick answers with the key alone and
+  // the hand-off opens the box plain. With E2B_TEMPLATE set the answer is that name.
+  for (const [env, extra] of [[{}, []], [{ E2B_TEMPLATE: "codex" }, ["--env", "E2B_TEMPLATE=codex"]]]) {
+    const result = spawnSync("bash", [path.join(root, "bin/e2b-popup"), "--render"], {
+      encoding: "utf8",
+      env: {
+        ...process.env, E2B_TEMPLATE: "", HERDR_PLUGIN_CONTEXT_JSON: "", HERDR_PANE_ID: "", HERDR_BIN_PATH: f.herdr, HERDR_PLUGIN_STATE_DIR: f.dir,
+        HERDR_PLUGIN_CONFIG_DIR: f.config, POPUP_CALLS: f.calls, E2B_POPUP_MODE: "pick-box", E2B_PICK_CWD: repo, E2B_DASH_ORIGIN_PANE: "w2:p3", ...env,
+      },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    const called = readFileSync(f.calls, "utf8").trim().split("\n")
+    assert.deepEqual(called.slice(0, 13), [
+      "plugin", "pane", "open", "--plugin", "e2b-dev.herdr-e2b", "--entrypoint", "box", "--placement", "split", "--target-pane", "w2:p3", "--direction", "down",
+    ])
+    assert.equal(called[13], "--focus")
+    assert.deepEqual(called.slice(14, 16), ["--cwd", repo])
+    assert.equal(called[16], "--env")
+    assert.match(called[17], /^KEY=repo-[0-9a-f]{8}$/)
+    assert.deepEqual(called.slice(18), extra)
+  }
+})
+
+test("the popup picker's hand-off carries what was picked into the box pane's environment", (t) => {
+  const f = fixture(t)
+  const result = f.run("e2b-box-open", ["--target-pane", "w5:p6", "--placement", "below", "--cwd", "/tmp/w", "--box", "k1", "--template", "codex", "--reasoning", "high", "--model", "gpt-5.5"])
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(readFileSync(f.calls, "utf8").trim().split("\n"), [
+    "plugin", "pane", "open", "--plugin", "e2b-dev.herdr-e2b", "--entrypoint", "box", "--placement", "split", "--target-pane", "w5:p6", "--direction", "down", "--focus",
+    "--cwd", "/tmp/w", "--env", "KEY=k1", "--env", "E2B_TEMPLATE=codex", "--env", "E2B_REASONING=high", "--env", "E2B_MODEL=gpt-5.5",
+  ])
+  // Empty picks are not passed on: an unchosen effort must not become an empty pin.
+  assert.equal(f.run("e2b-box-open", ["--target-pane", "w5:p6", "--box", "k1", "--template", "codex", "--reasoning", "", "--model", ""]).status, 0)
+  assert.deepEqual(readFileSync(f.calls, "utf8").trim().split("\n").slice(-4), ["--env", "KEY=k1", "--env", "E2B_TEMPLATE=codex"])
 })
 
 test("the popup's Enter opens the box where [dashboard].popup_open says, pinned to that box", (t) => {
@@ -180,5 +238,66 @@ test("[dashboard].popup_open reaches the dashboard's settings, anything else mea
     })
     assert.equal(result.status, 0, result.stderr)
     assert.equal(JSON.parse(result.stdout).popup_open, expected, `popup_open = ${value}`)
+  }
+})
+
+test("picker refresh returns input without asking or contacting Herdr, and headless render keeps its handoff", (t) => {
+  const f = fixture(t)
+  const reply = path.join(f.dir, "picker-input")
+  const result = f.run("e2b-box", ["pick"], { E2B_PICKER_INPUT: reply })
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /^herdr-e2b-sandbox-[0-9a-f]{8}\n\n$/)
+  const fields = readFileSync(reply).toString().split("\0")
+  assert.equal(fields[1], process.cwd())
+  assert.equal(fields[4], "base")
+  assert.equal(fields[5], "base\nclaude\ncodex")
+  assert.match(fields[8], /codex\|/)
+  assert.throws(() => readFileSync(f.calls), { code: "ENOENT" })
+
+  const rendered = f.run("e2b-popup", ["--render"], { E2B_POPUP_MODE: "pick-box", E2B_PICK_CWD: process.cwd() })
+  assert.equal(rendered.status, 0, rendered.stderr)
+  assert.doesNotMatch(rendered.stdout, /E2B template/)
+  assert.match(readFileSync(f.calls, "utf8"), /KEY=herdr-e2b-sandbox-/)
+})
+
+test("fleet refresh fills the same worktree cache without asking or creating members", (t) => {
+  const f = fixture(t)
+  const reply = path.join(f.dir, "picker-input")
+  assert.equal(f.run("e2b-box", ["pick"], { E2B_PICKER_INPUT: reply }).status, 0)
+  const before = readFileSync(reply).toString().split("\0")
+  const result = f.run("e2b-box", ["fleet"], { E2B_PICKER_INPUT: reply })
+  assert.equal(result.status, 0, result.stderr)
+  const after = readFileSync(reply).toString().split("\0")
+  assert.deepEqual(after.slice(0, 9), before.slice(0, 9))
+  assert.equal(after[10], "claude\ncodex")
+  assert.match(after[13], /codex\|/)
+  assert.throws(() => readFileSync(f.calls), { code: "ENOENT" })
+})
+
+test("startup warms both picker inputs for restored pane directories without opening anything", (t) => {
+  const f = fixture(t)
+  const repos = [path.join(f.dir, "focused repo"), path.join(f.dir, "other repo")]
+  for (const repo of repos) {
+    mkdirSync(repo)
+    spawnSync("git", ["-C", repo, "init", "-q"])
+  }
+  writeFileSync(f.herdr, `#!/bin/sh
+printf '%s\\n' "$*" >> "$POPUP_CALLS"
+printf '%s\\n' '${JSON.stringify({ result: { panes: repos.map(cwd => ({ cwd, foreground_cwd: cwd })) } })}'
+`, { mode: 0o755 })
+  const manifest = TOML.parse(readFileSync(path.join(root, "herdr-plugin.toml"), "utf8"))
+  assert.deepEqual(manifest.startup[0].command, ["bash", "bin/e2b-picker-warm", "--all"])
+  assert.deepEqual(manifest.events.find(e => e.on === "workspace.created").command, ["bash", "bin/e2b-picker-warm"])
+  const result = f.run("e2b-picker-warm", ["--all"], {
+    HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({ focused_pane_cwd: repos[0] }), KEY: "unrelated-box", E2B_TEMPLATE: "pinned-elsewhere",
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(readFileSync(f.calls, "utf8"), "pane list\n")
+  for (const repo of repos) {
+    const cache = path.join(f.dir, "pickers", ...repo.split("/").filter(Boolean).map(p => `d-${p}`), "input")
+    const fields = readFileSync(cache).toString().split("\0")
+    assert.equal(fields[1], repo)
+    assert.equal(fields[5], "base\nclaude\ncodex")
+    assert.equal(fields[10], "claude\ncodex")
   }
 })

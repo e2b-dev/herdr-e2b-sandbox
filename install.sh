@@ -18,7 +18,7 @@ else
 fi
 
 chmod +x bin/e2b-box bin/e2b-box-open bin/e2b-box-pull bin/e2b-dash bin/e2b-dash-toggle bin/e2b-popup \
-         bin/e2b-fleet bin/e2b-fleet-open bin/e2b-bench bin/teardown-worktree 2>/dev/null || true
+         bin/e2b-fleet bin/e2b-fleet-open bin/e2b-bench bin/e2b-picker-warm bin/teardown-worktree 2>/dev/null || true
 
 BIN="${HOME}/.local/bin"
 mkdir -p "$BIN"
@@ -275,6 +275,10 @@ fi
 # old node, and reading "discovery did not finish" before the line that explains
 # why turns one problem into two.
 harness_discovery "$CONFIG_DIR" "$DIR/bin/e2b-box"
+
+# Linking/enabling a plugin does not rerun Herdr's startup hooks. Warm existing
+# workspaces after installation too, without holding the installer open.
+nohup bash "$DIR/bin/e2b-picker-warm" --all </dev/null >/dev/null 2>&1 &
 
 # Template recommendation — "base" (the default) is minimal & tight on disk.
 echo "herdr-e2b: tip — sandboxes default to the 'base' template (minimal). For real"

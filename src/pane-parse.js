@@ -9,6 +9,7 @@
 //                  "<focused_pane> <dashboard_pane> <tab_pane_ids>",
 //                  "-" for any absent value, tab ids comma-separated.
 //   origin         invoking pane from plugin context or HERDR_PANE_ID.
+//   cwd            the invoking pane's directory from plugin context, "-" if none.
 //   procs          foreground process names, one per line (nothing if none).
 //
 // Empty or malformed input is an ordinary outcome here — herdr isn't running,
@@ -45,11 +46,13 @@ if (mode === "panes") {
   console.log(panesLine(title));
 } else if (mode === "origin") {
   console.log(doc?.focused_pane_id || doc?.focusedPaneId || process.env.HERDR_PANE_ID || "-");
+} else if (mode === "cwd") {
+  console.log(doc?.focused_pane_cwd || doc?.focusedPaneCwd || doc?.workspace_cwd || doc?.workspaceCwd || "-");
 } else if (mode === "procs") {
   for (const p of doc?.result?.process_info?.foreground_processes ?? []) {
     console.log(p?.name ?? "");
   }
 } else {
-  console.error(`pane-parse: unknown mode '${mode ?? ""}' (expected 'panes', 'origin' or 'procs')`);
+  console.error(`pane-parse: unknown mode '${mode ?? ""}' (expected 'panes', 'origin', 'cwd' or 'procs')`);
   process.exitCode = 2;
 }

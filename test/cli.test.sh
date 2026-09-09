@@ -18,7 +18,7 @@ for t in jq git node; do command -v "$t" >/dev/null || { echo "cli.test: '$t' no
 echo "── lint: bash -n ──"
 for f in "$ROOT"/bin/e2b-box "$ROOT"/bin/e2b-box-open "$ROOT"/bin/e2b-box-pull "$ROOT"/bin/e2b-fleet "$ROOT"/bin/e2b-fleet-open \
          "$ROOT"/bin/e2b-dash "$ROOT"/bin/e2b-dash-toggle "$ROOT"/bin/e2b-popup "$ROOT"/bin/e2b-bench \
-         "$ROOT"/bin/e2b-domain "$ROOT"/bin/teardown-worktree "$ROOT"/bin/lib/*.sh "$ROOT"/install.sh "$ROOT"/test/e2e-run.sh; do
+         "$ROOT"/bin/e2b-domain "$ROOT"/bin/e2b-picker-warm "$ROOT"/bin/teardown-worktree "$ROOT"/bin/lib/*.sh "$ROOT"/install.sh "$ROOT"/test/e2e-run.sh; do
   if bash -n "$f" 2>/dev/null; then ok "bash -n $(basename "$f")"; else bad "bash -n $(basename "$f")"; fi
 done
 echo "── lint: node --check ──"
@@ -306,6 +306,25 @@ out=$("$E2B" auth --nope </dev/null 2>&1); rc=$?
 { [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q "unknown option"; } \
   && ok "auth rejects a flag it does not know → exit 2" || bad "auth --nope (rc=$rc, out=$out)"
 
+# `pick --needed` is how the `open` action decides whether the popup is worth
+# drawing: 0 when the picker would open, 1 when the template is already settled.
+echo "── behavior: pick --needed says whether there is anything to ask ──"
+pkdir="$TMP/pick-needed"; mkdir -p "$pkdir/repo" "$pkdir/state"
+printf '[sandbox]\ntemplate = "base"\ntemplates = ["claude", "codex", "base"]\n' > "$pkdir/config.toml"
+git -C "$pkdir/repo" init -q && git -C "$pkdir/repo" commit -q --allow-empty -m init
+(cd "$pkdir/repo" && env -u E2B_TEMPLATE HERDR_PLUGIN_CONFIG_DIR="$pkdir" HERDR_PLUGIN_STATE_DIR="$pkdir/state" "$E2B" pick --needed </dev/null >/dev/null 2>&1); rc=$?
+[ "$rc" -eq 0 ] && ok "a fresh worktree with a menu to choose from → 0" || bad "pick --needed on a fresh worktree (rc=$rc)"
+(cd "$pkdir/repo" && E2B_TEMPLATE=claude HERDR_PLUGIN_CONFIG_DIR="$pkdir" HERDR_PLUGIN_STATE_DIR="$pkdir/state" "$E2B" pick --needed </dev/null >/dev/null 2>&1); rc=$?
+[ "$rc" -eq 1 ] && ok "E2B_TEMPLATE settles it → 1" || bad "pick --needed with E2B_TEMPLATE (rc=$rc)"
+printf '[sandbox]\ntemplate = "base"\ntemplates = ["base"]\n' > "$pkdir/config.toml"
+(cd "$pkdir/repo" && env -u E2B_TEMPLATE HERDR_PLUGIN_CONFIG_DIR="$pkdir" HERDR_PLUGIN_STATE_DIR="$pkdir/state" "$E2B" pick --needed </dev/null >/dev/null 2>&1); rc=$?
+[ "$rc" -eq 1 ] && ok "a single candidate is not a choice → 1" || bad "pick --needed with one template (rc=$rc)"
+# Without --needed and without a terminal, the answer is the key and an empty line
+# (which a `$(…)` capture strips): the caller opens the box plain, as `open` would.
+out=$(cd "$pkdir/repo" && env -u E2B_TEMPLATE HERDR_PLUGIN_CONFIG_DIR="$pkdir" HERDR_PLUGIN_STATE_DIR="$pkdir/state" "$E2B" pick </dev/null 2>/dev/null); rc=$?
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qx 'repo-[0-9a-f]\{8\}'; } \
+  && ok "pick with no terminal answers key + nothing, exit 0" || bad "pick without a tty (rc=$rc, out=$out)"
+
 # What the `open` picker draws beside each template. Asserted here rather than in a
 # unit test because the two halves have to agree across a process boundary: the node
 # side emits `<template>\t<mark>` and bash cuts the columns apart. Driven with a
@@ -583,6 +602,31 @@ FBASE=$(git -C "$FREPO" rev-parse HEAD)
 # gets its own test below, with the id pinned.
 fleet() { ( cd "$FREPO" && env -u HERDR_WORKSPACE_ID HERDR_E2B_FLEET_RAND=ab12 "$FLEET" "$@" 2>&1 ); }
 
+SPEC_CFG="$TMP/fleet-spec-config"; mkdir -p "$SPEC_CFG/presets"
+cat > "$SPEC_CFG/presets/compare.json" <<'JSON'
+{"slug":"saved-run","task":"fix the login bug","members":[{"template":"codex","model":"gpt-6-astra","reasoning":"high","count":2},{"template":"claude"}]}
+JSON
+specfleet() { ( cd "$FREPO" && HERDR_PLUGIN_CONFIG_DIR="$SPEC_CFG" "$FLEET" "$@" 2>&1 ); }
+out=$(specfleet create --file "$SPEC_CFG/presets/compare.json" -n); rc=$?
+{ [ "$rc" -eq 0 ] && [[ "$out" = *saved-run-codex-2* ]] && [[ "$out" = *gpt-6-astra* ]] && [[ "$out" = *'--reasoning high'* ]] && [[ "$out" = *'writes the brief'* ]]; } \
+  && ok "fleet JSON plans counts, model, reasoning and task headlessly" || bad "fleet JSON plan (rc=$rc, out=$out)"
+out=$(specfleet override --preset compare --task '' -t claude -n); rc=$?
+{ [ "$rc" -eq 0 ] && [[ "$out" = *override-claude* ]] && [[ "$out" != *'writes the brief'* ]] && [[ "$out" != *saved-run* ]] && [[ "$out" != *gpt-6-astra* ]]; } \
+  && ok "fleet flags override saved slug, task and roster" || bad "fleet preset overrides (rc=$rc, out=$out)"
+out=$(specfleet create --file - -n < "$SPEC_CFG/presets/compare.json"); rc=$?
+{ [ "$rc" -eq 0 ] && [[ "$out" = *saved-run-codex-2* ]]; } \
+  && ok "fleet reads generated JSON from stdin" || bad "fleet JSON stdin (rc=$rc, out=$out)"
+out=$(specfleet presets); rc=$?
+{ [ "$rc" -eq 0 ] && [ "$out" = compare ]; } \
+  && ok "fleet presets lists config-adjacent recipes" || bad "fleet preset listing (rc=$rc, out=$out)"
+out=$(specfleet --file "$SPEC_CFG/presets/compare.json" --preset compare -n); rc=$?
+{ [ "$rc" -eq 2 ] && [[ "$out" = *'use one --file or --preset'* ]]; } \
+  && ok "fleet refuses competing recipe sources" || bad "fleet competing sources (rc=$rc, out=$out)"
+printf '{"members":[{"template":"codex","model":"invented"}]}' > "$SPEC_CFG/presets/bad.json"
+out=$(specfleet nope --preset bad -n); rc=$?
+{ [ "$rc" -eq 2 ] && [[ "$out" = *'not a model'* ]] && [[ "$out" != *'herdr worktree create'* ]]; } \
+  && ok "invalid JSON model fails before any member plan" || bad "fleet JSON validation (rc=$rc, out=$out)"
+
 out=$(fleet --slug "Login Fix" -t claude --dry-run); rc=$?
 { [ "$rc" -eq 0 ] \
   && printf '%s\n' "$out" | grep -qx \
@@ -786,16 +830,17 @@ out=$( cd "$FREPO" && HERDR_E2B_FLEET_RAND=ab12 HERDR_PLUGIN_CONFIG_DIR="$NSCFG"
   && ok "a roster whose members would share a name is refused, naming both" \
   || bad "roster label collision (rc=$rc, out=$out)"
 
-# A roster holds a template at most once (CONTEXT.md), so a repeated -t is one
-# member — and the plan keeps first-seen order, which is what makes it assertable.
+# A repeated -t is MORE MEMBERS of that template: numbered labels, a branch each,
+# plan order preserved — which is what makes it assertable.
 out=$(fleet --slug dup -t claude -t claude -t codex -n); rc=$?
 creates=$(printf '%s\n' "$out" | grep -c 'herdr worktree create' || true)
-{ [ "$rc" -eq 0 ] && [ "$creates" -eq 2 ] \
+{ [ "$rc" -eq 0 ] && [ "$creates" -eq 3 ] \
   && [ "$(printf '%s\n' "$out" | grep -c 'e2b/dup-claude-ab12')" -eq 1 ] \
-  && printf '%s\n' "$out" | grep -q "collapsed 1 duplicate" \
-  && [ "$(printf '%s\n' "$out" | grep -n 'member dup-claude' | cut -d: -f1)" \
+  && [ "$(printf '%s\n' "$out" | grep -c 'e2b/dup-claude-2-ab12')" -eq 1 ] \
+  && printf '%s\n' "$out" | grep -q '^  member dup-claude-2$' \
+  && [ "$(printf '%s\n' "$out" | grep -n 'member dup-claude-2' | cut -d: -f1)" \
        -lt "$(printf '%s\n' "$out" | grep -n 'member dup-codex' | cut -d: -f1)" ]; } \
-  && ok "a template given twice is one member, in first-seen order" \
+  && ok "a template given twice is two numbered members, in first-seen order" \
   || bad "duplicate template collapse (rc=$rc, creates=$creates, out=$out)"
 
 echo "── fleet: create is the one-liner, and it plans the same fleet ──"
@@ -1002,11 +1047,32 @@ got=$(printf '%s\n' "$out" | grep -c '^  member ')
   && ok "--agents all is one member per configured template ($want)" \
   || bad "--agents all (rc=$rc, got=$got, want=$want)"
 
-# Mixing the two spellings is one roster, and the dedupe still applies across them.
+# Mixing the two spellings is one roster; a name in both is two members of it.
 out=$(fleet create mixed -t claude --agents claude,codex -n)
-{ [ "$(printf '%s\n' "$out" | grep -c '^  member ')" -eq 2 ] \
-  && printf '%s\n' "$out" | grep -q "collapsed 1 duplicate"; } \
-  && ok "-t and --agents are one roster, deduped across both" || bad "mixed roster (out=$out)"
+{ [ "$(printf '%s\n' "$out" | grep -c '^  member ')" -eq 3 ] \
+  && printf '%s\n' "$out" | grep -q '^  member mixed-claude-2$'; } \
+  && ok "-t and --agents are one roster, counted across both" || bad "mixed roster (out=$out)"
+
+# Member SPECS: NAME*N is N instances, @EFFORT rides into each member's open as
+# --reasoning, and a bare name carries none — the pin, or the harness default, applies.
+out=$(fleet create spec -t 'codex*2@ultra' -t grok@xhigh -t claude -n); rc=$?
+{ [ "$rc" -eq 0 ] \
+  && [ "$(printf '%s\n' "$out" | grep -c 'open -t codex --reasoning ultra$')" -eq 2 ] \
+  && [ "$(printf '%s\n' "$out" | grep -c 'open -t grok --reasoning xhigh$')" -eq 1 ] \
+  && [ "$(printf '%s\n' "$out" | grep -c 'open -t claude$')" -eq 1 ] \
+  && printf '%s\n' "$out" | grep -q 'e2b/spec-codex-2-ab12'; } \
+  && ok "member specs: *N instances and @effort per member" || bad "member specs (rc=$rc, out=$out)"
+# `:MODEL` rides into each member's open as --model, beside the effort; a model id
+# keeps its slashes, and the template half is still what the roster check reads.
+out=$(fleet create spec -t 'codex:gpt-5.5*2@ultra' -t 'prime:prime-inference/anthropic/claude-fable-5' -t claude -n); rc=$?
+{ [ "$rc" -eq 0 ] \
+  && [ "$(printf '%s\n' "$out" | grep -c 'open -t codex --reasoning ultra --model gpt-5.5$')" -eq 2 ] \
+  && [ "$(printf '%s\n' "$out" | grep -c 'open -t prime --model prime-inference/anthropic/claude-fable-5$')" -eq 1 ] \
+  && [ "$(printf '%s\n' "$out" | grep -c 'open -t claude$')" -eq 1 ]; } \
+  && ok "member specs: :MODEL per member, beside @EFFORT" || bad "member specs with :MODEL (rc=$rc, out=$out)"
+out=$(fleet create spec -t 'codex*0' -n 2>&1); rc=$?
+{ [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q '1\.\.20'; } \
+  && ok "a spec count outside 1..20 is refused before anything is created" || bad "spec count (rc=$rc, out=$out)"
 
 echo "── fleet: a roster name nobody configured is refused ──"
 # An unknown name used to plan fine and only fail minutes later, when its box tried
@@ -1616,6 +1682,26 @@ out=$( cd "$FREPO" && HERDR_E2B_FLEET_RAND=ab12 HERDR_ENV=1 STUB_DELAY="$STUB_DE
   && ok "--dashboard execs the board rather than waiting on the members" \
   || bad "--dashboard did not reach the board (rc=$rc, out=$out)"
 
+# The board must have something to show the moment it takes the pane: a `pending`
+# placeholder per member, written before any member is spawned and keyed off the
+# label since no worktree exists yet. The stub never runs e2b-box, so no real record
+# ever replaces it here and it is still there to read.
+PENDING="$HERDR_PLUGIN_STATE_DIR/boxes/boarded-claude-pending.json"
+{ [ -f "$PENDING" ] \
+  && [ "$(jq -r .status "$PENDING")" = pending ] \
+  && [ "$(jq -r .label "$PENDING")" = boarded-claude ] \
+  && [ "$(jq -r .template "$PENDING")" = claude ] \
+  && [ "$(jq -r .key "$PENDING")" = boarded-claude-pending ]; } \
+  && ok "a pending placeholder per member is on the board before the members are away" \
+  || bad "pending placeholder (file=$PENDING, content=$(cat "$PENDING" 2>/dev/null))"
+rm -f "$PENDING"
+# A member that fails leaves no placeholder behind: its report says why instead.
+# (`pout`, not `out`: the boarded run's output is still asserted on below.)
+pout=$(spawn herdr-fail --slug pfail -t claude); prc=$?
+{ [ "$prc" -ne 0 ] && [ ! -f "$HERDR_PLUGIN_STATE_DIR/boxes/pfail-claude-pending.json" ]; } \
+  && ok "a failed member clears its placeholder" \
+  || bad "failed member left a placeholder (rc=$prc, $(ls "$HERDR_PLUGIN_STATE_DIR/boxes" 2>/dev/null))"
+
 # The header and the pointer belong in the pane; the report does not — the board
 # owns the pane from the exec on, so anything printed after it would be painted over.
 { printf '%s\n' "$out" | grep -q "fleet 'boarded'" \
@@ -2210,6 +2296,17 @@ pty_python() {
 }
 
 if PY=$(pty_python); then
+  while IFS= read -r line; do
+    case "$line" in
+      OK\ *) ok "${line#OK }" ;;
+      *) bad "$line" ;;
+    esac
+  done < <("$PY" "$ROOT/test/picker-cache-pty.py" "$ROOT" "$BASH" "$(command -v node)" 2>&1)
+else
+  skip "picker cache pty coverage: no usable python3"
+fi
+
+if PY=$(pty_python); then
   cat > "$TMP/ptycheck.py" <<'PYCHECK'
 import os, pty, select, sys, time
 
@@ -2250,6 +2347,8 @@ def run(script, keys, sink=None):
     for k in keys:
         os.write(fd, k)
         drain(fd, sink=sink)
+        if k == b"\x1b":
+            time.sleep(0.05)  # allow the plain-terminal escape window to expire
     deadline = time.time() + 6
     while time.time() < deadline:
         if os.waitpid(pid, os.WNOHANG)[0]:
@@ -2282,8 +2381,21 @@ PICK = call("ask_template_tty demo codex %s 3" % MENU)
 MARKS = "\"$(printf 'key (env)\\nkey (file)\\n')\""
 PICKANN = call("ask_template_tty demo codex %s 3 %s" % (MENU, MARKS))
 ROST = call("ask_roster_tty demo %s 3 codex" % MENU)
+# The same two pickers with effort rows (src/effort.js's `|` format): claude opens
+# on its configured `high`, codex has a scale but no pin, base has no scale at all.
+EFF = "\"$(printf 'claude|native|low,medium,high,xhigh,max|high|X\\ncodex|native|low,medium,high,xhigh,max,ultra||Y\\nbase|none|||')\""
+ROSTE = call("ask_roster_tty demo %s 3 codex %s" % (MENU, EFF))
+PICKE = call("ask_template_tty demo codex %s 3 '' %s" % (MENU, EFF))
+# The same rows with the two model fields (six and seven): claude is pinned to
+# c-b, codex lists three models and pins none, base lists none. The model column
+# sits BETWEEN template and effort, so → lands on it first.
+EFFM = "\"$(printf 'claude|native|low,medium,high,xhigh,max|high|X|c-a,c-b|c-b\\ncodex|native|low,medium,high,xhigh,max,ultra||Y|g-a,g-b,g-c|\\nbase|none|||||')\""
+ROSTM = call("ask_roster_tty demo %s 3 codex %s" % (MENU, EFFM))
+PICKM = call("ask_template_tty demo codex %s 3 '' %s" % (MENU, EFFM))
+PICKC = call("ask_template_tty demo codex %s 3 '' %s" % (MENU, EFFM), "CHOOSER_CENTER=1; ")
 VALID = 'alnum() { case "$1" in *[a-zA-Z0-9]*) return 0;; esac; return 1; }; '
 SLUG = call("ask_slug_tty '' alnum", VALID)
+SLUGC = call("ask_slug_tty '' alnum", "CHOOSER_CENTER=1; " + VALID)
 # The same screen with the optional fleet-task field on. Two lines come back —
 # the slug, then the task — so an empty task is an empty second line, which the
 # capture below strips exactly as the caller's own $(…) does.
@@ -2310,6 +2422,59 @@ cases = [
     ("roster: a number toggles that row",        ROST, [b"1", b"\r"], "claude\ncodex|rc=0"),
     ("roster: q aborts, choosing nothing",       ROST, [b"q"], "|rc=2"),
     ("roster: bare esc aborts",                  ROST, [b"\x1b"], "|rc=2"),
+    # The effort and count cells. Focus is a CELL: →/tab moves to the effort column,
+    # enter there opens the row's list (↑/↓ choose, enter takes, esc keeps), and
+    # taking or leaving it keeps the focus on that cell, so ← (or shift-tab) back to
+    # the template column and then enter launches.
+    # A row with no chosen effort answers bare, so the fleet reads what it read
+    # before this column existed.
+    ("roster+effort: enter is still the bare default roster", ROSTE, [b"\r"], "codex|rc=0"),
+    ("roster+effort: → then enter opens the list; ↓ enter takes the first word; ← enter launches", ROSTE, [b"\x1b[C", b"\r", b"\x1b[B", b"\r", b"\x1b[D", b"\r"], "codex\tlow|rc=0"),
+    ("roster+effort: a taken value leaves the focus on its cell, so enter reopens the list", ROSTE, [b"\x1b[C", b"\r", b"\x1b[B", b"\r", b"\r", b"\x1b[B", b"\r", b"\x1b[D", b"\r"], "codex\tmedium|rc=0"),
+    ("roster+effort: tab focuses the cell too; k in the list wraps to the last word", ROSTE, [b"\t", b"\r", b"k", b"\r", b"\x1b[D", b"\r"], "codex\tultra|rc=0"),
+    ("roster+effort: esc inside the list keeps the value it had, and the focus on the cell", ROSTE, [b"\t", b"\r", b"j", b"\x1b", b"\x1b[D", b"\r"], "codex|rc=0"),
+    ("roster+effort: a number inside the list picks that word", ROSTE, [b"\t", b"\r", b"6", b"\x1b[D", b"\r"], "codex\tultra|rc=0"),
+    ("roster+effort: + is another member at the row's effort", ROSTE, [b"\t", b"\r", b"j", b"\r", b"+", b"\x1b[D", b"\r"], "codex\tlow\ncodex\tlow|rc=0"),
+    ("roster+effort: s ticks, grows to two and unfolds; #1 gets its own word", ROSTE, [b"k", b"s", b"\r", b"j", b"\r", b"\x1b[D", b"\r"], "claude\txhigh\nclaude\thigh\ncodex|rc=0"),
+    ("roster+effort: s again folds, members kept", ROSTE, [b"s", b"s", b"\r"], "codex\ncodex|rc=0"),
+    ("roster+effort: enter on the count column launches", ROSTE, [b"\t", b"\t", b"\r"], "codex|rc=0"),
+    ("roster+effort: a template with no scale has no list to open", ROSTE, [b"j", b" ", b"\t", b"\r"], "codex\nbase|rc=0"),
+    ("single+effort: enter is bare when nothing is pinned", PICKE, [b"\r"], "codex|rc=0"),
+    ("single+effort: → enter ↓ enter picks an effort, ← enter confirms", PICKE, [b"\x1b[C", b"\r", b"\x1b[B", b"\r", b"\x1b[D", b"\r"], "codex\tlow|rc=0"),
+    ("single+effort: the focus stays on the cell just set, so enter reopens its list", PICKE, [b"\x1b[C", b"\r", b"\x1b[B", b"\r", b"\r", b"\x1b[B", b"\r", b"\x1b[D", b"\r"], "codex\tmedium|rc=0"),
+    ("single+effort: ← returns to the template column", PICKE, [b"\t", b"\x1b[D", b"\r"], "codex|rc=0"),
+    ("single+effort: a pinned row opens on its pin", PICKE, [b"k", b"\r"], "claude\thigh|rc=0"),
+    ("single+effort: a number answers with that row's own cell", PICKE, [b"1"], "claude\thigh|rc=0"),
+    # The model cell. Its list is the harness's catalog; choosing one adds a THIRD
+    # field, and an unchosen effort between them is `-` (an empty tab field would
+    # fold away under bash's read), so readers split on tabs and drop the dash.
+    ("single+model: enter is bare when nothing is pinned", PICKM, [b"\r"], "codex|rc=0"),
+    ("single+model: → enter ↓ enter picks a model, ← enter confirms", PICKM, [b"\x1b[C", b"\r", b"\x1b[B", b"\r", b"\x1b[D", b"\r"], "codex\t-\tg-a|rc=0"),
+    ("single+model: → → is the effort column, past the model", PICKM, [b"\x1b[C", b"\x1b[C", b"\r", b"\x1b[B", b"\r", b"\x1b[D", b"\x1b[D", b"\r"], "codex\tlow|rc=0"),
+    ("single+model: both cells chosen come back as three fields", PICKM, [b"\t", b"\r", b"3", b"\t", b"\r", b"6", b"\x1b[D", b"\x1b[D", b"\r"], "codex\tultra\tg-c|rc=0"),
+    ("single+model: a pinned row opens on its pinned model and effort", PICKM, [b"k", b"\r"], "claude\thigh\tc-b|rc=0"),
+    ("single+model: esc inside the model list keeps the pin", PICKM, [b"k", b"\t", b"\r", b"j", b"\x1b", b"\x1b[D", b"\r"], "claude\thigh\tc-b|rc=0"),
+    ("single+model: ← from the effort column lands on the model column", PICKM, [b"\t", b"\t", b"\x1b[D", b"\r", b"2", b"\x1b[D", b"\r"], "codex\t-\tg-b|rc=0"),
+    ("roster+model: → enter ↓ enter picks a model, ← enter launches", ROSTM, [b"\x1b[C", b"\r", b"\x1b[B", b"\r", b"\x1b[D", b"\r"], "codex\t-\tg-a|rc=0"),
+    ("roster+model: s unfolds onto #1's model cell; each instance gets its own", ROSTM, [b"s", b"\r", b"\x1b[B", b"\r", b"\x1b[D", b"\r"], "codex\t-\tg-a\ncodex|rc=0"),
+    ("roster+model: on an instance row → past the model cell is its effort cell", ROSTM, [b"s", b"\t", b"\r", b"j", b"\r", b"\x1b[D", b"\x1b[D", b"\r"], "codex\tlow\ncodex|rc=0"),
+    ("roster+model: the count column is the fourth", ROSTM, [b"\t", b"\t", b"\t", b"+", b"\r"], "codex\ncodex|rc=0"),
+    ("roster+model: a template with no models has no model list to open", ROSTM, [b"j", b" ", b"\t", b"\r"], "codex\nbase|rc=0"),
+    # Tab walks every cell and then on to the next row, so one key visits the whole
+    # table; shift-tab (and ←) walk the same path backwards: off a row's first column
+    # onto the LAST cell of the row above, wrapping to the bottom.
+    ("single+model: tab past the last cell lands on the next row's template", PICKM, [b"\t", b"\t", b"\t", b"\r"], "base|rc=0"),
+    ("single+model: → past the last cell wraps the same way", PICKM, [b"\x1b[C", b"\x1b[C", b"\x1b[C", b"\r"], "base|rc=0"),
+    ("single+model: tab on a row with no cells is the next row", PICKM, [b"j", b"\t", b"\r"], "claude\thigh\tc-b|rc=0"),
+    ("roster+model: tab past the count cell is the next row; space ticks it there", ROSTM, [b"\t", b"\t", b"\t", b"\t", b" ", b"\r"], "codex\nbase|rc=0"),
+    ("roster+model: shift-tab off the template column is the row above's last cell (its count), then its effort", ROSTM, [b"\x1b[Z", b"\x1b[Z", b"\r", b"j", b"\r", b" ", b"\x1b[D", b"\x1b[D", b"\r"], "claude\txhigh\tc-b\ncodex|rc=0"),
+    ("single+model: shift-tab off the template column is the row above's effort cell", PICKM, [b"\x1b[Z", b"\r", b"j", b"\r", b"\x1b[D", b"\x1b[D", b"\r"], "claude\txhigh\tc-b|rc=0"),
+    ("single+model: shift-tab from the top row wraps to the bottom row", PICKM, [b"k", b"\x1b[Z", b"\r"], "base|rc=0"),
+    ("single+model: ← walks back the same way", PICKM, [b"\x1b[D", b"\x1b[D", b"\r", b"1", b"\x1b[D", b"\r"], "claude\thigh\tc-a|rc=0"),
+    ("roster+model: shift-tab back onto an unfolded row lands on the last instance's effort cell", ROSTM, [b"s", b"\t", b"\t", b"\t", b"\t", b"\t", b"\x1b[Z", b"\r", b"j", b"\r", b"\x1b[D", b"\x1b[D", b"\r"], "codex\ncodex\tlow|rc=0"),
+    # Centering (the popup) pads the frame; it must not change a single answer.
+    ("centered: the same keys give the same answer", PICKC, [b"\x1b[C", b"\r", b"\x1b[B", b"\r", b"\x1b[D", b"\r"], "codex\t-\tg-a|rc=0"),
+    ("centered: the slug screen still reads what was typed", SLUGC, [b"a", b"\r"], "a|rc=0"),
     ("slug: typed text comes back raw",          SLUG,
      [b"L", b"o", b"g", b"i", b"n", b" ", b"F", b"i", b"x", b"\r"], "Login Fix|rc=0"),
     ("slug: backspace deletes",                  SLUG, [b"a", b"b", b"\x7f", b"c", b"\r"], "ac|rc=0"),

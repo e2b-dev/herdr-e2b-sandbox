@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Run the existing dashboard in Herdr's floating terminal, preserving the layout.
+# Herdr's floating terminal as this plugin's surface: the dashboard, and the two
+# configuration screens (`e2b-box open`'s picker, the fleet's pickers). The overlay
+# is for looking and choosing, never for running (herdr discards its terminal
+# when it closes), so every mode ends by handing the work to a regular pane
+# (the popup is closed) or by becoming the board.
 set -uo pipefail
 SOURCE="${BASH_SOURCE[0]}"
 while [ -h "$SOURCE" ]; do
@@ -21,7 +25,62 @@ case "${1:-}" in
     export HERDR_PLUGIN_CONFIG_DIR="$CONFIG_DIR"
     export HERDR_PLUGIN_STATE_DIR="$STATE_DIR"
     export E2B_DASH_POPUP=1
-    exec "$DIR/e2b-dash" ;;
+    case "${E2B_POPUP_MODE:-dashboard}" in
+      pick-box|pick-fleet)
+        # A disposable popup can keep input unbuffered between reads. Otherwise
+        # a readiness check hides an arrow's trailing bytes until Enter arrives.
+        if [ -t 0 ]; then stty -icanon min 1 time 0 <&0 2>/dev/null || true; fi ;;
+    esac
+    # Which screen: bin/lib/pane.sh `pane_open_popup` set the mode and the worktree.
+    # e2b-box would cd to the plugin CONTEXT, which inside the popup is the popup's
+    # own pane, so the context is blanked and the cwd (already the worktree) rules.
+    case "${E2B_POPUP_MODE:-dashboard}" in
+      pick-box)
+        cd "${E2B_PICK_CWD:-$PWD}" 2>/dev/null || { echo "e2b-popup: no such worktree: ${E2B_PICK_CWD:-$PWD}" >&2; sleep 2; exit 1; }
+        export CHOOSER_CENTER=1 CHOOSER_ESCAPE_WAIT=0
+        source "$DIR/lib/picker-cache.sh"
+        picker_file=$(picker_cache_path)
+        # Known handoffs need no cached frame. Other decisions stay with pick_template.
+        if [ -z "${E2B_TEMPLATE:-}" ] && picker_cache_read "$picker_file" &&
+           [ ! -f "$BOXES_DIR/${PICKER_CACHE[2]}.json" ] && [ -n "${PICKER_CACHE[5]}" ] && [ -t 0 ]; then
+          source "$DIR/lib/chooser.sh"
+          out=$(picker_popup_box); rc=$?
+        else
+          out=$(HERDR_PLUGIN_CONTEXT_JSON= "$DIR/e2b-box" pick); rc=$?
+        fi
+        [ "$rc" -eq 2 ] && exit 0            # aborted: the popup closes, nothing was created
+        [ "$rc" -eq 0 ] || { echo "e2b-popup: e2b-box pick exited $rc" >&2; sleep 2; exit "$rc"; }
+        { IFS= read -r key; IFS= read -r answer; } <<EOF
+$out
+EOF
+        # `<template>[\t<effort>[\t<model>]]`, `-` for an effort left at default
+        IFS=$'\t' read -r tpl eff mdl <<EOF
+$answer
+EOF
+        [ "$eff" = "-" ] && eff=""
+        where=$(NODE=$(pane_node) && "$NODE" "$PLUGIN_DIR/src/resolve-dashboard.js" 2>/dev/null | jq -r '.popup_open // "below"' 2>/dev/null)
+        : "${where:=below}"
+        # The box opens in a regular pane under the pane the popup floats over; this
+        # process ending is what closes the popup.
+        exec "$DIR/e2b-box-open" ${E2B_DASH_ORIGIN_PANE:+--target-pane "$E2B_DASH_ORIGIN_PANE"} --placement "$where" \
+          --cwd "$PWD" --box "$key" ${tpl:+--template "$tpl"} ${eff:+--reasoning "$eff"} ${mdl:+--model "$mdl"} ;;
+      pick-fleet)
+        cd "${E2B_PICK_CWD:-$PWD}" 2>/dev/null || { echo "e2b-popup: no such worktree: ${E2B_PICK_CWD:-$PWD}" >&2; sleep 2; exit 1; }
+        export CHOOSER_CENTER=1 CHOOSER_ESCAPE_WAIT=0
+        # The pickers, then e2b-fleet execs the dashboard in this same terminal
+        # (E2B_DASH_POPUP is set, so it is the popup board, and E2B_DASH_ORIGIN_PANE
+        # says where Enter opens a member). Aborting a picker exits, closing the popup.
+        source "$DIR/lib/picker-cache.sh"
+        picker_file=$(picker_cache_path)
+        if picker_cache_read "$picker_file" && [ -n "${PICKER_CACHE[10]}" ] && [ -t 0 ]; then
+          source "$DIR/lib/chooser.sh"
+          picker_popup_fleet; rc=$?
+          [ "$rc" -ne 2 ] || exit 0
+          exit "$rc"
+        fi
+        exec "$DIR/e2b-box" fleet ;;
+      *) exec "$DIR/e2b-dash" ;;
+    esac ;;
   -h|--help|help)
     cat <<'USAGE'
 e2b-popup — the E2B dashboard floating over your Herdr panes
@@ -29,7 +88,11 @@ e2b-popup — the E2B dashboard floating over your Herdr panes
 usage
   e2b-popup                  open the dashboard popup
   e2b-box popup              the same popup through the main CLI
-  e2b-popup --render         draw inside an existing popup terminal
+  e2b-popup --render         draw inside an existing popup terminal; E2B_POPUP_MODE
+                             picks the screen: dashboard (default), pick-box (the
+                             `open` action's template · model · effort picker, then
+                             the box opens in a pane below and the popup closes),
+                             pick-fleet (the fleet pickers, then the board)
 
 The same UI and controls as e2b-dash, at 90% width and 85% height.
 Enter opens the selected box in a regular pane and closes the popup: a split
@@ -62,7 +125,4 @@ if [ "${origin:--}" = "-" ]; then
 $(pane_query "$HERDR" "$NODE" "")
 EOF
 fi
-env_args=(--env E2B_DASH_POPUP=1)
-[ "${origin:--}" = "-" ] || env_args+=(--env "E2B_DASH_ORIGIN_PANE=$origin")
-"$HERDR" plugin pane open --plugin e2b-dev.herdr-e2b --entrypoint popup \
-  --placement popup --width 90% --height 85% "${env_args[@]}" >/dev/null
+pane_open_popup dashboard "" "$origin"

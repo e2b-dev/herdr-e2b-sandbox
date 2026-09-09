@@ -69,6 +69,7 @@ done
 DIR="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
 source "$DIR/lib/paths.sh"
 source "$DIR/lib/pane.sh"     # pane_herdr / pane_node — the herdr binary and a node
+source "$DIR/lib/picker-cache.sh"
 source "$DIR/lib/chooser.sh"  # ask_slug_tty / ask_roster_tty — the two picker screens
 
 # The herdr release that added `herdr worktree list/create/open/remove` and the
@@ -121,12 +122,22 @@ $FLEET_CLI — fan this checkout out into a fleet of boxes
 create
   $FLEET_CLI t-21 --agents claude,codex --task "fix the login redirect loop"
   $FLEET_CLI t-21 --all --task "…"        every agent your config knows
+  $FLEET_CLI create --file fleet.json     a generated or saved JSON fleet
+  $FLEET_CLI t-21 --preset compare        reuse presets/compare.json
+  $FLEET_CLI presets                     list names beside config.toml
 
   -a, --agents LIST           the roster: comma-separated, or 'all'
       --all                   the whole roster; same as --agents all
-  -t, --template NAME         one member; repeat the flag for more
+  -t, --template SPEC         one member; repeat the flag for more. A SPEC is
+                              NAME[:MODEL][*N][@EFFORT]: 'codex*3@ultra' is three
+                              codex members thinking at ultra, 'grok@xhigh' one
+                              grok, 'claude:claude-opus-5*2' two claudes on Opus 5
   -s, --slug NAME             the slug, as a flag instead of the first word
       --task TEXT             one instruction, handed to every member's agent
+      --file PATH             JSON {slug?, task?, members: [{template, model?,
+                              reasoning?, count?}]}; '-' reads stdin
+      --preset NAME           read presets/NAME.json beside config.toml
+                              CLI slug/task/roster override the saved values
   -n, --dry-run               print every call this would make, create nothing
   -f, --force                 allow a roster name your config never mentions
       --no-dashboard          stay here with an exit code instead of becoming
@@ -159,7 +170,7 @@ USAGE
 # where it lives is the whole answer, and saves reading anything else.
 fleet_flag_home() {
   case "$1" in
-    --agents|-a|--all|--task|--slug|-s|--template|--no-dashboard) echo create ;;
+    --agents|-a|--all|--task|--slug|-s|--template|--no-dashboard|--file|--preset) echo create ;;
     --prune-branches) echo kill ;;
     *) echo "" ;;
   esac
@@ -489,6 +500,11 @@ fi
 # the pair someone reaches for is boot-and-teardown, and having only one half
 # spelled the familiar way is what sends people to --help for a verb they had
 # already guessed correctly.
+if [ "${1:-}" = presets ]; then
+  [ $# -eq 1 ] || { echo "$FLEET_CLI presets takes no arguments" >&2; exit 2; }
+  NODE=$(pane_node) || exit 1
+  exec "$NODE" "$PLUGIN_DIR/src/fleet-spec.js" --list
+fi
 if [ "${1:-}" = create ] || [ "${1:-}" = up ]; then fleet_verb=create; shift; fi
 # Bare `fleet --help` was not asked about a subcommand, so it gets both halves;
 # `fleet create --help` gets the half it named.
@@ -498,6 +514,8 @@ if [ "${1:-}" = create ] || [ "${1:-}" = up ]; then fleet_verb=create; shift; fi
 slug=""
 templates=()
 fleet_task=""
+task_given=0
+spec_mode=""; spec_source=""
 dry=0
 dash=0
 no_dash=0
@@ -544,8 +562,17 @@ while [ $# -gt 0 ]; do
     # it are the shell's problem at the call site and nobody's after that.
     --task)
       [ $# -ge 2 ] || { echo "$FLEET_CLI: $1 needs the task text" >&2; exit 2; }
-      fleet_task="$2"; shift 2 ;;
-    --task=*) fleet_task="${1#*=}"; shift ;;
+      fleet_task="$2"; task_given=1; shift 2 ;;
+    --task=*) fleet_task="${1#*=}"; task_given=1; shift ;;
+    --file|--preset|--file=*|--preset=*)
+      [ -z "$spec_mode" ] || { echo "$FLEET_CLI: use one --file or --preset" >&2; exit 2; }
+      spec_mode="${1%%=*}"
+      case "$1" in
+        *=*) spec_source="${1#*=}"; shift ;;
+        *) [ $# -ge 2 ] || { echo "$FLEET_CLI: $1 needs a value" >&2; exit 2; }
+           spec_source="$2"; shift 2 ;;
+      esac
+      [ -n "$spec_source" ] || { echo "$FLEET_CLI: $spec_mode needs a value" >&2; exit 2; } ;;
     --agents|-a)
       [ $# -ge 2 ] || { echo "$FLEET_CLI: $1 needs a comma-separated list of agents, or 'all'" >&2; exit 2; }
       # A flag where the list should be means the list was left out — and getopt
@@ -624,6 +651,15 @@ dirty_note=""
 # the interpreter once. It is NOT resolved before the git check: "you are not in
 # a repo" is the more useful thing to hear first.
 NODE=$(pane_node) || { echo "$FLEET_CLI: can't find node — set HERDR_E2B_NODE=/path/to/node" >&2; exit 1; }
+
+if [ -n "$spec_mode" ]; then
+  saved=$("$NODE" "$PLUGIN_DIR/src/fleet-spec.js" "$spec_mode" "$spec_source") || exit 2
+  [ -n "$slug" ] || slug=$(printf '%s' "$saved" | jq -r '.slug')
+  if [ "$task_given" -eq 0 ]; then fleet_task=$(printf '%s' "$saved" | jq -r '.task'); fi
+  if [ ${#templates[@]} -eq 0 ] && [ "$want_all" -eq 0 ]; then
+    while IFS= read -r t; do templates+=("$t"); done < <(printf '%s' "$saved" | jq -r '.specs[]')
+  fi
+fi
 
 # Does this text survive ref sanitizing? src/fleet-name.js owns that rule and
 # ADR-0001 makes it load-bearing, so ask IT rather than re-deriving the regex in
@@ -717,6 +753,24 @@ EOF
   }
 fi
 
+# Both the cold picker and the popup refresh use these same resolved arguments.
+fleet_picker_input() {
+  choices=$(fleet_template_choices) || {
+    echo "$FLEET_CLI: couldn't read the template list: is the plugin installed (npm deps)?" >&2; return 1
+  }
+  n_choices=$(printf '%s\n' "$choices" | grep -c '[^[:space:]]' || true)
+  [ "$n_choices" -gt 0 ] || { echo "$FLEET_CLI: no templates configured: set [sandbox] templates and try again." >&2; return 1; }
+  default_roster=$(fleet_default_roster)
+  efforts=$("$NODE" "$PLUGIN_DIR/src/effort-cli.js" --fleet 2>/dev/null) || efforts=""
+  if [ -n "${E2B_PICKER_INPUT:-}" ]; then
+    picker_cache_write fleet "$dirty_note" "$choices" "$n_choices" "$default_roster" "$efforts"
+  else
+    picker_cache_write fleet "$dirty_note" "$choices" "$n_choices" "$default_roster" "$efforts" >/dev/null 2>&1 &
+    picker_cache_job=$!
+  fi
+}
+if [ -n "${E2B_PICKER_INPUT:-}" ]; then fleet_picker_input; exit $?; fi
+
 # --- the two picker screens --------------------------------------------------
 # Only with a human present. Scripts, CI and the dashboard get the refusals they
 # have always got — a verb that blocks on a menu when nobody is looking is worse
@@ -724,6 +778,7 @@ fi
 interactive=0
 { [ -t 0 ] && [ -t 1 ]; } && interactive=1
 dirty_shown=0
+[ "${E2B_PICKER_DIRTY_NOTE:-}" != "$dirty_note" ] || dirty_shown=1
 
 if [ -z "$slug" ] || [ ${#templates[@]} -eq 0 ]; then
   if [ "$interactive" -eq 0 ]; then
@@ -756,20 +811,25 @@ if [ -z "$slug" ] || [ ${#templates[@]} -eq 0 ]; then
 
   # Screen two: the roster, with `[fleet] default_roster` pre-ticked.
   if [ ${#templates[@]} -eq 0 ]; then
-    choices=$(fleet_template_choices) || {
-      echo "$FLEET_CLI: couldn't read the template list — is the plugin installed (npm deps)?" >&2; exit 1
-    }
-    n_choices=$(printf '%s\n' "$choices" | grep -c '[^[:space:]]' || true)
-    [ "$n_choices" -gt 0 ] || {
-      echo "$FLEET_CLI: no templates configured — set [sandbox] templates and try again." >&2; exit 1
-    }
-    picked=$(ask_roster_tty "$slug" "$choices" "$n_choices" "$(fleet_default_roster)"); rc=$?
+    fleet_picker_input || exit 1
+    picked=$(ask_roster_tty "$slug" "$choices" "$n_choices" "$default_roster" "$efforts" "" "$(picker_preset_names)" picker_preset_rows); rc=$?
+    wait "$picker_cache_job" || true
     case "$rc" in
       0) ;;
       2) echo "$FLEET_CLI: aborted at the roster — nothing was created." >&2; exit 130 ;;
       *) echo "$FLEET_CLI: no terminal to ask on — use: $FLEET_CLI create <slug> -t <template>" >&2; exit 2 ;;
     esac
-    while IFS= read -r t; do [ -n "$t" ] && templates+=("$t"); done <<EOF
+    # The table answers one `<template>[\t<effort>[\t<model>]]` line per member;
+    # each becomes a spec, so the picker and `-t codex:gpt-5.5@ultra` meet in
+    # src/fleet-name.js.
+    while IFS=$'\t' read -r t e m; do
+      if [ "$t" = @preset ]; then
+        saved=$("$NODE" "$PLUGIN_DIR/src/fleet-spec.js" --preset "$e") || exit 2
+        if [ "$task_given" -eq 0 ] && [ -z "$fleet_task" ]; then fleet_task=$(printf '%s' "$saved" | jq -r '.task'); fi
+        continue
+      fi
+      [ "$e" = "-" ] && e=""; [ -n "$t" ] && templates+=("$t${m:+:$m}${e:+@$e}")
+    done <<EOF
 $picked
 EOF
     # ask_roster_tty cannot return an empty roster, but a launch off an empty one
@@ -796,17 +856,9 @@ if [ "$interactive" -eq 1 ] && [ "$no_dash" -eq 0 ]; then dash=1; fi
 # --- the roster --------------------------------------------------------------
 # A template appears in a roster at most once (CONTEXT.md): repeated -t collapses
 # to one member, keeping first-seen order so the plan is stable to assert against.
-uniq_templates=()
-seen=$'\n'
-for t in "${templates[@]}"; do
-  case "$seen" in *$'\n'"$t"$'\n'*) continue ;; esac
-  seen="$seen$t"$'\n'
-  uniq_templates+=("$t")
-done
-dropped=$(( ${#templates[@]} - ${#uniq_templates[@]} ))
-[ "$dropped" -gt 0 ] && \
-  echo "$FLEET_CLI: a template gets at most one member — collapsed $dropped duplicate(s)." >&2
-templates=("${uniq_templates[@]}")
+# A repeated template is MORE MEMBERS of it: `-t codex -t codex` and `-t codex*2`
+# are the same roster. src/fleet-name.js numbers the labels (t-21-codex-2) and
+# gives every instance its own branch.
 
 # --- the roster is spell-checked ---------------------------------------------
 # A name nobody configured used to plan perfectly and fail minutes later, when its
@@ -823,7 +875,8 @@ if [ "$force" -eq 0 ]; then
   if [ -n "$known" ]; then
     unknown=()
     for t in "${templates[@]}"; do
-      case $'\n'"$known"$'\n' in *$'\n'"$t"$'\n'*) ;; *) unknown+=("$t") ;; esac
+      name="${t%%[:*@]*}"   # the template half of a NAME[:MODEL][*N][@EFFORT] spec
+      case $'\n'"$known"$'\n' in *$'\n'"$name"$'\n'*) ;; *) unknown+=("$name") ;; esac
     done
     if [ ${#unknown[@]} -gt 0 ]; then
       for t in "${unknown[@]}"; do echo "$FLEET_CLI: no template named '$t'" >&2; done
@@ -1115,12 +1168,14 @@ if [ "$dry" -eq 1 ]; then
   # Print the exact orchestration, then stop. This is the seam the CLI tests
   # assert against: no herdr, no E2B, nothing created. The pane id is the one
   # thing that can't be known in advance — it comes from herdr's own response.
-  while IFS=$'\t' read -r template branch label; do
+  while IFS=$'\t' read -r template branch label effort model; do
     [ -n "$template" ] || continue
+    # `-` is the plan's spelling of "none" (an empty tab field would fold away)
+    [ "$effort" = "-" ] && effort=""; [ "$model" = "-" ] && model=""
     printf '  member %s\n' "$label"
     set_wt_argv "$branch" "$label"
     printf '    herdr %s\n' "${wt_argv[*]}"
-    printf '    herdr pane run <root pane of the new workspace> %s open -t %s\n' "$BOX_CLI" "$template"
+    printf '    herdr pane run <root pane of the new workspace> %s open -t %s%s%s\n' "$BOX_CLI" "$template" "${effort:+ --reasoning $effort}" "${model:+ --model $model}"
     # The auto-start, built from the same two builders the spawn uses, so the
     # plan can only ever be wrong about the pane id — which nothing can know yet.
     agent_cmd=$(fleet_agent_cmd "$template")
@@ -1373,10 +1428,49 @@ task_undelivered() { # $1 = why, $2 = where the task can still be typed
 # --- spawn -------------------------------------------------------------------
 # One member: herdr creates the worktree (unfocused, no --path so the user's
 # [worktrees] directory decides where it lands), and the box boots in the pane
+# --- pending rows on the board ------------------------------------------------------
+# The board reads $BOXES_DIR/*.json and nothing else, and a member has no record
+# until `e2b-box open` runs in its pane, which is after its worktree and workspace
+# exist: for those seconds a fleet that is very much happening shows an empty board.
+# So every member gets a PLACEHOLDER record the moment the plan is final: status
+# `pending`, the step it is at, keyed `<label>-pending` because there is no worktree
+# yet to key it by. The dashboard draws it and refuses every verb on it but kill.
+# It goes when the member's own record lands (a waiter watches for it), when the
+# member fails (its report says why), and no later than 60s after its pane was asked
+# to boot, so a placeholder cannot outlive the fleet that made it.
+pending_key() { printf '%s-pending' "$1"; }
+pending_write() { # $1 label, $2 template, $3 branch, $4 step, [$5 worktree path]
+  mkdir -p "$BOXES_DIR" 2>/dev/null || return 0
+  jq -cn --arg k "$(pending_key "$1")" --arg l "$1" --arg t "$2" --arg b "$3" --arg s "$4" --arg w "${5:-}" --arg f "${fleet_slug:-}" \
+    '{key:$k, label:$l, template:$t, branch:$b, status:"pending", step:$s, worktreePath:$w, fleet:$f}' \
+    > "$BOXES_DIR/$(pending_key "$1").json" 2>/dev/null || true
+}
+pending_clear() { rm -f "$BOXES_DIR/$(pending_key "$1").json"; }
+pending_retire() { # $1 label, $2 worktree path: clear once the real record exists, 60s at most
+  local real; real=$(box_key "$2")
+  # An exec'd child, not a `( … ) &` subshell: this runs inside spawn_member, itself
+  # inside a `$(…)` in run_members, and a forked subshell keeps bash's saved copies
+  # of those pipes open for its whole life, so every caller up the chain would sit
+  # through the full 60s. exec closes them (they are close-on-exec); a fleet of ten
+  # in the test suite went from ten minutes to seconds on this line.
+  nohup bash -c 'for _ in $(seq 1 60); do [ -f "$1" ] && break; sleep 1; done; rm -f "$2"' _ \
+    "$BOXES_DIR/$real.json" "$BOXES_DIR/$(pending_key "$1").json" </dev/null >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+}
+pending_all() { # one placeholder per member of the plan, before anything is created
+  local t br l e m
+  while IFS=$'\t' read -r t br l e m; do
+    [ -n "$t" ] || continue
+    pending_write "$l" "$t" "$br" "creating worktree on $br"
+  done <<EOF
+$members
+EOF
+}
+
 # that new workspace was born with. Ids are READ from herdr's responses, never
 # predicted.
 spawn_member() {
-  local template="$1" branch="$2" label="$3" resp err ws pane first_err
+  local template="$1" branch="$2" label="$3" effort="${4:-}" model="${5:-}" resp err ws pane first_err
   # Our own workspace as the source, then the repo-key form once if herdr would
   # not take it — a pane inside a linked worktree is the case it rejects. The
   # FIRST reason is the one reported: if the retry also fails it is usually
@@ -1386,6 +1480,7 @@ spawn_member() {
     first_err="$wt_create_err"
     if [ -z "${HERDR_WORKSPACE_ID:-}" ] || ! wt_create_try "$branch" "$label" cwd; then
       printf '  ✗ %s — %s\n' "$label" "$first_err" >&2
+      pending_clear "$label"
       return 1
     fi
   fi
@@ -1404,6 +1499,7 @@ spawn_member() {
   # Before anything opens a shell in it — the box's own pane is the first one, and
   # an untrusted mise config greets it there.
   mise_trust "$wt_path"
+  pending_write "$label" "$template" "$branch" "worktree ready, starting its box" "$wt_path"
 
   # The create response carries the root pane; asking the new workspace for its
   # panes is the fallback for a herdr that answers without one.
@@ -1412,14 +1508,16 @@ spawn_member() {
   fi
   [ -n "$pane" ] || {
     printf '  ✗ %s — worktree created on %s, but herdr reported no pane to boot its box in\n' "$label" "$branch" >&2
+    pending_clear "$label"
     return 1
   }
 
   # The box goes in that ordinary pane — not the plugin's zoomed entrypoint — so
   # exiting the sandbox shell drops you at a prompt in the member's checkout
   # rather than in plugin-owned furniture.
-  resp=$("$HERDR" pane run "$pane" "$BOX_CLI" open -t "$template" 2>/dev/null) || {
+  resp=$("$HERDR" pane run "$pane" "$BOX_CLI" open -t "$template" ${effort:+--reasoning "$effort"} ${model:+--model "$model"} 2>/dev/null) || {
     printf '  ✗ %s — worktree created on %s, but the box did not start in pane %s\n' "$label" "$branch" "$pane" >&2
+    pending_clear "$label"
     return 1
   }
   # Same check as the worktree call: herdr can report a refusal in the response
@@ -1427,8 +1525,12 @@ spawn_member() {
   err=$(printf '%s' "$resp" | jq -r '.error.message // empty' 2>/dev/null)
   [ -z "$err" ] || {
     printf '  ✗ %s — worktree created on %s, but herdr refused to run the box: %s\n' "$label" "$branch" "$err" >&2
+    pending_clear "$label"
     return 1
   }
+  # The pane's own `e2b-box open` writes the real record within seconds; the
+  # placeholder leaves when it does.
+  pending_retire "$label" "$wt_path"
   printf '  ✓ %s — %s → pane %s, box booting from %s\n' "$label" "$branch" "$pane" "$template"
 
   # --- the member's agent ------------------------------------------------------
@@ -1565,11 +1667,13 @@ run_members() {
   trap 'rm -rf "$resdir"' EXIT
 
   idx=0
-  while IFS=$'\t' read -r template branch label; do
+  while IFS=$'\t' read -r template branch label effort model; do
     [ -n "$template" ] || continue
+    # `-` is the plan's spelling of "none" (an empty tab field would fold away)
+    [ "$effort" = "-" ] && effort=""; [ "$model" = "-" ] && model=""
     idx=$((idx + 1))
     (
-      out=$(spawn_member "$template" "$branch" "$label" 2>&1); mrc=$?
+      out=$(spawn_member "$template" "$branch" "$label" "$effort" "$model" 2>&1); mrc=$?
       printf '%s\n%s\n' "$mrc" "$out" >"$resdir/$idx"
     ) &
   done <<EOF
@@ -1624,6 +1728,7 @@ if [ "$dash" -eq 1 ]; then
   # Detached from this shell's terminal, and deaf to the HUP that arrives when the
   # board is closed: killing the board must not orphan a half-created member.
   # Nothing here writes to the pane — the board owns it from the exec below.
+  pending_all
   (
     trap '' HUP
     printf -- '--- %s: fleet %s ---\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$fleet_slug"
@@ -1640,5 +1745,6 @@ if [ "$dash" -eq 1 ]; then
   exec "$DASH_CLI"
 fi
 
+pending_all
 run_members
 exit "$?"

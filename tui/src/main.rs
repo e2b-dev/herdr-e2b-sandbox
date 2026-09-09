@@ -717,6 +717,20 @@ fn main() -> std::io::Result<()> {
         }
 
         if let Some((label, key, verb, wt)) = app.run.take() {
+            // A fleet member that has no box yet: e2b-fleet writes a `pending`
+            // placeholder so the board shows the member while its worktree and
+            // pane come up. Nothing but kill (which just clears it) is meaningful
+            // on one, and `open` on it would boot a second box beside the pane's.
+            if verb != "kill"
+                && app
+                    .boxes
+                    .iter()
+                    .any(|b| b.key == key && b.status == "pending")
+            {
+                app.msg =
+                    format!("{label} is still being created: its box will appear here in a moment");
+                continue;
+            }
             // kill/status/pause/resume target the box by KEY (no worktree needed).
             // Everything else operates ON the worktree, so it MUST exist — never
             // fall back to the current dir (that would provision/sync the wrong folder).

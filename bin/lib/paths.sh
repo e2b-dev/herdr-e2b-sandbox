@@ -9,6 +9,11 @@ STATE_DIR="${HERDR_PLUGIN_STATE_DIR:-${HERDR_E2B_STATE_DIR:-${XDG_STATE_HOME:-$H
 # Keep IN SYNC with src/config.js and install.sh.
 CONFIG_DIR="${HERDR_PLUGIN_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins/config/e2b-dev.herdr-e2b}"
 BOXES_DIR="$STATE_DIR/boxes"
+PICKERS_DIR="$STATE_DIR/pickers"
+# Cwd is the identity, as for box records. Prefixing each component keeps a
+# checkout named "input" from colliding with its parent's cache file, and lets
+# the popup locate its input with bash alone, before hashing or starting Node.
+picker_cache_path() { local prefix="/d-"; printf '%s%s/input' "$PICKERS_DIR" "${PWD//\//$prefix}"; }
 mkdir -p "$BOXES_DIR" 2>/dev/null || true
 
 # The plugin's version, read from the manifest so `--version` on any binary and
