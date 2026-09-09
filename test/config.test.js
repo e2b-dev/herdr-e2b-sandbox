@@ -608,7 +608,7 @@ test("resolveFleet: every shipped agent starts unattended", () => {
   assert.equal(agents.claude, "claude --dangerously-skip-permissions")
   assert.equal(agents.codex, "codex --dangerously-bypass-approvals-and-sandbox")
   assert.equal(agents.grok, "grok --always-approve")
-  assert.equal(agents.amp, "amp --dangerously-allow-all")
+  assert.equal(agents.amp, 'amp --dangerously-allow-all ${HERDR_E2B_REASONING:+--mode "$HERDR_E2B_REASONING"}')
   assert.equal(agents.muse, "muse --yolo")
   // Trailing `--prompt` is load-bearing: the fleet appends its task positionally,
   // and opencode's positional is a project DIRECTORY, not a prompt.
@@ -644,7 +644,7 @@ test("resolveFleet: an empty command still switches a shipped default off", () =
   // "plain shell, no agent" is what a control arm needs, so it has to beat a default.
   const { agents } = resolveFleet({ agents: { claude: "" } })
   assert.equal(agents.claude, "")
-  assert.equal(agents.amp, "amp --dangerously-allow-all")
+  assert.equal(agents.amp, 'amp --dangerously-allow-all ${HERDR_E2B_REASONING:+--mode "$HERDR_E2B_REASONING"}')
 })
 
 test("resolveEnv: amp gets the welcome-splash skip, and a user can still override it", () => {

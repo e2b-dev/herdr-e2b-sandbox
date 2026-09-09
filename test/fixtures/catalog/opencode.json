@@ -1,0 +1,13 @@
+{
+  "harness": "opencode",
+  "version": "1.18.18",
+  "probedFrom": "box",
+  "capturedAt": "2026-09-09T12:26:09.733Z",
+  "probes": {
+    "version": {
+      "stdout": "1.18.18\n",
+      "stderr": "",
+      "status": 0
+    }
+  }
+}

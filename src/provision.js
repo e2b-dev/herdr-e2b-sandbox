@@ -27,6 +27,7 @@ import {
 } from "./config.js"
 import { seedCommand } from "./fleet-seed.js"
 import { pinCommand } from "./model-pin.js"
+import { effortScale, effortsForModel, harnessHint, modelCatalog } from "./effort.js"
 import { selectConnection } from "./connections.js"
 import {
   requireApiKey,
@@ -165,6 +166,35 @@ async function main() {
     // An explicit choice (`e2b-box open --template …`, the picker, E2B_TEMPLATE)
     // beats the per-branch rules; without one, the rules and default decide.
     const template = input.template || resolveTemplate(branch, cfg)
+    // A per-box model or effort (`e2b-box open --model … --reasoning xhigh`, the
+    // pickers' two cells) overrides `[templates.<name>]` for THIS box only: it is
+    // folded into the pin before resolveEnv and pinCommand read it, so both routes
+    // see one value. Checked against the catalog (src/harness-catalog.generated.js)
+    // first, because the harnesses do not: a wrong model dies on the first turn,
+    // and droid takes any of its effort words and silently runs the model's
+    // default. The check is per MODEL where the catalog knows one, since grok-4.5
+    // has no `xhigh` while grok-4.6 does.
+    if (input.model || input.reasoning) {
+      const pinned = cfg.templateModels?.[template] || {}
+      const model = input.model || pinned.model || ""
+      if (input.model) {
+        const catalog = modelCatalog(template, cfg)
+        if (catalog && !catalog.models.some((m) => m.id === input.model)) {
+          const some = catalog.models.slice(0, 3).map((m) => m.id).join(", ")
+          throw new Error(`'${input.model}' is not a model ${template} lists (${catalog.models.length} in its catalog, e.g. ${some}; from ${catalog.from})`)
+        }
+      }
+      if (input.reasoning) {
+        const accepts = effortsForModel(template, model, cfg)
+        if (accepts && !accepts.includes(input.reasoning)) {
+          throw new Error(`'${input.reasoning}' is not an effort ${template}${model ? ` on ${model}` : ""} accepts (${accepts.join(" | ")})`)
+        }
+      }
+      cfg.templateModels = {
+        ...cfg.templateModels,
+        [template]: { ...pinned, ...(input.model ? { model: input.model } : {}), ...(input.reasoning ? { reasoning: input.reasoning } : {}) },
+      }
+    }
     const connection = selectConnection(cfg, template)
     connectionHarness = connection?.harness || null
     const createEnv = resolveEnv(cfg, template, process.env)
@@ -247,6 +277,8 @@ async function main() {
     await writeRecord(key, {
       sandboxId: sandbox.sandboxId,
       template: usedTemplate,
+      ...(input.reasoning ? { reasoning: input.reasoning } : {}),
+      ...(input.model ? { model: input.model } : {}),
       connectionId: connection?.id || null,
       connectionRevision: connection?.revision || null,
       connectionHarness,
@@ -354,7 +386,7 @@ async function main() {
   // arrive as HERDR_E2B_MODEL / HERDR_E2B_REASONING in the box's environment (set at
   // create time by resolveEnv), so this command carries no value and does nothing on
   // a box created before the pin was configured. Best-effort like the seed.
-  const pin = pinCommand(boxTemplate, cfg.templateModels?.[boxTemplate])
+  const pin = pinCommand(boxTemplate, cfg.templateModels?.[boxTemplate], harnessHint(boxTemplate, cfg) ?? boxTemplate)
   if (pin) {
     await sandbox.files.write("/home/user/.herdr-e2b-model.sh", `${pin}\n`)
     await sandbox.commands

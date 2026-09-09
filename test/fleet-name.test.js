@@ -5,7 +5,7 @@
 // fleets.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { sanitizeSlug, memberBranch, memberLabel, memberLabels, templateSlug, randomSuffix, SLUG_MAX } from "../src/fleet-name.js"
+import { sanitizeSlug, memberBranch, memberLabel, memberLabels, templateSlug, randomSuffix, SLUG_MAX, expandMemberSpec, expandMemberSpecs } from "../src/fleet-name.js"
 
 test("sanitizeSlug: lowercases and turns spaces into a single separator", () => {
   assert.equal(sanitizeSlug("Login Fix"), "login-fix")
@@ -151,4 +151,35 @@ test("memberLabels: two templates that collapse to one label are refused, both n
 
 test("memberLabels: a bare name colliding with a namespaced one is still a collision", () => {
   assert.throws(() => memberLabels("x", ["amp", "ondrejs-project/amp"]), /amp/)
+})
+
+// ── instances and member specs ────────────────────────────────────────────────
+
+test("memberLabels: the same template twice is two numbered instances, not a collision", () => {
+  assert.deepEqual(memberLabels("t-21", ["codex", "codex", "grok", "codex"]), ["t-21-codex", "t-21-codex-2", "t-21-grok", "t-21-codex-3"])
+})
+
+test("expandMemberSpec: template, :model, *N, @effort, and all of them", () => {
+  assert.deepEqual(expandMemberSpec("codex"), [{ template: "codex", effort: "", model: "" }])
+  assert.deepEqual(expandMemberSpec("grok@xhigh"), [{ template: "grok", effort: "xhigh", model: "" }])
+  assert.deepEqual(expandMemberSpec("codex*3@ultra"), Array(3).fill({ template: "codex", effort: "ultra", model: "" }))
+  assert.deepEqual(expandMemberSpec(" ondrejs-project/drew-claude*2 "), Array(2).fill({ template: "ondrejs-project/drew-claude", effort: "", model: "" }))
+  // A model id keeps its slashes and dots; the template keeps its project prefix.
+  assert.deepEqual(expandMemberSpec("claude:claude-opus-5"), [{ template: "claude", effort: "", model: "claude-opus-5" }])
+  assert.deepEqual(expandMemberSpec("prime:prime-inference/anthropic/claude-fable-5@high"), [
+    { template: "prime", effort: "high", model: "prime-inference/anthropic/claude-fable-5" },
+  ])
+  assert.deepEqual(expandMemberSpec("ondrejs-project/codex:gpt-5.5*2@xhigh"), Array(2).fill({ template: "ondrejs-project/codex", effort: "xhigh", model: "gpt-5.5" }))
+  assert.throws(() => expandMemberSpec("codex*0"), /1\.\.20/)
+  assert.throws(() => expandMemberSpec("codex*21"), /1\.\.20/)
+  assert.throws(() => expandMemberSpec("*3"), /names no template/)
+  assert.throws(() => expandMemberSpec(":gpt-5.5"), /names no template/)
+  assert.deepEqual(expandMemberSpecs(["codex*2", "grok@high"]).map((m) => m.template), ["codex", "codex", "grok"])
+})
+
+test("memberBranch: a numbered instance label keeps two instances on two branches under one pinned suffix", () => {
+  const a = memberBranch("t-21", "codex", { rand: "ab12", label: "t-21-codex" })
+  const b = memberBranch("t-21", "codex", { rand: "ab12", label: "t-21-codex-2" })
+  assert.equal(a, "e2b/t-21-codex-ab12")
+  assert.equal(b, "e2b/t-21-codex-2-ab12")
 })

@@ -28,6 +28,17 @@ layers, the data flow, the state model, and the invariants worth checking).
   `auth.toml` reader and the loader test that proves a box boots from it, which
   writes a fixture under the OS temp dir and spawns one child `node` — never the
   developer's own config.
+- `test/catalog.test.js`: the harness catalog (`interpretCatalog`) from
+  `test/fixtures/catalog/`, output captured off the CLI in each E2B template, and the
+  guard that `src/harness-catalog.generated.js` and the `<catalog>` block in
+  `config/config.example.toml` are exactly what those fixtures render to. When it
+  fails after a parse-rule change, rerun
+  `node scripts/harness-catalog.mjs --from=fixture --write`; when the WORLD changed
+  (a template rebuilt with a newer CLI, a new model), `npm run catalog -- --write`
+  boots one throwaway sandbox per template, re-reads every row and refreshes all three
+  (see `docs/adr/0016`). `--check` (the default) exits 2 on drift and writes nothing;
+  a probe that fails keeps the committed row and marks it stale rather than blanking
+  it. Run it before a release; `.claude/skills/release` does.
 - `test/cli.test.sh` — `bash -n` / `node --check` lint across the scripts, plus
   offline `e2b-box` behavior (the `no sandbox tracked` messages and the
   non-interactive `pull` abort-without-clobber path). The template picker's auth
