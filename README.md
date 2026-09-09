@@ -72,6 +72,9 @@ For a named connection you explicitly choose for new boxes:
 ```sh
 e2b-box auth connect claude --name work     # browser approval, token captured privately
 e2b-box auth connect codex                  # borrow your local subscription session
+e2b-box auth connect muse                   # sign in with Meta; the Muse API key it mints is stored
+e2b-box auth connect amp                    # opens amp's Security page; paste its access token, stored privately
+e2b-box auth connect codex --oauth          # a second ChatGPT login owned by the plugin (ADR 0015)
 e2b-box auth list
 e2b-box auth explain --template claude
 e2b-box up -t claude --connection work
@@ -230,7 +233,7 @@ Three things follow from a fleet member being unattended:
   `[fleet.agents]`; `""` means "plain shell, start nothing".
 - **First-run state is seeded** just before the agent is typed, so a member
   arrives at a prompt instead of a welcome wizard — `~/.claude.json`,
-  `~/.codex/auth.json`, droid's trusted folders, opencode's autoupdate. The
+  `~/.codex/auth.json`, droid's trusted folders and default autonomy, opencode's autoupdate. The
   command sent to the pane names the **variable**, never its value, so nothing
   secret lands in the scrollback. Shipped for `claude`, `codex`, `droid` and
   `opencode`; add your own with `[fleet.seed]`.
@@ -245,18 +248,43 @@ either, you get the chooser:
 ```
   E2B template for my-worktree
 
-   ▸ [1] muse                     default
-     [2] claude
-     [3] codex
-     [4] opencode
-     [5] amp
-     [6] grok
-     [7] droid
-     [8] prime
+   ▸ [1] muse                      high         default
+     [2] claude                    high
+     [3] codex                     ultra
+     [4] opencode                  default      (pick in opencode's UI)
+     [5] amp                       ultra
+     [6] grok                      xhigh
+     [7] droid                     max
+     [8] prime                     max
      [9] base
 
-  ↑/↓ · j/k move   enter confirm   number jumps   t type a name   q default
+  ↑/↓ move   →/tab effort column   enter confirm (on the effort cell: its list)   number jumps   t type a name   q/esc abort
 ```
+
+The next two cells are **which model that box's agent runs** and **how hard it
+thinks**, both in the harness's own words: `src/effort.js` reads the model list and
+the effort scale off `src/harness-catalog.generated.js`, which
+`npm run catalog -- --write` reads off the CLI in each template. Focus is a cell:
+→/tab moves it onto the model column, then the effort column; enter on a cell opens
+the row's list (↑/↓ choose, enter takes, esc keeps; a long model list scrolls), and
+the focus stays on the cell you just set, so what changed is what is highlighted;
+←/shift-tab back to the template column and enter confirms. `default`
+leaves the `[templates.<name>] model` / `reasoning` pin or the harness default
+alone; a cell opens on its pin when there is one. A model cell appears only where
+the plugin can deliver the pick (claude, codex, grok, droid, prime); amp has no model
+setting and opencode's universe is all of models.dev, so those rows have none.
+The screen redraws in place, never clears, so moving around does not flash. From
+the `open` keybinding the picker appears in the popup, centered; enter closes it and
+boots the box in a pane below the one you pressed the key in. Tab walks every cell
+and then the next row, and shift-tab walks the same path backwards (off a row's
+first column onto the last cell of the row above), so one key visits the whole
+table in either direction. The same choice from a
+script is `e2b-box open -t grok --model grok-4.6 --reasoning xhigh`; a model the harness
+does not list, or an effort that model does not take (grok-4.5 has no `xhigh`,
+droid's `minimax-m3` takes `high` alone), fails the box before anything is created,
+naming what it does accept. opencode's reasoning
+is a per-model variant chosen in its UI, so its cell is a generic scale that only
+reaches the box as `HERDR_E2B_REASONING`; amp's is its `--mode`.
 
 `t` takes any name, so the menu is a shortcut and not a whitelist. `muse` (Meta's
 Muse Code) is the shipped default; `base` is E2B's minimal image, fine for trying
@@ -386,17 +414,51 @@ The full contract, the box lifecycle and a GitHub Actions example live in
 ### `e2b-fleet` — one base ref, one box per template
 
 ```bash
-e2b-fleet                                          # two screens: slug + task, then the roster
+e2b-fleet                                          # two screens: slug + task, then the roster table
 e2b-fleet login-fix --agents claude,codex          # …or say it outright
 e2b-fleet login-fix --all --task "fix the login redirect loop"
+e2b-fleet login-fix -t 'codex*3@ultra' -t grok@xhigh   # three codex at ultra, one grok at xhigh
 e2b-fleet login-fix --agents claude -n             # --dry-run: print the plan, create nothing
 e2b-fleet kill login-fix [--prune-branches]        # boxes and worktrees gone, branches kept
 ```
 
-Per template and all at once: a worktree on a fresh branch
+Per member and all at once: a worktree on a fresh branch
 `e2b/<slug>-<template>-<rand4>` off your current HEAD, opened as an ordinary
 herdr workspace, with its own box booted from its own template, its agent started
 inside it, and the task handed over the moment *that* agent settles.
+
+The roster screen is a table, one row per template and three cells: in or out,
+the effort, how many of it.
+
+```
+  Roster for fleet login-fix
+
+         template                  effort       count
+   ▸ [✓] codex                     ultra        3     same effort [✓]
+     [✓] opencode                  default      1     (pick in opencode's UI)
+     [ ] claude                    high         1
+     [✓] grok                      each own     2     same effort [ ]
+              ├ #1                 xhigh
+              └ #2                 high
+     [ ] muse                      high         1
+
+  6 members
+  space tick   ↑/↓ move   →/tab column   +/- count   s per-instance effort   enter launch (on an effort cell: its list)   q abort
+```
+
+`+`/`-` set how many members a template gets; they share the row's effort until
+`s` unfolds one row per instance, each with its own cell. `s` also ticks the
+template and grows it to two if it had one, and lands on instance #1 with its cell
+focused, so one key gets you to the first thing to change; `s` again folds. The
+model column works the same way, and `s` gives each instance its own model too, so
+one fleet can race a template across models. From the command line the same roster
+is a **member spec** per `-t` (or comma-separated in `--agents`):
+`NAME[:MODEL][*N][@EFFORT]`, so `codex*3@ultra` is three codex members at ultra,
+`claude:claude-opus-5*2` two claudes on Opus 5, and a repeated `-t codex` is two of
+them. Instances are numbered in their labels and
+branches (`login-fix-codex`, `login-fix-codex-2`). An effort travels to the member
+as `e2b-box open -t codex --reasoning ultra` and overrides the template's pin for
+that box only.
 
 - **A terminal is what asks for the board.** With a tty the pane you launched
   from becomes a live board of the roster while it provisions (the per-member
@@ -417,6 +479,12 @@ inside it, and the task handed over the moment *that* agent settles.
 
 `[fleet]` sets `base`, `prefix` and `default_roster`; `[fleet.agents]` maps a
 template to the command that starts its agent.
+
+Save counts, models and reasoning in a [JSON fleet specification](docs/fleet-presets.md):
+`e2b-box fleet login-fix --file compare.json --task "Fix the login loop"`.
+Put that file in `presets/` beside `config.toml` to use `--preset compare` or select
+it with **p / Shift+P** in the roster picker. `fleet presets` lists names, and
+`--dry-run` validates and previews a generated file without creating anything.
 
 ### `e2b-bench` — grade the fleet
 
