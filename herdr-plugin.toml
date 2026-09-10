@@ -10,6 +10,14 @@ platforms = ["macos", "linux"]
 [[build]]
 command = ["bash", "install.sh"]
 
+# Restored and newly opened workspaces should have their first picker frame ready.
+[[startup]]
+command = ["bash", "bin/e2b-picker-warm", "--all"]
+
+[[events]]
+on = "workspace.created"
+command = ["bash", "bin/e2b-picker-warm"]
+
 # Worktree removed -> kill the sandbox (no orphaned, billable boxes left behind).
 [[events]]
 on = "worktree.removed"
@@ -26,7 +34,9 @@ command = ["bash", "bin/teardown-worktree"]
 # print to the plugin command log (herdr plugin log list --plugin e2b-dev.herdr-e2b).
 
 # Send the current worktree to E2B and open its shell (provisions if needed).
-# The chooser and shell run in a new, focused pane below the invoking pane.
+# When there is something to ask (template, model, effort) the question is put in
+# the popup; the shell then runs in a new, focused pane below the invoking pane and
+# the popup closes. A box that is already settled opens in that pane straight away.
 [[actions]]
 id = "open"
 title = "Open E2B sandbox"
@@ -35,8 +45,9 @@ command = ["bash", "-lc", "\"$HERDR_PLUGIN_ROOT/bin/e2b-box-open\""]
 
 # Fan this checkout out into a fleet: one worktree, workspace and box per
 # template on the roster, all off the same base ref. Two picker screens (task
-# slug, then roster), then the new pane becomes the dashboard.
-# An action has no terminal; e2b-fleet-open opens and focuses a pane below the invoking pane.
+# slug, then roster) in the popup, which then becomes the dashboard while the
+# members provision; Enter there opens a member below the pane the popup floats over.
+# An action has no terminal; e2b-fleet-open opens the popup (a pane below, if it can't).
 # Suggested binding:
 #   [[keys.command]]
 #   key = "prefix+shift+f"
@@ -179,6 +190,9 @@ command = ["bash", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/e2b-dash\""]
 # terminal on close): it opens the box in a regular pane split below the pane the
 # popup floats over, then closes the popup. e2b-popup records that pane as
 # E2B_DASH_ORIGIN_PANE at launch, which is why the popup is opened through it.
+# The same entrypoint hosts the `open` and `fleet` actions' pickers (E2B_POPUP_MODE
+# = pick-box / pick-fleet, set by bin/lib/pane.sh): the overlay is where things are
+# chosen, never where they run.
 [[panes]]
 id = "popup"
 title = " herdr-e2b-sandbox"

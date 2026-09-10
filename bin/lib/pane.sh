@@ -110,3 +110,50 @@ pane_open_below() {
   shift
   pane_open_from "$entrypoint" below ${1+"$@"}
 }
+
+# The worktree an action was invoked from. herdr runs an action with the NEW
+# pane's cwd (often the plugin root), and hands the real one in the plugin
+# context; a plain shell has neither and is where it stands.
+pane_context_cwd() {
+  local node c=""
+  if [ -n "${HERDR_PLUGIN_CONTEXT_JSON:-}" ] && node=$(pane_node); then
+    c=$(printf '%s' "$HERDR_PLUGIN_CONTEXT_JSON" | "$node" "$PLUGIN_DIR/src/pane-parse.js" cwd)
+  fi
+  if [ "${c:--}" != "-" ] && [ -d "$c" ]; then printf '%s' "$c"; else printf '%s' "$PWD"; fi
+}
+
+# The popup as a CONFIG surface. Opens the titled popup entrypoint (bin/e2b-popup
+# --render) in one of its modes over the invoking pane:
+#
+#   pane_open_popup <mode> [cwd] [origin-pane]
+#
+# `dashboard` is the board itself; `pick-box` asks which template, model and
+# effort a box should boot with and then opens that box in a regular pane under
+# the origin pane; `pick-fleet` asks the fleet's slug, task and roster and then
+# becomes the board while the members provision. The popup's own terminal is
+# discarded when it closes, so nothing that has to outlive the answer runs in it.
+# `origin` is the pane the popup floats over (inside the popup, context and focus
+# both name the popup, so it can only be read here, before it opens) and travels
+# as E2B_DASH_ORIGIN_PANE; `cwd` is the worktree the question is about and
+# travels as the pane's cwd AND as E2B_PICK_CWD.
+pane_open_popup() {
+  local mode="$1" cwd="${2:-}" origin="${3:-}" herdr node
+  herdr=$(pane_herdr) || { echo "e2b: can't find the herdr binary" >&2; return 1; }
+  node=$(pane_node) || { echo "e2b: can't find node, set HERDR_E2B_NODE=/path/to/node" >&2; return 1; }
+  if [ -z "$origin" ]; then
+    origin=$(printf '%s' "${HERDR_PLUGIN_CONTEXT_JSON:-}" | "$node" "$PLUGIN_DIR/src/pane-parse.js" origin)
+  fi
+  if [ "${origin:--}" = "-" ]; then
+    read -r origin _ _ <<EOF
+$(pane_query "$herdr" "$node" "")
+EOF
+  fi
+  # The dashboard is the mode --render assumes, so it travels unnamed: the call
+  # e2b-popup has always made stays exactly what it was.
+  local args=(--env E2B_DASH_POPUP=1)
+  [ "$mode" = dashboard ] || args+=(--env "E2B_POPUP_MODE=$mode")
+  [ "${origin:--}" = "-" ] || args+=(--env "E2B_DASH_ORIGIN_PANE=$origin")
+  [ -z "$cwd" ] || args+=(--cwd "$cwd" --env "E2B_PICK_CWD=$cwd")
+  "$herdr" plugin pane open --plugin e2b-dev.herdr-e2b --entrypoint popup \
+    --placement popup --width 90% --height 85% "${args[@]}" >/dev/null
+}

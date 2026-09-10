@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# Open the interactive fleet flow in a focused pane below the invoking pane.
+# The `fleet` action. The two picker screens (slug and task, then the roster with
+# its model and effort cells) run in the POPUP (bin/e2b-popup in `pick-fleet`
+# mode), and once the roster is answered the popup becomes the dashboard while the
+# members provision behind it, each appearing on the board as its box lands. The
+# members' own workspaces and panes are created by e2b-fleet as always; nothing
+# that outlives the answers runs in the overlay. Enter on the board then opens a
+# member's box in a pane below the pane the popup floated over.
 set -uo pipefail
 SOURCE="${BASH_SOURCE[0]}"
 while [ -h "$SOURCE" ]; do
@@ -10,4 +16,7 @@ done
 DIR="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
 source "$DIR/lib/paths.sh"
 source "$DIR/lib/pane.sh"
+pane_open_popup pick-fleet "$(pane_context_cwd)" && exit 0
+# No popup (an older herdr, no herdr at all): the pickers in a pane below, as before.
+echo "e2b-fleet-open: couldn't open the popup, asking in a pane below instead" >&2
 pane_open_below fleet

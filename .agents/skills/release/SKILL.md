@@ -159,6 +159,23 @@ node -e 'const f="package.json",fs=require("fs");const j=JSON.parse(fs.readFileS
 sed -i '' 's/^version = ".*"/version = "X.Y.Z"/' herdr-plugin.toml
 ```
 
+### Refresh the harness catalog
+
+```bash
+npm run catalog                # --check: boots one throwaway box per template, ~1 min, exit 2 on drift
+npm run catalog -- --write     # accept what the templates' CLIs now say; commit the result
+```
+
+The effort words and model ids each template accepts are read off the CLI IN the template
+(`docs/adr/0016`), and templates get rebuilt with newer CLIs between releases. A release
+should ship the catalog of the images it will boot, so run the check here; if it exits 2,
+run `--write`, read the diff of `src/harness-catalog.generated.js` and the `<catalog>`
+block in `config/config.example.toml` (a word gained or lost, a model added or retired,
+a version bump), and commit it with the version bump. Needs the E2B key and the agent
+credentials your `config.toml` already holds; the output names variables, never values,
+so it is safe to paste into the release notes. Exit 1 means a probe could not be trusted:
+the committed row is kept and marked stale, so it is not a blocker, but say so.
+
 ### Preflight, then tag
 
 ```bash

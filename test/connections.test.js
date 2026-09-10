@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import { classifySubscription, connectionMaterial, readConnections, removeConnection, saveConnection, selectConnection, suggestedConnectionId } from "../src/connections.js"
+import { classifySubscription, connectionMaterial, readConnections, readOauthSecret, removeConnection, rewriteOauthSecret, saveConnection, selectConnection, suggestedConnectionId } from "../src/connections.js"
 import { resolveEnv } from "../src/config.js"
 import { unauthenticatedMembers } from "../src/fleet-auth.js"
 import { seedCommand } from "../src/fleet-seed.js"
@@ -345,4 +345,58 @@ sys.exit(os.waitstatus_to_exitcode(status))`
   assert.equal(record.owner, "personal")
   assert.equal(record.detected.classification, "organization")
   assert.equal(connectionMaterial(record, { directory }).env.CLAUDE_CODE_OAUTH_TOKEN, TOKEN)
+})
+
+// ── oauth connections: the plugin's own sign-in, stored locally (ADR 0015) ─────
+
+test("oauth connections: a key for muse/amp, a placeholdered auth.json for codex, all from one secret file", (t) => {
+  const directory = fixture(t)
+  const muse = saveConnection({ id: "muse-personal", harness: "muse", method: "oauth" }, { kind: "api-key", META_API_KEY: "muse-key" }, { directory })
+  const amp = saveConnection({ id: "amp-personal", harness: "amp", method: "oauth" }, { kind: "api-key", AMP_API_KEY: "sgamp_user_abcdefghijklmnop" }, { directory })
+  const exp = Math.floor(Date.now() / 1000) + 3600
+  const bearer = `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify({ exp })).toString("base64url")}.sig`
+  const codex = saveConnection({ id: "codex-own", harness: "codex", method: "oauth" }, { auth_mode: "chatgpt", tokens: { id_token: "id", access_token: bearer, refresh_token: "real-refresh" } }, { directory })
+  assert.deepEqual(readConnections(directory).map((c) => c.id), ["amp-personal", "codex-own", "muse-personal"])
+  assert.deepEqual(connectionMaterial(muse, { directory }).env, { META_API_KEY: "muse-key" })
+  assert.deepEqual(connectionMaterial(amp, { directory }).env, { AMP_API_KEY: "sgamp_user_abcdefghijklmnop" })
+  const material = connectionMaterial(codex, { directory })
+  const shipped = JSON.parse(material.env.CODEX_AUTH_JSON)
+  // The box never sees the real refresh token: the plugin is that chain's only custodian.
+  assert.equal(shipped.tokens.access_token, bearer)
+  assert.notEqual(shipped.tokens.refresh_token, "real-refresh")
+  assert.equal(material.expiresAt, new Date(exp * 1000).toISOString())
+  // Secrets are private files; metadata never carries them.
+  for (const f of readdirSync(directory).filter((n) => n.endsWith(".secret"))) assert.equal(statSync(path.join(directory, f)).mode & 0o777, 0o600)
+  assert.doesNotMatch(readFileSync(path.join(directory, "codex-own.json"), "utf8"), /real-refresh|eyJ/)
+})
+
+test("oauth connections: an expired codex bearer asks for reconnect; a rewrite keeps the revision", (t) => {
+  const directory = fixture(t)
+  const old = `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify({ exp: 1 })).toString("base64url")}.sig`
+  const rec = saveConnection({ id: "codex-own", harness: "codex", method: "oauth" }, { auth_mode: "chatgpt", tokens: { access_token: old, refresh_token: "r1" } }, { directory })
+  assert.throws(() => connectionMaterial(rec, { directory }), /has expired.*auth reconnect codex-own/)
+  const fresh = `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 600 })).toString("base64url")}.sig`
+  rewriteOauthSecret(rec, { auth_mode: "chatgpt", tokens: { access_token: fresh, refresh_token: "r2" } }, directory)
+  assert.equal(readOauthSecret(rec, directory).tokens.refresh_token, "r2")
+  assert.ok(connectionMaterial(rec, { directory }).env.CODEX_AUTH_JSON)
+  assert.equal(readdirSync(directory).filter((n) => n.endsWith(".secret")).length, 1)
+})
+
+test("oauth connections: only muse, amp and codex; a bad or missing secret is a reconnect, never a fallback", (t) => {
+  const directory = fixture(t)
+  assert.throws(() => saveConnection({ id: "claude-x", harness: "claude", method: "oauth" }, { x: 1 }, { directory }), /Invalid connection/)
+  assert.throws(() => saveConnection({ id: "muse-x", harness: "muse", method: "oauth" }, "not-an-object", { directory }), /nothing was saved/)
+  const rec = saveConnection({ id: "muse-personal", harness: "muse", method: "oauth" }, { kind: "api-key", META_API_KEY: "k" }, { directory })
+  rmSync(path.join(directory, readdirSync(directory).find((n) => n.endsWith(".secret"))))
+  assert.throws(() => connectionMaterial(rec, { directory }), /unavailable.*auth reconnect muse-personal/)
+  const amp = saveConnection({ id: "amp-personal", harness: "amp", method: "oauth" }, { kind: "api-key", AMP_API_KEY: "" }, { directory })
+  assert.throws(() => connectionMaterial(amp, { directory }), /invalid/)
+})
+
+test("oauth connections: a selected muse or amp connection replaces the template's own credential", (t) => {
+  const directory = fixture(t)
+  const muse = saveConnection({ id: "muse-personal", harness: "muse", method: "oauth" }, { kind: "api-key", META_API_KEY: "from-connection" }, { directory })
+  const cfg = { connections: [muse], connectionsDir: directory, envTemplates: { muse: { META_API_KEY: "hand-written" } } }
+  assert.equal(resolveEnv(cfg, "muse", {}).META_API_KEY, "from-connection")
+  assert.deepEqual(unauthenticatedMembers([{ template: "muse", label: "m" }], cfg, {}), [])
 })

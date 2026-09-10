@@ -145,7 +145,15 @@ export const DEFAULT_SEEDS = {
   // is `canonicalize(findGitRootForPath(cwd) ?? cwd)` — realpath'd, walked up to
   // the nearest .git — so the seed computes exactly that for itself, in the box.
   // Merged, not written flat: the same file carries model settings and fallbacks.
-  droid: `node -e 'const fs=require("fs"),q=require("path"),d=process.env.HOME+"/.factory",f=d+"/settings.json",rp=function(x){try{return fs.realpathSync(x)}catch{return x}};let g=rp(process.cwd()),x=g;for(;;){if(fs.existsSync(q.join(x,".git"))){g=x;break}const n=q.dirname(x);if(n===x)break;x=n}let s={};try{s=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}let t=s.trustedFolders;if(!t||typeof t!=="object"||Array.isArray(t))t={};if(t[g]){console.log("herdr-e2b: droid already trusts "+g+" - leaving it alone");process.exit(0)}t[g]={trustedAt:new Date().toISOString()};s.trustedFolders=t;fs.mkdirSync(d,{recursive:true});fs.writeFileSync(f,JSON.stringify(s))'`,
+  //
+  // The same write sets the session default `sessionDefaultSettings.autonomyLevel`
+  // to "high" when nothing set it: the interactive `droid` takes its Autonomy Level
+  // from settings.json, not from a flag (`--auto` is `droid exec`'s, docs.factory.ai
+  // /droid-cli/settings, and typed at the TUI it left "Auto (Off) · all actions
+  // require approval" — observed live, fleet test, 2026-09-08). Off, a member stops
+  // at its first edit, which is the droid half of what claude's
+  // `bypassPermissionsModeAccepted` and codex's `trust_level` are for.
+  droid: `node -e 'const fs=require("fs"),q=require("path"),d=process.env.HOME+"/.factory",f=d+"/settings.json",rp=function(x){try{return fs.realpathSync(x)}catch{return x}};let g=rp(process.cwd()),x=g;for(;;){if(fs.existsSync(q.join(x,".git"))){g=x;break}const n=q.dirname(x);if(n===x)break;x=n}let s={};try{s=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}let t=s.trustedFolders;if(!t||typeof t!=="object"||Array.isArray(t))t={};let w=false;if(t[g])console.log("herdr-e2b: droid already trusts "+g+" - leaving it alone");else{t[g]={trustedAt:new Date().toISOString()};s.trustedFolders=t;w=true}let a=s.sessionDefaultSettings;if(!a||typeof a!=="object"||Array.isArray(a))a={};if(a.autonomyLevel===undefined){a.autonomyLevel="high";s.sessionDefaultSettings=a;w=true;console.log("herdr-e2b: droid autonomy set to high for new sessions")}if(w){fs.mkdirSync(d,{recursive:true});fs.writeFileSync(f,JSON.stringify(s))}'`,
   opencode: `node -e 'const fs=require("fs"),d=process.env.HOME+"/.config/opencode",f=d+"/opencode.json";let c={};try{c=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}if(c.autoupdate===false){console.log("herdr-e2b: opencode autoupdate already off - leaving it alone");process.exit(0)}c.autoupdate=false;fs.mkdirSync(d,{recursive:true});fs.writeFileSync(f,JSON.stringify(c))'`,
 }
 

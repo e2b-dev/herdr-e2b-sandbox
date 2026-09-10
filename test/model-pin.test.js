@@ -40,9 +40,16 @@ test("modelEnv: claude reads its own variables", () => {
   assert.equal(modelEnv("claude", { reasoning: "low" }).ANTHROPIC_MODEL, undefined)
 })
 
-test("modelEnv: opencode reads inline JSON config, model only", () => {
+test("modelEnv: opencode reads inline JSON config, model only, declared under its provider", () => {
   const env = modelEnv("opencode", { model: "openrouter/qwen/qwen3.8-max-0902", reasoning: "high" })
-  assert.deepEqual(JSON.parse(env.OPENCODE_CONFIG_CONTENT), { model: "openrouter/qwen/qwen3.8-max-0902" })
+  // The provider entry is what lets the TUI pick a model its bundled models.dev
+  // snapshot has never heard of; the model id keeps every slash after the first.
+  assert.deepEqual(JSON.parse(env.OPENCODE_CONFIG_CONTENT), {
+    model: "openrouter/qwen/qwen3.8-max-0902",
+    provider: { openrouter: { models: { "qwen/qwen3.8-max-0902": {} } } },
+  })
+  // No provider half, nothing to declare it under: the model alone.
+  assert.deepEqual(JSON.parse(modelEnv("opencode", { model: "bare-id" }).OPENCODE_CONFIG_CONTENT), { model: "bare-id" })
   // Reasoning is per-model variants in opencode, so a reasoning-only pin sets no
   // opencode variable at all rather than an empty config.
   assert.equal(modelEnv("opencode", { reasoning: "high" }).OPENCODE_CONFIG_CONTENT, undefined)

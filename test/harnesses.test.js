@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { HARNESSES, interpretProbe } from "../src/harnesses.js"
+import { HARNESSES, interpretProbe, remedyFor } from "../src/harnesses.js"
 
 // --- what the plugin can borrow ----------------------------------------------
 // `state` answers one question only: can this plugin authenticate a box from what
@@ -617,6 +617,19 @@ test("interpretProbe: neither of the two unsafe probes is in the table", () => {
 test("amp reads its key from the default server's entry", () => {
   const f = HARNESSES.amp.valueFile
   assert.equal(f.read('{"apiKey@https://ampcode.com/":"amp-key"}'), "amp-key")
+})
+
+test("amp does not borrow the OAuth session `amp login` stores under the same key", () => {
+  // A JWT under `apiKey@…` is the browser sign-in's session, not an access token: amp
+  // itself rejects it as AMP_API_KEY ("holds an OAuth session token, which is
+  // short-lived"), so borrowing it boots a member that dies on its first request.
+  const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.c2lnbmF0dXJl"
+  const f = HARNESSES.amp.valueFile
+  assert.equal(f.read(JSON.stringify({ "apiKey@https://ampcode.com/": jwt })), null)
+  assert.equal(f.read(JSON.stringify({ "apiKey@https://amp.example/": jwt })), null)
+  // The remedy names the one credential that works, not `amp login` again.
+  assert.match(remedyFor("amp"), /ampcode\.com\/settings\/security/)
+  assert.match(remedyFor("amp"), /AMP_API_KEY/)
 })
 
 test("amp falls back to a sole entry when the server is not the default one", () => {

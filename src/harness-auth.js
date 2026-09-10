@@ -405,9 +405,9 @@ export function buildSummary(rows, plan, cfg = {}) {
         connectionMaterial(selected, { directory: cfg.connectionsDir })
         const account = selected.detected ? ` · ${localAccountLabel(selected.harness, selected.detected)}` : ""
         return { id: r.id, mark: "ok", managed: true,
-          auth: selected.method === "setup-token" ? "OAuth token" : "OAuth session", source: selected.id,
+          auth: selected.method === "setup-token" ? "OAuth token" : selected.method === "oauth" ? "Own sign-in" : "OAuth session", source: selected.id,
           details: [`${selected.id} · Only you`, ...(selected.detected ? [`Local account: ${localAccountLabel(selected.harness, selected.detected)}`] : []),
-            selected.method === "setup-token" ? "Setup token" : "Borrowed local session"],
+            selected.method === "setup-token" ? "Setup token" : selected.method === "oauth" ? "Signed in by this plugin (ADR 0015)" : "Borrowed local session"],
           method: `connection ${selected.id}${account} · Only you · ${selected.method} (locally ready)` }
       }
     } catch (error) {

@@ -70,12 +70,23 @@ Same base ref, N worktrees, N boxes — one per template on the **roster**. `fle
 never touches the E2B SDK; it drives **herdr** and then reuses `open` per member.
 
 1. **herdr** invokes the `fleet` action → `bin/e2b-fleet-open` → the pickers run in
-   a new, focused pane below the invoking pane (`bin/e2b-fleet`, no flags), because an action has no terminal.
+   the **popup** (`bin/e2b-popup --render` in `pick-fleet` mode, `bin/e2b-fleet` with
+   no flags inside it), because an action has no terminal; once the roster is
+   answered the same popup becomes the dashboard while the members provision. A
+   herdr that cannot open a popup gets the pickers in a pane below the invoking pane.
 2. Two screens (`lib/chooser.sh`): the **task slug** plus the optional **fleet
    task** (`ask_slug_tty`, which also carries the dirty-tree warning) and the
    **roster** (`ask_roster_tty`, the same menu `open` offers, `[fleet]
    default_roster` pre-ticked). Aborting either one creates nothing. With
    `--slug`, `-t` and `--task` given, both screens are skipped.
+   `--file PATH` (or stdin with `-`) and `--preset NAME` resolve a JSON fleet
+   specification through `src/fleet-spec.js` into those same arguments. Presets
+   live under the config directory's `presets/`; p / Shift+P fills the roster's
+   editable cells from a selected file. Filenames are listed with Bash so cached
+   paint stays immediate, and the selected JSON is read and validated on demand.
+   An optional preset task applies when no task was entered. CLI fields override
+   saved values. A preset describes a future launch, never a running fleet
+   (ADR 0018); the existing member naming and creation paths remain authoritative.
 3. `src/fleet-name.js` turns the slug + roster into one branch and label per member
    (`<prefix>/<slug>-<template>-<rand4>`). Bash never builds a ref name.
 4. Any member whose box will boot with no credential in it is named once, before
@@ -87,6 +98,13 @@ never touches the E2B SDK; it drives **herdr** and then reuses `open` per member
    does **not** move for fleet), then every member is spawned **concurrently** —
    `herdr worktree create` (unfocused, no `--path`, so the user's `[worktrees]`
    directory decides layout), then `herdr pane run <root pane> e2b-box open -t <t>`.
+6b. Before any member is spawned, one **pending placeholder** record per member is
+   written to the boxes dir (`<label>-pending`, status `pending`, the step it is
+   at), so the board that the pickers turn into shows the fleet while worktrees
+   and panes come up. Each placeholder is rewritten with the checkout path once
+   the worktree exists, and removed when the member's own record lands (a 60s
+   waiter), or when the member fails. The dashboard refuses every verb but kill on
+   a `pending` row.
 7. Per member, once its box's sandbox shell appears: `src/fleet-seed.js` hands over
    one shell command that writes the agent's **first-run state** inside the box
    (`~/.claude.json`, `~/.codex/auth.json`) so it comes up at a prompt rather than a
@@ -194,15 +212,17 @@ guide, with a CI example, is [docs/headless-run.md](docs/headless-run.md).
 | File | Responsibility |
 | --- | --- |
 | `e2b-box` | The CLI. Subcommands `open/up/shell/status/list/url/logs/sync/pull/exec/run/pause/resume/kill/doctor/auth`, plus `--template` on the creating verbs. Key derivation, optimistic connect, `spin_until_ready`, `connect_shell`, template selection (`pick_template`; the chooser itself lives in `lib/chooser.sh`), disconnect + on-close prompts, `pull` safety gate. The `run` verb (headless, #47) composes the others in order, `provision_from_cwd … sync`, `exec` for the task file and then the agent, `pull` via a child `e2b-box pull`, `sdk_kill`, and owns nothing new but the order, the `status` vocabulary and the exit code. |
-| `e2b-box-open` | The `open` keybinding/action: opens the template picker and sandbox shell in a new, focused pane below the invoking pane. A herdr action has no terminal of its own, so it can host neither the shell nor the chooser. |
+| `e2b-box-open` | The `open` keybinding/action, and the hand-off every picker makes. As the action: opens the **popup** immediately in `pick-box` mode (template · model · effort, centered); the popup resolves whether to ask or hand off to a focused pane below the invoking pane. With flags (`--target-pane`, `--placement`, `--cwd`, `--box`, `--template`, `--reasoning`, `--model`) it is the hand-off: the popup dashboard and the popup picker call it to open the box in a regular pane under the pane the popup floats over, the picks travelling as `E2B_TEMPLATE` / `E2B_REASONING` / `E2B_MODEL`. A herdr action has no terminal of its own, so it can host neither the shell nor the chooser; the overlay is for choosing, never for running. |
 | `e2b-fleet` | The fleet verb: one base ref → N members, one per roster template. Two ways in — bare (two picker screens, then the board) and `create <slug>` (flags only; `-s`, `--agents a,b,c` / `all`, `--task`) — dedupe, the roster spell-check against `resolve-template.js --known` (`--force` overrides), the `--dry-run` plan, the herdr-version probe, concurrent spawn (background jobs + per-member result files), the per-member first-run seeding + agent auto-start + fleet-task delivery (`set_seed_argv` / `set_agent_argv` / `set_rename_argv` / `set_prompt_argv` — the plan and the real call share every builder, so they cannot drift), the `N/M up` summary. Also the `kill` verb: the branch glob, the conservative teardown, the kept-branch report. Drives herdr's socket API only — never the E2B SDK. |
-| `e2b-fleet-open` | The `fleet` keybinding/action: opens the fleet pickers and subsequent dashboard in a new, focused pane below the invoking pane. |
+| `e2b-fleet-open` | The `fleet` keybinding/action: opens the fleet pickers in the popup (`pick-fleet` mode), which becomes the dashboard once the roster is answered; falls back to a pane below the invoking pane when no popup can be opened. |
 | `e2b-dash` | Launcher for the Rust dashboard: resolves the prebuilt/built binary, guards on a TTY, execs it immediately. Its `--settings` helper supplies theme, opener, and region to a background TUI task. |
-| `e2b-popup` | Opens the titled `popup` entrypoint with Herdr's `popup` placement, leaving the underlying pane layout intact. The entrypoint uses `--render` to exec the dashboard with plugin config/credential precedence. The project name and GitHub icon live in the popup border, and its dashboard header shows only the count and region. Both launch paths mark the disposable popup PTY with `E2B_DASH_POPUP=1`; the TUI consumes that marker and on a clean exit leaves its last screen/cursor intact until Herdr removes the popup. Ordinary panes and inline shell handoffs still restore their terminals. |
+| `e2b-popup` | Opens the titled `popup` entrypoint with Herdr's `popup` placement, leaving the underlying pane layout intact (`pane_open_popup` in `lib/pane.sh`, which also carries the origin pane and the worktree). `--render` runs inside it and dispatches on `E2B_POPUP_MODE`: `dashboard` execs the board; `pick-box` paints cached chooser arguments centered (`CHOOSER_CENTER=1`) before starting a background `e2b-box pick` refresh, then hands the fresh answer to `e2b-box-open` for a pane under the origin and exits, which closes the popup; `pick-fleet` paints the cached slug screen immediately while `e2b-box fleet` refreshes both screens, then passes the slug, task and roster through the normal fleet flags to the board. Missing or malformed caches use the original CLI picker path. A settled box or `E2B_TEMPLATE` skips the cached picker; other settled decisions close it when the resolver answers. The dashboard mode keeps plugin config/credential precedence. The project name and GitHub icon live in the popup border, and its dashboard header shows only the count and region. Both launch paths mark the disposable popup PTY with `E2B_DASH_POPUP=1`; the TUI consumes that marker and on a clean exit leaves its last screen/cursor intact until Herdr removes the popup. Ordinary panes and inline shell handoffs still restore their terminals. |
 | `e2b-bench` | Launcher for the grader, thin on purpose: finds the binary and resolves the credentials the same way every other verb does, then execs it. No TTY guard — a grade is a report meant to be piped and run from CI. |
 | `teardown-worktree` | `worktree.removed` handler — kills the box for the removed path (matched by stored `worktreePath`). |
 | `lib/paths.sh` | Shared helpers: state-dir resolution, `e2b_node` (find Node ≥22), `ensure_e2b_path`/`ensure_e2b_key`, `sdk_kill`, `box_key`. |
-| `lib/chooser.sh` | The full-screen pickers. `ask_template_tty` — one template for one box: arrows/`j`/`k`, number-jump, enter, `q` takes the default; an optional fifth argument carries one **auth mark** per row (what `e2b-box auth` discovered, drawn dimmed beside the name), which annotates and never filters — no row is hidden or reordered by it. `ask_slug_tty` — one line of text, with a caller-supplied validator function (so ref rules stay in `src/fleet-name.js`), esc aborts; asked for a third argument it also draws the optional **fleet task** field (tab/arrows switch, enter always launches) and prints slug and task as two lines.  `ask_roster_tty` — the multi-select roster: space toggles, number toggles, enter launches, an empty roster can't, `q`/esc abort. Self-contained bash — no state dir, no node — so any verb can source it. Finds the human in two steps: `/dev/tty`, else duplicated stdin (a herdr pane may run on a pty that isn't the controlling terminal). |
+| `e2b-picker-warm` | Resolves both picker inputs for each restored pane cwd through the existing CLIs, with inherited box pins cleared. Herdr runs it asynchronously on startup (0.7.5+) and workspace creation; installation also starts it detached because enabling or linking a plugin does not rerun startup hooks. It opens no panes and provisions nothing. |
+| `lib/picker-cache.sh` | One NUL-delimited argument snapshot per absolute worktree cwd under `$STATE_DIR/pickers`, shared by the box and fleet pickers. The owners write it atomically; popup refresh results use a private temporary directory. Every cached opening recomputes through the existing CLI, so config/catalog edits, branch rules, auth results and live records are re-read before confirmation. No cached answer is stored or launched (ADR 0017). |
+| `lib/chooser.sh` | The full-screen pickers, still independent of Node and state paths. An optional caller-owned callback first runs after painting, then is polled every 50 ms while refreshing (one second on Bash 3.2). Changed arguments redraw in place and require a fresh confirmation; slug edits survive a note refresh. Confirmation stays pending during refresh so Escape can always cancel it. Popup Escape consumes only queued sequence bytes, avoiding a timer while preserving arrows and Shift-Tab; ordinary terminals use a short escape window. Without a callback the existing keys and idle timeouts remain unchanged. `ask_template_tty` — one template for one box: arrows/`j`/`k`, number-jump, enter, `q` aborts; an optional fifth argument carries one **auth mark** per row (what `e2b-box auth` discovered, drawn dimmed beside the name), which annotates and never filters — no row is hidden or reordered by it; an optional sixth carries the **effort rows** `src/effort.js` prints (`template|kind|values|configured|via`, `|`-separated because bash's `read` folds an empty tab field into its neighbour), which add an effort cell per row, and, from fields six and seven (`models|configured model`, the harness catalog in `src/harness-catalog.generated.js` where the pin has a route), a model cell between the template and the effort; a cell is plain text, reverse video alone marks the focused one. Focus is a CELL: →/tab and ←/shift-tab move columns (a column no row has is skipped, `col_step`; off a row's last cell →/tab lands on the next row's first column, and off a row's first column ←/shift-tab lands on the row above's last cell, `col_last`, both wrapping), ↑/↓ rows; enter on a cell unfolds that row's list as a DROPDOWN right under the row, starting at the cell's column and pushing the rows below down (↑/↓, enter takes, esc keeps, a number picks; a model list is windowed to 14 rows since prime lists 104), and taking or leaving a value keeps the focus on that cell. The answer is `<template>[\t<effort>[\t<model>]]`, tabs only as far as something was chosen (the effort field `-` when only a model was, since bash's `read` folds an empty tab field), so callers without the columns read what they always did. Frames are built in one string and written with one `printf` (home + erase-to-eol per line + erase-below), never a clear, so nothing flashes. `ask_slug_tty` — one line of text, with a caller-supplied validator function (so ref rules stay in `src/fleet-name.js`), esc aborts; asked for a third argument it also draws the optional **fleet task** field (tab/arrows switch, enter always launches) and prints slug and task as two lines.  `ask_roster_tty` — the roster TABLE with four columns (template · model · effort · count): space toggles, number toggles, `+`/`-` the member count, `s` ticks, grows to two if needed and unfolds one nested row per instance with its own model and effort cells (cursor on #1's first cell; `s` again folds); enter on the template or count column launches, on a model or effort cell opens its list; prints one line per MEMBER in the same `<template>[\t<effort>[\t<model>]]` shape, an empty roster can't launch, `q`/esc abort. Same optional effort-rows argument as the single picker. Self-contained bash — no state dir, no node — so any verb can source it. Finds the human in two steps: `/dev/tty`, else duplicated stdin (a herdr pane may run on a pty that isn't the controlling terminal). |
 | `lib/pane.sh` | Pane plumbing shared by the action launchers: `pane_open_below` anchors box/fleet splits to the invocation context, plus `pane_herdr`, `pane_node`, `pane_query`, `pane_procs`, `pane_is_idle` (fails safe — unknown counts as busy). |
 
 ### Data plane — `src/` (ESM, uses `e2b` + `@iarna/toml`)
@@ -227,6 +247,9 @@ guide, with a CI example, is [docs/headless-run.md](docs/headless-run.md).
 | `harness-probe.js` | The impure half of the above: spawns the probes for all eight harnesses concurrently with a 5s ceiling, `shell: false` (so a shell function cannot answer for the binary) and stdin on `/dev/null` (one harness with no key opens a browser and blocks forever), then formats one row per harness. Read-only — it never writes. |
 | `harness-auth.js` | `e2b-box auth` itself: probe, show, ask **once** for the whole batch, write. `buildPlan` turns probe rows into what will be kept and is pure given its file reader; `renderAuthToml` and `formatPlan` are pure; only `writeAuthFile` touches disk. It writes a GENERATED `auth.toml` beside `config.toml` at mode `0600`, regenerated whole on every run, and never touches `config.toml` — one writer each is what makes "hand-written always wins" true. ADR 0009's split lives here: a value read out of a **file** is stored, a value seen only in the **shell** records the variable's NAME and nothing else. Missing credentials are reported and never prompted for; `--yes` skips the question, and no terminal plus no flag writes nothing. It also warns when a variable it recorded by NAME is invisible to a login shell (`invisibleToLoginShell`, one `bash -lc` for the whole batch, names only in both directions) — herdr launches plugin commands from one, so a key exported from a zsh rc is found here and absent at create time. Two entry points, one implementation: the verb a user types, and `install.sh`'s `harness_discovery` on first run — the installer shells out to the very same subcommand with `--yes` (a build step has no TTY), indents its report, and treats any failure as a report rather than a failed install. |
 | `run-agent.js` | The headless agent table `e2b-box run` drives a box with: `DEFAULT_RUN_AGENTS` (template → that vendor's verified **non-interactive** command, `claude -p`, `codex exec`, `opencode run`, `amp -x`, each with its skip-approvals flag, each reading the task from `TASK_FILE` inside the box, never from argv) and `runCommand` (`[run.agents]` over those, by key presence, so `""` means "no headless agent"). Kept apart from `fleetAgents` on purpose: the interactive command for a template is not a flag away from its headless one. All eight shipped agent templates have one; `base` and a user's own template have no default and `run` refuses them by name. Also the CLI bash calls (`<template>`, `--task-path`, `--shipped`). |
+| `effort.js` | Which words each harness accepts for "how hard to think" and which models it lists, DERIVED from `harness-catalog.generated.js` plus a hand-written overlay: `kind` (native / generic), `via` (how the pin travels), the words the picker declines to offer (droid's `none`/`dynamic`), amp's scale being its `--mode` list, and a GENERIC scale for opencode, whose reasoning is a per-model UI variant. `harnessHint` resolves a template to its harness by name or by the binary its `[fleet.agents]` command runs, so a custom template gets its harness's scale and variables. `effortRows` is what the pickers draw; `validEffort` is what `provision.js` checks a `--reasoning` against before a box is created; `modelCatalog` and `effortsForModel` are the per-model answers (droid coerces an effort its model lacks to the default at exit 0, so the plugin-side check is the only one). The CLI (`node src/effort-cli.js --fleet`) is how bash reads the rows. |
+| `catalog.js` | How each harness's CLI is asked what it accepts: `CATALOG_PROBES` (per harness, the shell lines or URL to run in its template and the pure rule that reads their output: the rejection message that lists effort words, the command, cache or handshake that lists models) and `interpretCatalog`, which reads probe RESULTS and never spawns or fetches, so every rule is testable from `test/fixtures/catalog/` with no CLI installed. `mergeCatalog` keeps a committed row when its probe fails (marked `stale`), `diffRow` says what moved, `renderGeneratedModule` / `renderTomlBlock` / `spliceTomlBlock` write the two generated artifacts as text. Bounded by ADR 0016: the box's binary is the oracle, a laptop's is not. |
+| `harness-catalog.generated.js` | GENERATED, committed, never hand-edited: per harness the CLI version that answered, the template build it was read from, its effort words (amp: modes), and its model ids with each model's own efforts and default where the CLI says so. Written by `scripts/harness-catalog.mjs` (`npm run catalog -- --write`, one throwaway sandbox per template; `--from=fixture` replays the captured output; `--check`, the default, exits 2 on drift). `test/catalog.test.js` proves the fixtures still produce this exact file and that `config.example.toml` carries the rendered `<catalog>` block. |
 | `model-pin.js` | `[templates.<name>] model` / `reasoning`, delivered the way each harness reads its defaults: `modelEnv` (the variables for the env-route harnesses, claude and opencode, plus `HERDR_E2B_MODEL` / `HERDR_E2B_REASONING` on every pinned box) and `pinCommand` (one-line commands that write the file-route harnesses' own config: codex `config.toml`, grok `[models]`, droid and prime `settings.json`, muse `reasoning_effort`). Same rules as the seeds: one line, variable names never values, never overwrite a key that is set. `resolveEnv` merges the env below the user's own table; `provision.js` runs the command right after the seed. Pure, and the commands are executed by `test/model-pin.test.js` against fake homes. |
 | `fleet-seed.js` | The first-run state a member's agent needs before it will work instead of asking questions: `DEFAULT_SEEDS` (the verified `~/.claude.json` / `~/.codex/auth.json` shapes, as one-line POSIX sh) and `seedCommand` (`[fleet.seed]` over those, by key presence, so `""` means "seed nothing"). The shell lives here rather than in bash so `node --test` can execute it. Every command names the credential's **variable**, computes what it needs (Claude approves a key by its last 20 characters) inside the box, and refuses to overwrite a file that already exists. |
 
@@ -253,11 +276,29 @@ dashboard, and has **no prebuilt** — it needs the Rust toolchain.
 
 ## State model — one JSON record per box
 
+### Fleet specifications and presets
+
+Fleet specifications are parsed by `src/fleet-spec.js`: strict JSON fields become
+member specs, model and reasoning pins are checked against the current catalog,
+and preset names resolve only beneath `$CONFIG_DIR/presets`. `bin/e2b-fleet`
+applies explicit CLI overrides before its normal plan. The chooser takes preset
+names and a caller-owned loader returning display task text and member rows,
+then emits the selected preset name alongside the edited members. It reads no
+config itself. Preset files are user configuration, separate from box records.
+
 ### Named coding-agent connections
 
 `src/auth-cli.js` handles `auth connect/list/explain/check/reconnect/disconnect`.
 `src/connections.js` owns metadata, private credential storage, account classification,
-selection, and the two delivery adapters. `src/config-paths.js` shares config locations
+selection, and the delivery adapters (`setup-token`, `borrowed-session`, `oauth`).
+`src/oauth.js` is the plugin's OWN sign-in (ADR 0015): muse's Meta device flow,
+codex's PKCE flow with its own client id, the refresh grant only `auth reconnect`
+uses, and amp's open-the-page-and-paste (its token is gated behind a browser
+re-check, measured there). What it stores is what the vendor mints — a Muse API key,
+an amp access token, a plugin-owned codex `auth.json` — never a session a box would
+have to keep alive. Written against injectable `fetch`/`open`/`sleep`, so
+`test/oauth.test.js` drives every flow against a scripted server; no test signs in
+anywhere. `src/config-paths.js` shares config locations
 with discovery without introducing an import cycle. `bin/lib/capture-setup-token.py`
 is the optional Python PTY bridge to the first-party Claude CLI; it returns the token
 on a private pipe and redacts it from displayed output.
@@ -296,7 +337,13 @@ idle timeout, which the close-time messages read instead of the current config),
 drawn size, written by `attach.js`; what `attach-plan.js` decides reattach from).
 Writes are atomic so a concurrent poll never reads a half-written file.
 
-Grading adds the one other thing on disk: `$STATE_DIR/bench/<slug>/` with a
+Picker inputs also live under `$STATE_DIR/pickers`: a `d-`-prefixed directory per
+absolute cwd component ending in `input`, so lookup needs only bash and a checkout
+named `input` cannot collide with its parent. The header carries the normal box key;
+the remaining fields are the two pickers' arguments, including auth marks and fleet
+default roster. This is disposable appearance, never a box record or fleet membership.
+
+Grading adds another artifact on disk: `$STATE_DIR/bench/<slug>/` with a
 `run.json` (task, grade command, base ref, start) and one `<box-key>.json` per
 member (verdict, exit code, duration, output tails). Same one-file-per-member
 shape and the same reasons as the box records. A verdict is *history* — it is not
@@ -342,6 +389,11 @@ fleet still isn't (`docs/adr/0005`). The member list is never stored.
   credential found only in the shell is recorded by NAME and forwarded at create
   time, so no new plaintext copy of it exists (ADR 0009). Covered by
   `test/config.test.js`.
+- **Cached picker input is appearance, never launch authority.** Every cached
+  opening re-resolves, including changes to config/catalog mtimes, branch rules and
+  auth results. An early confirmation waits for that result; changed rows require
+  confirmation again. The normal handoff still validates model and effort pins
+  against the current catalog before creating a sandbox. See ADR 0017.
 - **The picker annotates, never filters.** An auth mark changes what a template row
   *says* and never whether it is offered, where it sits, or what the picker returns
   — hiding a template with no credential would remove one the user may intend to

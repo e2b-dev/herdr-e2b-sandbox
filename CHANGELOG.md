@@ -6,6 +6,120 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fleet presets
+
+- Launch a generated JSON fleet with `fleet create --file PATH` (or `-` for stdin).
+  Named recipes in `presets/` beside config.toml work with `--preset NAME` and are
+  listed by `fleet presets`. Each saves templates, models, reasoning, counts and
+  an optional slug/task. CLI flags override saved values; `--dry-run` validates.
+- In the fleet roster, p / Shift+P applies saved presets to editable cells before
+  launch. Cached startup and existing navigation remain unchanged. ADR 0018.
+
+### Performance
+
+- Warm both picker caches in the background at startup, after installation and
+  when a workspace opens, so the first opening can use the cached frame too.
+- Escape closes picker popups immediately and still dismisses a dropdown in
+  place. An Enter pressed during refresh can be cancelled with Escape; it no
+  longer blocks on the resolver. Shift+Tab moves backward through cells and
+  fleet text fields without closing the popup.
+- Box and fleet popup pickers paint their cached input before starting Node, then
+  refresh the rows in place. Every reopen resolves current config, catalog, branch
+  and auth input before accepting a choice. Cold openings keep the existing picker
+  path, with the cache write running alongside the first frame. ADR 0017.
+
+### Added
+
+- **The harness catalog is generated, not typed.** `npm run catalog -- --write` boots
+  one throwaway sandbox per shipped agent template, asks the CLI in it which effort
+  words it accepts (its own rejection message, fed a sentinel) and which models it
+  lists (`codex debug models --bundled`, droid's `initialize_session` handshake,
+  grok's cache, amp's agent options, `prime-agent model list`; models.dev for
+  claude), and writes what it read into `src/harness-catalog.generated.js`, the
+  `<catalog>` block in `config/config.example.toml`, and `test/fixtures/catalog/`.
+  `src/effort.js` now derives every scale from that module instead of holding
+  literals: the two hand-kept copies had already drifted from each other (codex
+  `minimal` in one, `max` in the other; droid seven words against nine) and from
+  the boxes, which ship different CLI versions than a laptop. Per-model efforts and
+  defaults are carried too (`modelCatalog`, `effortsForModel`), which is the only
+  check that exists for droid, whose CLI accepts any of its words and silently runs
+  the model's default. `--check` (the default) exits 2 on drift; a failed probe keeps
+  the committed row and marks it stale, never blanks it; no credential is ever on a
+  command line. The release skill runs it before tagging. ADR 0016.
+- **A model cell in both pickers.** `e2b-box open`'s template list and the fleet's
+  roster table gain a model cell between the template and the effort, listing
+  the catalog for every harness the plugin can pin a model on (claude, codex, grok,
+  droid, prime); a long list scrolls, `s` in the roster gives each instance its own
+  model, and the cell opens on `[templates.<name>] model`. The same choice from a
+  script: `e2b-box open --model claude-opus-5` and the fleet spec
+  `NAME[:MODEL][*N][@EFFORT]` (`claude:claude-opus-5*2`). A per-box model is checked
+  against the catalog before anything is created, and a per-box effort against
+  that model's own list, which is the only check that exists for droid.
+- **The pickers live in the popup.** The `open` and `fleet` actions put their
+  questions in the same floating overlay the dashboard uses, centered: template,
+  model and effort for one box; slug, task and roster for a fleet. The overlay is
+  for choosing, never for running: `open` closes it and boots the box in a pane
+  below the pane you pressed the key in (`e2b-box pick`, `e2b-box-open`'s
+  `--template/--reasoning/--model` hand-off, `E2B_TEMPLATE` / `E2B_REASONING` /
+  `E2B_MODEL`), and `fleet` turns it into the dashboard while the members
+  provision. Tab now walks every cell and then on to the next row, and shift-tab
+  (or ←) walks the same path backwards, off a row's first column onto the last cell
+  of the row above; taking or leaving a cell's list keeps the focus on that cell,
+  so what just changed is what is highlighted (←/shift-tab back to the template
+  column, then enter). Cells are plain text, reverse video alone marks the focused
+  one (the ‹ › chevrons are gone), the roster's column titles sit over their cells
+  and the member count's title is `count`, and a cell's list unfolds as a dropdown
+  right under its row at the cell's column, pushing the rows below down, instead
+  of at the foot of the table. Like the dashboard, the overlay's first frame is the
+  screen itself: nothing is drawn ahead of the picker, the frame's centering is
+  sticky so an opened list never shifts the table, and a box whose template is
+  already settled hands off without drawing a picker.
+- **A fleet shows on the board before its boxes exist.** e2b-fleet writes a
+  `pending` placeholder record per member the moment the plan is final (creating
+  its worktree, then starting its box), so the dashboard the fleet pickers turn
+  into is never empty while worktrees and panes come up. The placeholder leaves
+  when the member's own record lands, when the member fails, or after 60s at most;
+  the dashboard refuses every verb on it but kill.
+
+### Fixed
+
+- `src/harnesses.js` cited ADR 0006 (region is sugar over domain) for the
+  spawn-the-binary rule; that rule is ADR 0009.
+
+- A fleet of all eight shipped agents came up with five members broken (observed
+  live, fleet `test`, 2026-09-08); each fix is the one its harness asked for:
+  - **opencode** opened on an image model with no tool use even though
+    `[templates.opencode] model` was set: the TUI only picks a model it can find in
+    the provider's list, and on a fresh box that list is the snapshot bundled into
+    the binary until models.dev is fetched, so a model newer than the template was
+    unknown at the first launch. The pin now also declares the model under its
+    provider in `OPENCODE_CONFIG_CONTENT`, so it exists fetch or no fetch.
+  - **amp** borrowed the OAuth session `amp login` leaves in `secrets.json` and
+    booted a member amp refuses ("holds an OAuth session token, which is
+    short-lived"). A JWT under `apiKey@…` is no longer read as a key; the member is
+    named before the fleet is created, with the remedy: an access token from
+    ampcode.com/settings/security in `AMP_API_KEY`. Not borrowed the way grok's
+    session is, on purpose: amp's bearer lives five minutes and its refresh token
+    rotates-invalidates, measured in ADR 0014.
+  - **droid** opened on "Auto (Off) · all actions require approval": the
+    interactive `droid` takes its Autonomy Level from settings.json, not from a
+    flag (`--auto` belongs to `droid exec`). The droid seed now also writes
+    `sessionDefaultSettings.autonomyLevel = "high"` when nothing set it, the
+    unattended default claude and codex members already get.
+  - A fleet named an **opencode** member as "will start unauthenticated" and then
+    booted it signed in: opencode forwards a whole auth.json under its box variable
+    and has no host variable, so the pre-flight check never looked at the one
+    variable it actually had.
+  - **grok** rejected `reasoning = "max"` ("Invalid reasoning effort"): grok 1.0.13
+    accepts `low | medium | high | xhigh`. The example config says so; `max` was
+    never on its scale.
+  - **claude** and **codex** failed on their pinned models ("does not support this
+    model; version 2.1.251 or newer is required", "requires a newer version of
+    Codex"): not this plugin, stale EU template images. Rebuilt on juliett with
+    Claude Code 2.1.265 and codex 0.153.4. Worth knowing: the public agent
+    templates go stale on a cluster, and a model pin is the first thing that
+    notices.
+
 ### Changed
 
 - The shipped default template is `muse` (Meta's Muse Code), not `base`: a new box
@@ -17,6 +131,32 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `[sandbox] template = "base"` restores the old behaviour.
 
 ### Added
+
+- The pickers choose **effort** and **how many**. `e2b-box open`'s template list
+  grew a ‹ effort › cell per row (→/tab focuses it, enter opens the harness's own
+  words as a list from `src/effort.js`; it opens on the `[templates.<name>]
+  reasoning` pin), and the fleet's roster is now a table: in or out, effort, count,
+  with `s` unfolding one row per instance so members of one template can think
+  differently. Both pickers redraw in place instead of clearing the screen, so
+  moving the cursor no longer flashes. From a
+  script: `e2b-box open -t grok --reasoning xhigh`, and fleet member specs
+  `NAME[*N][@EFFORT]` (`-t 'codex*3@ultra'`, `--agents codex*3@ultra,grok@xhigh`).
+  A repeated `-t codex` is two members now, not one: instances get numbered labels
+  and branches (`t-21-codex-2`). An effort the harness does not accept fails the
+  box before it is created, naming the accepted words. opencode gets a generic
+  scale that only reaches the box as `HERDR_E2B_REASONING` (its reasoning is a
+  per-model UI variant); amp's picked effort becomes its `--mode`.
+
+- `e2b-box auth connect muse | amp`, and `auth connect codex --oauth`: the plugin
+  signs in with the vendor's own OAuth flow (the public client its CLI ships) and
+  stores what the vendor mints as a connection under `connections/` (ADR 0015).
+  muse keeps the Muse API key Meta mints; codex keeps a second, plugin-owned
+  ChatGPT login whose refresh token only `auth reconnect` ever uses, so boxes still
+  get the placeholder copy and `~/.codex` is never touched. amp has no OAuth route
+  (its access token sits behind a recent-sign-in gate in the browser, measured), so
+  `auth connect amp` opens ampcode.com/settings/security and stores the token you
+  paste (`--token-stdin` for scripts). Flows in `src/oauth.js`, tested against a
+  scripted server; nothing in the suite signs in anywhere.
 
 - `[templates.<name>] model = "…"` and `reasoning = "…"`: pin which model a
   template's agent uses and how hard it thinks, for every box booted from it

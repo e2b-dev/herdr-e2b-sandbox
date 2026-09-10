@@ -1,0 +1,6 @@
+{
+  "members": [
+    { "template": "codex", "model": "gpt-6-astra", "reasoning": "high", "count": 2 },
+    { "template": "claude", "model": "claude-fable-5", "reasoning": "max" }
+  ]
+}

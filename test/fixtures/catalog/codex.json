@@ -1,0 +1,18 @@
+{
+  "harness": "codex",
+  "version": "0.153.4",
+  "probedFrom": "box",
+  "capturedAt": "2026-09-09T12:26:09.733Z",
+  "probes": {
+    "version": {
+      "stdout": "codex-cli 0.153.4\n",
+      "stderr": "",
+      "status": 0
+    },
+    "catalog": {
+      "stdout": "{\"models\":[{\"slug\":\"gpt-6-astra\",\"visibility\":\"list\",\"default_reasoning_level\":\"low\",\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"medium\"},{\"effort\":\"high\"},{\"effort\":\"xhigh\"},{\"effort\":\"max\"},{\"effort\":\"ultra\"}]},{\"slug\":\"gpt-5.6-sol\",\"visibility\":\"list\",\"default_reasoning_level\":\"low\",\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"medium\"},{\"effort\":\"high\"},{\"effort\":\"xhigh\"},{\"effort\":\"max\"},{\"effort\":\"ultra\"}]},{\"slug\":\"gpt-5.6-terra\",\"visibility\":\"list\",\"default_reasoning_level\":\"medium\",\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"medium\"},{\"effort\":\"high\"},{\"effort\":\"xhigh\"},{\"effort\":\"max\"},{\"effort\":\"ultra\"}]},{\"slug\":\"gpt-5.6-luna\",\"visibility\":\"list\",\"default_reasoning_level\":\"medium\",\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"medium\"},{\"effort\":\"high\"},{\"effort\":\"xhigh\"},{\"effort\":\"max\"}]},{\"slug\":\"gpt-daybreak-blue-latest\",\"visibility\":\"hide\",\"default_reasoning_level\":\"low\",\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"medium\"},{\"effort\":\"high\"},{\"effort\":\"xhigh\"},{\"effort\":\"max\"},{\"effort\":\"ultra\"}]},{\"slug\":\"gpt-daybreak-red-latest\",\"visibility\":\"hide\",\"default_reasoning_level\":\"medium\",\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"medium\"},{\"effort\":\"high\"},{\"effort\":\"xhigh\"},{\"effort\":\"max\"},{\"effort\":\"ultra\"}]},{\"slug\":\"gpt-5.5\",\"visibility\":\"list\",\"default_reasoning_level\":\"medium\",\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"medium\"},{\"effort\":\"high\"},{\"effort\":\"xhigh\"}]},{\"slug\":\"gpt-5.4\",\"visibility\":\"hide\",\"default_reasoning_level\":\"medium\",\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"medium\"},{\"effort\":\"high\"},{\"effort\":\"xhigh\"}]},{\"slug\":\"gpt-5.4-mini\",\"visibility\":\"hide\",\"default_reasoning_level\":\"medium\",\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"medium\"},{\"effort\":\"high\"},{\"effort\":\"xhigh\"}]},{\"slug\":\"gpt-5.2\",\"visibility\":\"list\",\"default_reasoning_level\":\"medium\",\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"medium\"},{\"effort\":\"high\"},{\"effort\":\"xhigh\"}]},{\"slug\":\"codex-auto-review\",\"visibility\":\"hide\",\"default_reasoning_level\":\"medium\",\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"medium\"},{\"effort\":\"high\"},{\"effort\":\"xhigh\"},{\"effort\":\"max\"}]}]}",
+      "stderr": "",
+      "status": 0
+    }
+  }
+}

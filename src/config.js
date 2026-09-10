@@ -7,6 +7,7 @@ import { HARNESSES, readHarnessFile } from "./harnesses.js"
 import { modelEnv, normalizePin } from "./model-pin.js"
 import { AUTH_PATH, CONFIG_PATH, CONNECTIONS_DIR } from "./config-paths.js"
 import { applyConnection, readConnections, selectConnection } from "./connections.js"
+import { harnessHint } from "./effort.js"
 export { AUTH_PATH, CONFIG_PATH } from "./config-paths.js"
 
 // Where the `e2b` CLI keeps its login (@e2b/cli USER_CONFIG_PATH — hardcoded
@@ -79,7 +80,11 @@ const DEFAULTS = {
     // network and writes outside the workspace for no added safety.
     codex: "codex --dangerously-bypass-approvals-and-sandbox",
     grok: "grok --always-approve",
-    amp: "amp --dangerously-allow-all",
+    // amp has no reasoning knob; `--mode low|medium|high|ultra` is the closest
+    // thing, so an effort picked for an amp member (HERDR_E2B_REASONING, set by the
+    // pin or the picker's cell) becomes its mode. The `${…:+…}` expands in the BOX's
+    // shell: no effort, no flag, amp's own default mode.
+    amp: 'amp --dangerously-allow-all ${HERDR_E2B_REASONING:+--mode "$HERDR_E2B_REASONING"}',
     // Ends in `--prompt` ON PURPOSE: the fleet appends its task as one positional
     // argument, and opencode's default-command positional is a PROJECT DIRECTORY
     // (`opencode [project]`), so `opencode --auto "fix the bug"` means "cd into
@@ -447,7 +452,7 @@ export function resolveEnv(cfg, template, env = {}, now = Date.now(), readFile =
     // harness reads plus the two shared ones the file-route pin command reads
     // (src/model-pin.js). Below the user's own `env` table, so a hand-written
     // ANTHROPIC_MODEL still wins over the pin.
-    ...modelEnv(template, cfg?.templateModels?.[template]),
+    ...modelEnv(template, cfg?.templateModels?.[template], harnessHint(template, cfg) ?? template),
     // The discovered rung has two halves, and forwarding wins between them: a name
     // resolves from THIS run's environment, while a stored value is a copy taken
     // whenever `e2b-box auth` last ran. When both name the same box variable the

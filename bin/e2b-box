@@ -33,6 +33,7 @@ while [ -h "$SOURCE" ]; do
 done
 DIR="$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)"
 source "$DIR/lib/paths.sh"
+source "$DIR/lib/picker-cache.sh"
 source "$DIR/lib/chooser.sh"   # ask_template_tty — shared with the other verbs
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "e2b-box: '$1' not found on PATH" >&2; exit 1; }; }
@@ -108,7 +109,7 @@ miss() {
 # Marks the record "provisioning" but PRESERVES a known sandboxId so the worker
 # can reconnect to (and resume) an existing sandbox instead of always creating fresh.
 provision_from_cwd() {
-  local k="$1" op="${2:-ensure}" want="${3:-}" b h p l sid tpl tpid tcols trows payload node_bin auth_record
+  local k="$1" op="${2:-ensure}" want="${3:-}" effort="${4:-}" model="${5:-}" b h p l sid tpl tpid tcols trows payload node_bin auth_record
   local -a auth_args
   b=""; h=""; at_repo_root && { b=$(git_branch); h=$(git_head); }; [ "$b" = "HEAD" ] && b=""
   p=$(box_root)
@@ -158,9 +159,11 @@ provision_from_cwd() {
        + (if ($tcols | test("^[0-9]+$")) then {terminalCols: ($tcols | tonumber)} else {} end)
        + (if ($trows | test("^[0-9]+$")) then {terminalRows: ($trows | tonumber)} else {} end)' \
     > "$BOXES_DIR/$k.json"
-  payload=$(jq -cn --arg k "$k" --arg b "$b" --arg h "$h" --arg p "$p" --arg l "$l" --arg op "$op" --arg t "$want" --arg connection "${connection:-}" \
+  payload=$(jq -cn --arg k "$k" --arg b "$b" --arg h "$h" --arg p "$p" --arg l "$l" --arg op "$op" --arg t "$want" --arg r "$effort" --arg m "$model" --arg connection "${connection:-}" \
     '{key:$k, label:$l, branch:$b, head:$h, worktreePath:$p, workspaceId:"", op:$op}
        + (if $t != "" then {template:$t} else {} end)
+       + (if $r != "" then {reasoning:$r} else {} end)
+       + (if $m != "" then {model:$m} else {} end)
        + (if $connection != "" then {connection:$connection} else {} end)')
   nohup "$node_bin" "$PLUGIN_DIR/src/provision.js" "$payload" >>"$BOXES_DIR/$k.log" 2>&1 &
   # Remembered so an interrupt can stop the worker, not just the spinner in front
@@ -265,8 +268,23 @@ pick_template() {
   : "${lbl:=$k}"
   # 2 (aborted) is passed straight through; 1 (no terminal to draw on) is not an
   # answer and not a refusal, so it becomes "let the config decide" as before.
-  local rc
-  ask_template_tty "$lbl" "$resolved" "$choices" "$n" "$marks"; rc=$?
+  # Beside each row, a model cell and an effort cell to cycle (src/effort.js): the
+  # answer comes back as `<template>[\t<effort>[\t<model>]]`, tabs only as far as
+  # something was chosen, bare otherwise.
+  local rc efforts
+  # `pick --needed` asks only whether this point is reached: 3 says "there is a
+  # question", so the action knows to open the popup before anything is drawn.
+  [ "${PICK_PROBE:-0}" = 1 ] && return 3
+  efforts=$("$node_bin" "$PLUGIN_DIR/src/effort-cli.js" $choices 2>/dev/null) || efforts=""
+  if [ -n "${E2B_PICKER_INPUT:-}" ]; then
+    PICKER_BOX_KEY="$k" picker_cache_write box "$lbl" "$resolved" "$choices" "$n" "$marks" "$efforts"
+    return 0
+  fi
+  # Writing the next opening's frame must not delay this opening's first paint.
+  PICKER_BOX_KEY="$k" picker_cache_write box "$lbl" "$resolved" "$choices" "$n" "$marks" "$efforts" >/dev/null 2>&1 &
+  local cache_job=$!
+  ask_template_tty "$lbl" "$resolved" "$choices" "$n" "$marks" "$efforts"; rc=$?
+  wait "$cache_job" || true
   [ "$rc" -eq 2 ] && return 2
   return 0
 }
@@ -651,15 +669,22 @@ boot_and_connect() {
     # answer is "don't", stop here: nothing has been created yet, so nothing has to
     # be cleaned up. Exit 130 is the same abort code the fleet pickers use.
     if [ -z "$want" ]; then
-      want=$(pick_template "$key") || {
+      # The picker answers `<template>[\t<effort>[\t<model>]]`; an effort typed as
+      # --reasoning or a model as --model still wins, the way -t beats the picker
+      # for the template itself.
+      picked=$(pick_template "$key") || {
         echo "e2b-box: no template chosen — nothing was created." >&2
         exit 130
       }
+      IFS=$'\t' read -r want picked_effort picked_model <<<"$picked"
+      [ "$picked_effort" = "-" ] && picked_effort=""   # the picker's "default" in front of a model
+      [ -z "$reasoning" ] && reasoning="$picked_effort"
+      [ -z "$model" ] && model="$picked_model"
     fi
     # From here a sandbox is about to exist, so this run owns it: an interrupt
     # before it is handed over has to take it with it (see arm_boot_abort).
     arm_boot_abort "$key"
-    provision_from_cwd "$key" ensure "$want" || return 1
+    provision_from_cwd "$key" ensure "$want" "$reasoning" "$model" || return 1
   fi
   # Spin until ready (bounded so a hung provision can't loop forever), then attach.
   spin_until_ready "$key" "booting" || exit 1
@@ -739,6 +764,10 @@ fleet                         several boxes off one checkout, one per template
 
 options                       (before the verb or after it — same thing)
   -t, --template NAME         template a NEW box boots from (open, up)
+  -r, --reasoning LEVEL       how hard its agent thinks, in the harness's own words
+                              (e.g. xhigh); overrides [templates.NAME] reasoning
+      --model ID              which model its agent runs, as the harness spells it
+                              (e.g. claude-opus-5); overrides [templates.NAME] model
   --template-any              accept a template name the config doesn't know
   --connection ID             choose a connection for a NEW box (open, up)
   -b, --box KEY               act on that box instead of this worktree's
@@ -759,6 +788,8 @@ also spelled                  ls=list · rm,destroy=kill · unpause=resume
 environment
   KEY                         box key to act on (what --box sets)
   E2B_TEMPLATE                template for a new box, ahead of any branch rule
+  E2B_REASONING, E2B_MODEL    its effort and model, as --reasoning / --model would
+                              (how the popup picker hands its answer to the box pane)
   HERDR_E2B_NODE              path to a Node >= 22, if yours isn't found
   HERDR_PLUGIN_STATE_DIR      where box records live
 
@@ -780,10 +811,10 @@ USAGE
 pre_args=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --box|-b|--template|-t|--connection)
+    --box|-b|--template|-t|--reasoning|-r|--model|--connection)
       [ $# -ge 2 ] || { echo "e2b-box: $1 needs a value" >&2; exit 2; }
       pre_args+=("$1" "$2"); shift 2 ;;
-    --box=*|--template=*|--connection=*|--template-any|--json) pre_args+=("$1"); shift ;;
+    --box=*|--template=*|--reasoning=*|--model=*|--connection=*|--template-any|--json) pre_args+=("$1"); shift ;;
     *) break ;;
   esac
 done
@@ -881,6 +912,10 @@ done
 # Everything else is left in "$@" for the verb to read (e.g. pull --force).
 template=""
 template_any=0
+# The popup picker hands its answer to the box pane as E2B_TEMPLATE (read by
+# pick_template) and these two; a flag typed here still wins.
+reasoning="${E2B_REASONING:-}"
+model="${E2B_MODEL:-}"
 connection=""
 box_flag=""
 json=0
@@ -891,6 +926,19 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || { echo "e2b-box: $1 needs a template name" >&2; exit 2; }
       template="$2"; shift 2 ;;
     --template=*) template="${1#*=}"; shift ;;
+    # How hard THIS box's agent thinks, in its harness's own words (src/effort.js).
+    # Overrides `[templates.<name>] reasoning` for one box; a NEW box only, like -t.
+    --reasoning|-r)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "e2b-box: $1 needs an effort level, e.g. --reasoning xhigh" >&2; exit 2; }
+      reasoning="$2"; shift 2 ;;
+    --reasoning=*) reasoning="${1#*=}"; [ -n "$reasoning" ] || { echo "e2b-box: --reasoning needs an effort level" >&2; exit 2; }; shift ;;
+    # Which model THIS box's agent runs, as its harness spells it (the catalog in
+    # src/harness-catalog.generated.js). Overrides `[templates.<name>] model` for one
+    # box; a NEW box only, like -t. No short flag: `-m` is `push`'s commit message.
+    --model)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "e2b-box: --model needs a model id, e.g. --model claude-opus-5" >&2; exit 2; }
+      model="$2"; shift 2 ;;
+    --model=*) model="${1#*=}"; [ -n "$model" ] || { echo "e2b-box: --model needs a model id" >&2; exit 2; }; shift ;;
     --template-any) template_any=1; shift ;;
     --connection)
       [ $# -ge 2 ] && [ -n "$2" ] || { echo "e2b-box: --connection needs a connection name" >&2; exit 2; }
@@ -970,6 +1018,27 @@ if [ -n "$template" ] && [ "$template_any" -eq 0 ]; then
 fi
 
 case "$cmd" in
+  # The `open` picker on its own, for the popup (bin/e2b-popup, pick-box mode): the
+  # question is asked in the overlay and the boot happens in a regular pane, so the
+  # two halves of `open` are split here. `pick --needed` is the action's probe: exit
+  # 0 when the picker would open, 1 when the template is already settled (a live box
+  # to reattach, E2B_TEMPLATE, a branch rule, a single candidate), so the popup is
+  # only drawn when there is something to choose. Without it: draws the picker and
+  # prints two lines, the box key and the answer (`<template>[\t<effort>[\t<model>]]`,
+  # `-` for an effort left at default), exit 2 when aborted.
+  pick)
+    if [ "${1:-}" = "--needed" ]; then
+      PICK_PROBE=1 pick_template "$key" >/dev/null; [ $? -eq 3 ] && exit 0
+      exit 1
+    fi
+    picked=$(pick_template "$key"); rc=$?
+    [ "$rc" -eq 2 ] && exit 2
+    if [ -n "${E2B_PICKER_INPUT:-}" ] && [ ! -f "$E2B_PICKER_INPUT" ]; then
+      # A settled decision also invalidates the previous menu for the next popup.
+      PICKER_BOX_KEY="$key" picker_cache_write box "" "" "" "" "" ""
+    fi
+    printf '%s\n%s\n' "$key" "$picked"
+    ;;
   status)
     r=$(rec "$key")
     if [ -n "$r" ]; then
@@ -1448,9 +1517,15 @@ case "$cmd" in
       ready) echo "sandbox for '$key' already ready — 'e2b-box open' to attach" ;;
       provisioning) echo "sandbox for '$key' already provisioning ($(field "$key" step)) — e2b-box logs" ;;
       *)
-        [ -z "$template" ] && template=$(pick_template "$key")
-        echo "provisioning E2B sandbox for '$key'${template:+ ($template)} in the background…"
-        provision_from_cwd "$key" ensure "$template" || exit 1
+        if [ -z "$template" ]; then
+          picked=$(pick_template "$key")
+          IFS=$'\t' read -r template picked_effort picked_model <<<"$picked"
+          [ "$picked_effort" = "-" ] && picked_effort=""
+          [ -z "$reasoning" ] && reasoning="$picked_effort"
+          [ -z "$model" ] && model="$picked_model"
+        fi
+        echo "provisioning E2B sandbox for '$key'${template:+ ($template)}${model:+ on $model}${reasoning:+ at $reasoning effort} in the background…"
+        provision_from_cwd "$key" ensure "$template" "$reasoning" "$model" || exit 1
         echo "watch: e2b-box logs   ·   attach when ready: e2b-box open"
         ;;
     esac

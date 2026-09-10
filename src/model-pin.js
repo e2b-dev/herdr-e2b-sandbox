@@ -33,7 +33,8 @@
 //   opencode  OPENCODE_CONFIG_CONTENT, inline JSON, "model"         (opencode.ai/docs/config; reasoning is per-model
 //             variants there, so it is not pinned)
 //   codex     ~/.codex/config.toml  model, model_reasoning_effort  (codex-rs config)
-//   grok      ~/.grok/config.toml   [models] default, default_reasoning_effort  (docs.x.ai/build/settings/reference)
+//   grok      ~/.grok/config.toml   [models] default, default_reasoning_effort  (docs.x.ai/build/settings/reference;
+//             grok 1.0.13 accepts low | medium | high | xhigh and rejects "max" with "Invalid reasoning effort")
 //   droid     ~/.factory/settings.json  model, reasoningEffort     (docs.factory.ai/droid-cli/settings)
 //   prime     ~/.prime/agent/settings.json  defaultProvider, defaultModel, defaultThinkingLevel
 //             (settings-manager.js, 0.9.3; model is written as `<provider>/<model>`, split at the first `/`)
@@ -53,7 +54,22 @@ const ENV_ROUTES = {
   }),
   // "inject inline JSON as a final local-scope merge" (opencode's own description of
   // the variable), so it wins over the seeded ~/.config/opencode/opencode.json.
-  opencode: (model) => (model ? { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model }) } : {}),
+  //
+  // The model is ALSO declared under its provider. opencode's TUI only selects a
+  // model it can find in the provider's list, and on a fresh box that list is the
+  // snapshot bundled into the binary until the models.dev fetch lands — so a model
+  // newer than the template's opencode was unknown at the first launch and the TUI
+  // fell back to whatever the provider ranked first (an image model with no tool
+  // use; observed live, fleet test-opencode, 2026-09-08, while `opencode run` with
+  // the same variable honoured the pin). A `provider.<id>.models.<model>` entry
+  // makes the model exist in config, fetch or no fetch; an empty object is enough
+  // (verified on 1.18.18: `opencode models openrouter` lists it, `run` uses it).
+  opencode: (model) => {
+    if (!model) return {}
+    const i = model.indexOf("/")
+    const provider = i > 0 ? { provider: { [model.slice(0, i)]: { models: { [model.slice(i + 1)]: {} } } } } : {}
+    return { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model, ...provider }) }
+  },
 }
 
 // The file route. `M`/`R` are read inside the box; nothing here interpolates a value.
@@ -89,10 +105,12 @@ export function normalizePin(section) {
  * The environment a pinned template's box is created with: the two shared
  * variables plus the harness's own, when it reads one. `{}` for no pin.
  */
-export function modelEnv(template, pin) {
+export function modelEnv(template, pin, harness = template) {
   if (!pin) return {}
   const { model = "", reasoning = "" } = pin
-  const own = ENV_ROUTES[template]?.(model, reasoning) || {}
+  // `harness` is the route key: a custom template that runs claude (src/effort.js
+  // `harnessHint`) gets claude's variables, not just the two shared ones.
+  const own = ENV_ROUTES[harness]?.(model, reasoning) || {}
   return {
     ...(model ? { [MODEL_VAR]: model } : {}),
     ...(reasoning ? { [REASONING_VAR]: reasoning } : {}),
@@ -106,9 +124,9 @@ export function modelEnv(template, pin) {
  * user's own template) or nothing is pinned. The command reads the variables
  * `modelEnv` set, so it is only useful on a box created with them.
  */
-export function pinCommand(template, pin) {
+export function pinCommand(template, pin, harness = template) {
   if (!pin) return ""
-  return FILE_ROUTES[String(template ?? "")] ?? ""
+  return FILE_ROUTES[String(harness ?? template ?? "")] ?? ""
 }
 
 /** For docs, the picker and the refusal message: what a pin can do per template. */

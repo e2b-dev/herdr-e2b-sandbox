@@ -9,7 +9,7 @@ import path from "node:path"
 // agent, a harness is that same agent installed here, and this file is the only
 // place the two are mapped to each other.
 //
-// Governed by docs/adr/0006: detection is a spawn-the-binary probe, reads are
+// Governed by docs/adr/0009: detection is a spawn-the-binary probe, reads are
 // limited to environment variables and a harness's own DOCUMENTED config file, and
 // no Keychain item or OAuth token cache is ever opened. The per-harness facts below
 // were established against vendor source and live binaries — see
@@ -31,6 +31,8 @@ import path from "node:path"
  * an accident that stops being true the first time a vendor moves one.
  */
 const CSI = /\x1b\[[0-?]*[ -/]*[@-~]/g
+/** Three base64url segments starting with `eyJ` (`{"` encoded): a JWT, so a session, not a key. */
+const isJwt = (v) => /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$/.test(String(v ?? ""))
 const stripAnsi = (s) => String(s || "").replace(CSI, "")
 
 /**
@@ -447,15 +449,30 @@ export const HARNESSES = {
     // — and nothing at all when several are present, because picking one of two
     // servers' keys is the guess this table does not make.
     keyFile: { path: AMP_SECRETS, field: "apiKey@https://ampcode.com/" },
+    // What `amp login` leaves under `apiKey@…` is NOT an access token: it is the
+    // browser sign-in's OAuth session, a JWT that amp itself refuses when handed back
+    // as AMP_API_KEY ("holds an OAuth session token, which is short-lived", amp
+    // 0.0.1788897629; the template's older amp says "Invalid or missing API key" for
+    // the same value — observed live, fleet test-amp, 2026-09-08). The bearer lives
+    // FIVE MINUTES and the refresh token rotates-invalidates (measured, ADR 0014), so
+    // neither 0010's placeholder trick nor 0011's verbatim rule applies: a JWT-shaped
+    // value reads as "signed in, nothing to borrow" and the remedy names the one
+    // thing that works, an access token the user mints.
     valueFile: {
       path: AMP_SECRETS,
       read: (text) => {
         const j = JSON.parse(text)
-        if (typeof j?.["apiKey@https://ampcode.com/"] === "string") return j["apiKey@https://ampcode.com/"]
-        const keys = Object.keys(j || {}).filter((k) => k.startsWith("apiKey@") && typeof j[k] === "string")
-        return keys.length === 1 ? j[keys[0]] : null
+        let v = null
+        if (typeof j?.["apiKey@https://ampcode.com/"] === "string") v = j["apiKey@https://ampcode.com/"]
+        else {
+          const keys = Object.keys(j || {}).filter((k) => k.startsWith("apiKey@") && typeof j[k] === "string")
+          v = keys.length === 1 ? j[keys[0]] : null
+        }
+        return v && !isJwt(v) ? v : null
       },
     },
+    advice:
+      "`amp login` leaves a short-lived OAuth session a box cannot use; create an access token at https://ampcode.com/settings/security#access-token and set AMP_API_KEY to it",
     parse: ({ stdout, stderr }) => {
       if (/^Signed in as /m.test(stripAnsi(stdout))) return { state: "no-key", source: "login" }
       if (/Invalid or missing API key/.test(stripAnsi(stderr))) return { state: "no-key", source: null }

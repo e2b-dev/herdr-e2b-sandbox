@@ -8,7 +8,7 @@
 // contains a slash. Pure functions here, `node --test` in test/fleet-name.test.js.
 //
 // Also runnable as bin/e2b-fleet's naming helper (see the CLI at the bottom):
-//   node src/fleet-name.js <task-slug> <template>...
+//   node src/fleet-name.js <task-slug> <member-spec>...   (spec: template[:model][*N][@effort])
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { loadConfig } from "./config.js"
@@ -107,28 +107,67 @@ export function memberLabel(slug, template) {
  * Two workspaces wearing one name is worse than an error, because nothing on
  * screen says which is which and a fleet is read per member.
  */
+/**
+ * One label per member. The same template N times is N INSTANCES and gets numbered
+ * labels (`t-21-codex`, `t-21-codex-2`, `t-21-codex-3`) — the roster table's count
+ * column and a repeated `-t codex` both mean "more of this one". Two DIFFERENT
+ * templates that collapse to one label (`a/claude` and `b/claude`) are still a
+ * refusal: numbering would hide which member is which.
+ */
 export function memberLabels(slug, templates) {
-  const seen = new Map() // label -> the template that claimed it
+  const claimedBy = new Map() // base label -> the template that claimed it
+  const counts = new Map() // base label -> instances seen so far
   const out = []
   for (const t of templates) {
     const label = memberLabel(slug, t)
-    const claimed = seen.get(label)
-    if (claimed !== undefined) {
+    const claimed = claimedBy.get(label)
+    if (claimed !== undefined && claimed !== t) {
       throw new Error(
         `templates ${JSON.stringify(claimed)} and ${JSON.stringify(t)} both name a member ` +
           `'${label}' — a roster can't hold two members with the same name. ` +
           "Drop one, or pick templates whose names differ after the last '/'.",
       )
     }
-    seen.set(label, t)
-    out.push(label)
+    claimedBy.set(label, t)
+    const n = (counts.get(label) ?? 0) + 1
+    counts.set(label, n)
+    out.push(n === 1 ? label : `${label}-${n}`)
   }
   return out
 }
 
+/**
+ * A member spec, the way `-t` and `--agents` take it: `template`, `template*3`,
+ * `template@xhigh`, `template*3@xhigh` — N instances, each at that effort;
+ * `template:model` pins the model the same way. Returns one `{ template, effort,
+ * model }` per instance; effort and model are "" when the spec names none
+ * (the template's `[templates.<name>] reasoning` pin, or the harness default, applies).
+ * A count that is not 1..20 is refused: a typo should not boot twenty boxes.
+ */
+export function expandMemberSpec(spec) {
+  // `:model` sits right after the template: a model id carries `/` and `.`
+  // (`prime-inference/anthropic/claude-fable-5`) but never `:`, `*` or `@`, and a
+  // template name never carries `:`, so the four parts cannot be confused.
+  const m = /^(.*?)(?::([^:*@\s]+))?(?:\*(\d+))?(?:@([A-Za-z][A-Za-z0-9_-]*))?$/.exec(String(spec ?? "").trim())
+  const template = m?.[1]?.trim() ?? ""
+  if (!m || !template) throw new Error(`member spec ${JSON.stringify(String(spec ?? ""))} names no template`)
+  const count = m[3] === undefined ? 1 : Number(m[3])
+  if (!Number.isInteger(count) || count < 1 || count > 20) {
+    throw new Error(`member spec ${JSON.stringify(spec)}: the count after '*' must be 1..20`)
+  }
+  return Array.from({ length: count }, () => ({ template, effort: m[4] ?? "", model: m[2] ?? "" }))
+}
+
+/** Every spec expanded, in order: the roster as a list of members. */
+export function expandMemberSpecs(specs) {
+  return specs.flatMap(expandMemberSpec)
+}
+
 /** `<prefix>/<slug>-<template>-<rand4>` — the branch one member is created on. */
-export function memberBranch(slug, template, { prefix = DEFAULT_PREFIX, rand, env = process.env } = {}) {
-  return `${sanitizePrefix(prefix)}/${memberLabel(slug, template)}-${rand ?? randomSuffix(env)}`
+export function memberBranch(slug, template, { prefix = DEFAULT_PREFIX, rand, env = process.env, label } = {}) {
+  // `label` is the numbered one for a 2nd+ instance (`t-21-codex-2`), so instances
+  // of one template never share a branch even when the suffix is pinned.
+  return `${sanitizePrefix(prefix)}/${label ?? memberLabel(slug, template)}-${rand ?? randomSuffix(env)}`
 }
 
 // --- CLI ---------------------------------------------------------------------
@@ -140,17 +179,23 @@ export function memberBranch(slug, template, { prefix = DEFAULT_PREFIX, rand, en
 //
 // Exits 2 with a message on stderr when a name can't be built.
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  const [slug, ...templates] = process.argv.slice(2)
+  // Args are member SPECS (`codex:gpt-5.5*3@ultra`); one row per instance:
+  //   <template>\t<branch>\t<label>\t<effort>\t<model>
+  // An absent effort or model is written as `-`, never left empty: bash's `read`
+  // with a tab IFS folds an empty middle field into its neighbour, and a member
+  // with a model and no effort would come back with the model AS its effort.
+  const [slug, ...specs] = process.argv.slice(2)
   const cfg = loadConfig()
   try {
-    if (!templates.length) throw new Error("no templates given")
+    if (!specs.length) throw new Error("no templates given")
+    const members = expandMemberSpecs(specs)
     // Labels first, for the whole roster: a collision is a property of the SET,
     // so it has to be found before any member's branch is handed back — bash
     // creates worktrees from these rows as it reads them.
-    const labels = memberLabels(slug, templates)
-    const rows = templates.map((t, i) => {
-      const branch = memberBranch(slug, t, { prefix: cfg.fleetPrefix })
-      return `${t}\t${branch}\t${labels[i]}`
+    const labels = memberLabels(slug, members.map((m) => m.template))
+    const rows = members.map((m, i) => {
+      const branch = memberBranch(slug, m.template, { prefix: cfg.fleetPrefix, label: labels[i] })
+      return `${m.template}\t${branch}\t${labels[i]}\t${m.effort || "-"}\t${m.model || "-"}`
     })
     // memberBranch has already refused an unusable slug by here.
     process.stdout.write(`${cfg.fleetBase}\t${sanitizeSlug(slug)}\n${rows.join("\n")}\n`)

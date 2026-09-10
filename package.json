@@ -26,7 +26,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test test/*.test.js && bash test/cli.test.sh"
+    "test": "node --test test/*.test.js && bash test/cli.test.sh",
+    "catalog": "node scripts/harness-catalog.mjs",
+    "verify-keys": "node scripts/verify-keys.mjs"
   },
   "dependencies": {
     "e2b": "^2.32.0",

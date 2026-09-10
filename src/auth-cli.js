@@ -10,9 +10,10 @@ import { CONFIG_PATH, AUTH_PATH, CONNECTIONS_DIR } from "./config-paths.js"
 import { runProbe } from "./harness-probe.js"
 import { HARNESSES, readHarnessFile } from "./harnesses.js"
 import {
-  classifySubscription, connectionId, connectionMaterial, localAccountLabel, readConnections,
-  removeConnection, saveConnection, selectConnection, suggestedConnectionId, validSetupToken,
+  OAUTH_HARNESSES, classifySubscription, connectionId, connectionMaterial, localAccountLabel, readConnections, readOauthSecret,
+  removeConnection, rewriteOauthSecret, saveConnection, selectConnection, suggestedConnectionId, validSetupToken,
 } from "./connections.js"
+import { OAUTH_CONNECT, codexRefresh, validAmpAccessToken } from "./oauth.js"
 
 const HELP = `e2b-box auth — coding-agent connections
 
@@ -23,6 +24,15 @@ const HELP = `e2b-box auth — coding-agent connections
   auth connect claude --token-stdin --yes
                                   accept an existing token over stdin
   auth connect codex [--user]      borrow the current local Codex session
+  auth connect muse                sign in with Meta's device flow; the Muse
+                                  API key it mints is stored privately
+  auth connect amp                 open ampcode.com/settings/security and paste
+                                  its access token; stored privately
+  auth connect codex --oauth       sign in to ChatGPT for a Codex session of the
+                                  plugin's own (refreshed by reconnect, not boxes)
+  auth connect amp --token-stdin --yes
+                                  accept an access token from
+                                  ampcode.com/settings/security over stdin
   auth connect <agent> --name ID   choose a connection name
   auth list [--json]               list connections without reading tokens
   auth explain --template NAME [--connection ID] [--json]
@@ -45,6 +55,9 @@ Claude names use the detected organization (e.g. claude-e2b), personal for Pro/M
 or local when unknown. --name overrides this; names never grant shared access.
 Check validates local material, not provider acceptance; it makes no model call.
 Codex borrowing excludes its real refresh token and lasts until bearer expiry.
+An --oauth codex connection is a second ChatGPT login owned by this plugin: it never
+touches ~/.codex, boxes still get the placeholder copy, and reconnect refreshes it
+without a browser while its refresh token is good (ADR 0015).
 Reconnect/disconnect do not change or revoke credentials already inside a box.
 `
 
@@ -80,6 +93,20 @@ async function captureToken() {
   })
 }
 
+/**
+ * What a human sees during the plugin's own sign-in: the URL, the code to compare,
+ * and the browser opened when there is one. Codes are never secrets; tokens never
+ * come through here.
+ */
+async function showSignIn({ url, userCode, expiresIn }) {
+  console.log(`\n  ${userCode || expiresIn ? "Sign in at     " : "Open           "} ${url}`)
+  if (userCode) console.log(`  Code shown      ${userCode}  (confirm it matches in the browser)`)
+  if (userCode || url.includes("auth.")) console.log(`  Waiting         up to ${Math.round(expiresIn / 60)} min for the browser...`)
+  if (process.stdout.isTTY && process.platform === "darwin") {
+    try { spawn("open", [url], { stdio: "ignore", detached: true }).unref() } catch { /* the URL is printed */ }
+  }
+}
+
 async function detectClaude() {
   const probe = await runProbe("claude", ["auth", "status"])
   try { return classifySubscription(JSON.parse(probe.stdout)) } catch { return classifySubscription() }
@@ -89,7 +116,7 @@ function parse(argv) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
     help: { type: "boolean", short: "h" }, yes: { type: "boolean", short: "y" },
     user: { type: "boolean" }, org: { type: "string" }, name: { type: "string" },
-    "token-stdin": { type: "boolean" }, json: { type: "boolean" },
+    "token-stdin": { type: "boolean" }, oauth: { type: "boolean" }, json: { type: "boolean" },
     template: { type: "string", short: "t" }, connection: { type: "string" },
   } })
   return { values, positionals }
@@ -100,7 +127,7 @@ async function main() {
   if (options.help || positionals[0] === "help") { console.log(HELP); return }
   const [verb, target, ...rest] = positionals
   const allowed = {
-    connect: ["yes", "user", "org", "name", "token-stdin"],
+    connect: ["yes", "user", "org", "name", "token-stdin", "oauth"],
     reconnect: ["yes", "token-stdin"], disconnect: ["yes"],
     list: ["json"], check: ["json"], explain: ["json", "template", "connection"],
     preflight: ["template", "connection"],
@@ -115,7 +142,7 @@ async function main() {
     const rows = records.map((c) => ({ id: c.id, agent: c.harness, owner: "Only you", method: c.method,
       detectedSubscription: c.detected?.subscription || "unknown", detectedOrganization: c.detected?.organization || null,
       detectionSource: c.detected?.source || null, localAccount: localAccountLabel(c.harness, c.detected),
-      status: c.method === "setup-token" && c.expiresAt && Date.parse(c.expiresAt) <= Date.now() ? "expired" : "configured",
+      status: c.method !== "borrowed-session" && c.expiresAt && Date.parse(c.expiresAt) <= Date.now() ? "expired" : "configured",
       expiresAt: c.expiresAt || null }))
     if (options.json) console.log(JSON.stringify(rows, null, 2))
     else if (!rows.length) console.log("No connections. Run e2b-box auth connect claude or e2b-box auth discover.")
@@ -166,20 +193,55 @@ async function main() {
   }
 
   const harness = verb === "reconnect" ? existing.harness : target
-  if (!["claude", "codex"].includes(harness)) throw new Error("Managed connections currently support claude and codex. Use auth discover for other agents.")
-  if (options["token-stdin"] && harness !== "claude") throw new Error("--token-stdin is only supported for Claude setup-token.")
+  // muse and amp have exactly one managed method, the plugin's own sign-in; codex
+  // has two and picks the borrowed local session unless --oauth says otherwise.
+  const oauth = verb === "reconnect" ? existing.method === "oauth" : options.oauth === true || ["muse", "amp"].includes(harness)
+  if (options.oauth && !OAUTH_HARNESSES.includes(harness)) throw new Error("--oauth is supported for muse, amp and codex.")
+  if (!(["claude", "codex"].includes(harness) || (oauth && OAUTH_HARNESSES.includes(harness)))) throw new Error("Managed connections support claude, codex, muse and amp. Use auth discover for other agents.")
+  if (options["token-stdin"] && !(harness === "claude" || (oauth && harness === "amp"))) throw new Error("--token-stdin is supported for Claude setup-token and amp access tokens.")
+  const method = oauth ? "oauth" : harness === "claude" ? "setup-token" : "borrowed-session"
   const detected = harness === "claude" ? await detectClaude() : undefined
-  const id = connectionId(verb === "reconnect" ? existing.id : options.name ?? suggestedConnectionId(harness, detected))
+  const id = connectionId(verb === "reconnect" ? existing.id : options.name ?? (oauth ? `${harness}-personal` : suggestedConnectionId(harness, detected)))
   if (verb === "connect" && records.some((c) => c.id === id)) throw new Error(`Connection '${id}' already exists. Run e2b-box auth reconnect ${id}.`)
-  output({ Connection: id, ...(detected ? { "Local account": localAccountLabel(harness, detected) } : {}),
-    Access: "Only you", Method: harness === "claude" ? "Claude setup-token" : "Borrowed Codex session" })
+  const methodLabel = { "setup-token": "Claude setup-token", "borrowed-session": "Borrowed Codex session", oauth: `${harness} sign-in owned by this plugin` }[method]
+  output({ Connection: id, ...(detected ? { "Local account": localAccountLabel(harness, detected) } : {}), Access: "Only you", Method: methodLabel })
   if (detected) console.log("  Account check   Local login detected; connection account unverified.")
   if (verb === "connect" && !options.name && detected) console.log("  Name source     Local account suggestion; use --name to choose another.")
-  if (harness === "codex") console.log("  Refresh token   Not copied; boxes use this session only until its bearer expires.")
+  if (method === "borrowed-session") console.log("  Refresh token   Not copied; boxes use this session only until its bearer expires.")
+  if (method === "oauth" && harness === "codex") console.log("  Refresh token   Kept by this plugin only; boxes receive a copy without it.")
+  if (method === "oauth" && harness === "amp") console.log("  Stored          amp's long-lived access token, pasted from its Security page (amp reads it behind a recent-sign-in gate no CLI can pass, ADR 0015).")
+  if (method === "oauth" && harness === "muse") console.log("  Stored          the Muse API key Meta mints for the signed-in account.")
   await confirm("Save this connection as the default when it is the only one for this agent?", options.yes)
-  let record = { id, harness, detected, method: harness === "claude" ? "setup-token" : "borrowed-session" }
+  let record = { id, harness, detected, method }
   let token
-  if (harness === "claude") {
+  if (method === "oauth") {
+    if (verb === "reconnect" && harness === "codex" && !options["token-stdin"]) {
+      // The refresh token is the plugin's alone, so reconnect tries the grant first
+      // and only opens a browser when the chain is dead.
+      try {
+        const next = await codexRefresh(readOauthSecret(existing), { fetch })
+        rewriteOauthSecret(existing, next)
+        console.log(`\n✓ Refreshed ${existing.id} without a browser (bearer until ${connectionMaterial(existing).expiresAt}).`)
+        return
+      } catch (error) {
+        console.log(`  Refresh         ${error.message}. Signing in again.`)
+      }
+    }
+    if (harness === "amp" && options["token-stdin"]) {
+      const value = readFileSync(0, "utf8").trim()
+      if (!validAmpAccessToken(value)) throw new Error("Expected an amp access token (sgamp_…); nothing was saved.")
+      token = { kind: "api-key", AMP_API_KEY: value }
+    } else {
+      const prompt = async (question) => {
+        if (!process.stdin.isTTY) throw new Error("Pasting the amp access token needs a terminal. Use auth connect amp --token-stdin --yes.")
+        const rl = createInterface({ input: process.stdin, output: process.stdout })
+        try { return await rl.question(`  ${question}`) } finally { rl.close() }
+      }
+      const result = await OAUTH_CONNECT[harness]({ fetch, sleep: (ms) => new Promise((r) => setTimeout(r, ms)), onCode: showSignIn, prompt })
+      token = result.secret
+      record.expiresAt = result.expiresAt
+    }
+  } else if (harness === "claude") {
     const startedAt = Date.now()
     token = options["token-stdin"] ? readFileSync(0, "utf8").trim() : await captureToken()
     if (!validSetupToken(token)) throw new Error("Expected a Claude setup-token value; nothing was saved.")
