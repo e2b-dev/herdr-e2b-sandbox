@@ -2348,7 +2348,10 @@ def run(script, keys, sink=None):
         os.write(fd, k)
         drain(fd, sink=sink)
         if k == b"\x1b":
-            time.sleep(0.05)  # allow the plain-terminal escape window to expire
+            # These are ordinary-terminal choosers, not popup renderers. Bash
+            # 3.2 needs a whole second to distinguish Escape from a key sequence;
+            # sending the next arrow sooner makes it part of that Escape read.
+            time.sleep(1.2)
     deadline = time.time() + 6
     while time.time() < deadline:
         if os.waitpid(pid, os.WNOHANG)[0]:
