@@ -98,8 +98,14 @@ arguments. Metadata and token files live under `$CONFIG_DIR/connections/`, prote
 by directory/file permissions (0700/0600); the token files are not encrypted.
 
 `auth check ID` checks local availability and known expiry without making a model
-request. `auth reconnect ID` replaces the local credential; `auth disconnect ID`
-removes it. Existing boxes keep their credentials until explicitly recreated.
+request. `auth refresh` does the same for every connection and every discovered
+session at once (an ID narrows it), prints how long each has left, and exits 1
+when a row would leave a new box unauthenticated. The only thing it rotates is a
+codex connection made with `--oauth`, whose refresh chain this plugin alone holds
+(ADR 0015), and only once the bearer is inside its last five days; every other row
+is a report, and no running box is touched. It is safe to run from cron.
+`auth reconnect ID` replaces the local credential; `auth disconnect ID` removes it.
+Existing boxes keep their credentials until explicitly recreated.
 Codex borrowing excludes the real refresh token and lasts until bearer expiry.
 
 The only connection for a harness becomes its default. With several connections

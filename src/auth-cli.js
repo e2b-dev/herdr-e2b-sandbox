@@ -9,6 +9,7 @@ import { loadConfig, resolveEnv } from "./config.js"
 import { CONFIG_PATH, AUTH_PATH, CONNECTIONS_DIR } from "./config-paths.js"
 import { runProbe } from "./harness-probe.js"
 import { HARNESSES, readHarnessFile } from "./harnesses.js"
+import { formatRefresh, refreshExitCode, refreshRows } from "./auth-refresh.js"
 import {
   OAUTH_HARNESSES, classifySubscription, connectionId, connectionMaterial, localAccountLabel, readConnections, readOauthSecret,
   removeConnection, rewriteOauthSecret, saveConnection, selectConnection, suggestedConnectionId, validSetupToken,
@@ -38,6 +39,11 @@ const HELP = `e2b-box auth — coding-agent connections
   auth explain --template NAME [--connection ID] [--json]
                                   show selection without launching a box
   auth check ID [--json]           check local availability and known expiry
+  auth refresh [ID] [--json]       every connection and discovered session: how long
+                                  each has left, and what to run when one is stale.
+                                  Rotates a codex --oauth chain once it is inside its
+                                  last five days; reports everything else. Exit 1 when
+                                  a row would leave a new box unauthenticated
   auth reconnect ID               replace token / recheck session source
   auth disconnect ID [--yes]      remove local connection and stored tokens
 
@@ -129,11 +135,11 @@ async function main() {
   const allowed = {
     connect: ["yes", "user", "org", "name", "token-stdin", "oauth"],
     reconnect: ["yes", "token-stdin"], disconnect: ["yes"],
-    list: ["json"], check: ["json"], explain: ["json", "template", "connection"],
+    list: ["json"], check: ["json"], refresh: ["json"], explain: ["json", "template", "connection"],
     preflight: ["template", "connection"],
   }
   if (!allowed[verb]) throw new Error("Unknown auth command. Run e2b-box auth --help.")
-  if (rest.length || (["list", "explain", "preflight"].includes(verb) ? target : !target)) throw new Error("Unexpected or missing argument. Run e2b-box auth --help.")
+  if (rest.length || (["list", "explain", "preflight"].includes(verb) ? target : verb === "refresh" ? false : !target)) throw new Error("Unexpected or missing argument. Run e2b-box auth --help.")
   for (const key of Object.keys(options)) if (!allowed[verb].includes(key)) throw new Error(`--${key} is not supported by auth ${verb}.`)
   if (options.org !== undefined) throw new Error("Organization sharing needs a shared service, which is not configured. Use --user; Team/Enterprise details are detected separately.")
   const records = readConnections()
@@ -151,6 +157,17 @@ async function main() {
       for (const c of rows) console.log(`${c.id.padEnd(22)} ${c.agent.padEnd(8)} ${c.owner.padEnd(10)} ${c.method.padEnd(18)} ${c.localAccount.padEnd(24)} ${c.status}`)
       console.log("\nLocal account describes the login detected at setup, not a verified connection account. Access is separate from the subscription plan. Use auth check ID for local readiness.")
     }
+    return
+  }
+
+  if (verb === "refresh") {
+    // Rotates only what the plugin owns (a codex --oauth chain, ADR 0015); every
+    // other row is a report. Grok's grant and delivery into running boxes
+    // (--push) are separate issues; this verb must never claim either happened.
+    const cfg = loadConfig()
+    const rows = await refreshRows({ connections: records, connectionsDir: cfg.connectionsDir, envSession: cfg.envSession, templatePrefer: cfg.templatePrefer }, { id: target ?? null })
+    console.log(options.json ? JSON.stringify(rows, null, 2) : formatRefresh(rows))
+    process.exitCode = refreshExitCode(rows)
     return
   }
 
