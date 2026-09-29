@@ -749,6 +749,8 @@ inspect
   auth connect claude         connect a Claude subscription for new boxes
   auth connect codex          borrow the current local Codex session
   auth list                  list named personal connections
+  auth refresh [ID]           how long every connection and session has left;
+                              rotates a codex --oauth chain, reports the rest
   auth --help                connection, check, explain and reconnect commands
 
 fleet                         several boxes off one checkout, one per template
@@ -871,7 +873,7 @@ if [ "$cmd" = auth ]; then
   case "${1:-}" in
     discover) shift; exec "$node_bin" "$PLUGIN_DIR/src/harness-auth.js" --discover ${1+"$@"} ;;
     ""|--yes|-y) exec "$node_bin" "$PLUGIN_DIR/src/harness-auth.js" ${1+"$@"} ;;
-    --help|-h|help|connect|list|explain|check|reconnect|disconnect|--json|--template|-t|--connection|--template=*|--connection=*)
+    --help|-h|help|connect|list|explain|check|refresh|reconnect|disconnect|--json|--template|-t|--connection|--template=*|--connection=*)
       exec "$node_bin" "$PLUGIN_DIR/src/auth-cli.js" ${1+"$@"} ;;
     *) echo "e2b-box auth: unknown option or command — run e2b-box auth --help" >&2; exit 2 ;;
   esac
